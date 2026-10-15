@@ -51,11 +51,25 @@ test/      samples/
 - Name things after the Gerber/Excellon spec terms (aperture, D-code, region, polarity, macro).
 - Comment non-obvious spec behaviour with the spec section it comes from.
 
-## Testing
+## Testing (see `PROJECT_PLAN.md` → Testing & QA)
 
-- Unit tests for parsers, geometry, and each post-processor.
-- Keep small real-world samples in `samples/` (KiCad, Eagle, Altium exports where possible).
-- Before committing: run the test suite and load a sample in the browser to check rendering.
+- **Tests come with the code.** Every feature lands with its fixture and tests in the same
+  commit. Write the fixture and a failing test first, then build until it passes.
+- **Bug fixes start with a failing test** that reproduces the bug.
+- **`npm run check` must pass before every commit** (lint + unit + e2e). Never commit on red;
+  a red CI is fixed before new feature work.
+- **Never skip, disable or loosen a test to get green.** Fix the code, or explain in the
+  commit why the test was wrong.
+- **Logic must be testable in Node:** no DOM in parse/model/analyze/edit/cam/drc/post/
+  project/check. `test/unit/` mirrors the `src/` layout.
+- **Golden files change only on purpose:** `npm run golden:update`, review the diff, and
+  say why in the commit message.
+- **Machine output:** every post-processor output must pass the G-code safety checker
+  (`src/check/`), in tests and before export in the app. Changes to a post-processor or
+  machine profile also need the `docs/qa/` hardware checklist before the milestone closes.
+- **Fixtures stay tiny** (one feature per file) in `test/fixtures/`; real-world boards
+  go in `samples/`. Add a `.pcam` fixture whenever the schema version changes.
+- Before committing UI changes, also load a sample in the browser and look at it.
 
 ## References
 

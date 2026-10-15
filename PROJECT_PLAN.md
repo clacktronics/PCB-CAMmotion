@@ -44,8 +44,14 @@ src/
   export/     G-code / machine files, film negatives (SVG/PNG/PDF)
   project/    .pcam save/load, schema versions + migrations, autosave
   ui/         App shell, panels, settings
-test/         Parser/edit round-trip tests and sample files
-samples/      Small reference Gerber/drill sets
+  check/      G-code safety checker (used by tests AND before every export in the app)
+test/
+  unit/       node:test unit tests, mirrors src/ layout
+  golden/     expected outputs (G-code, machine files, reference renders)
+  e2e/        Playwright browser tests + screenshot baselines
+  fixtures/   tiny spec-feature files, broken files, .pcam files per schema version
+samples/      Real-world Gerber/drill sets + the CAMmotion test board
+docs/qa/      Machine QA checklists and recorded results
 ```
 
 Key idea: **one command-level model** that parsing, analysis, editing and export all share,
@@ -55,7 +61,7 @@ so edits round-trip to valid files and analysis can point back to source lines.
 
 | # | Milestone | Done when |
 |---|-----------|-----------|
-| 0 | Skeleton | Static app loads, file drop works, tests run, empty `.pcam` saves and reloads |
+| 0 | Skeleton + test harness | Static app loads, file drop works, empty `.pcam` saves and reloads; `node:test`, Playwright, ESLint/Prettier and CI running; no-network + `file://` e2e tests pass; G-code safety checker with its own tests; test board designed |
 | 1 | Parsers | Gerber + Excellon + `.gbrjob` parse into the command model; layers auto-identified; sample files pass; imported files stored in `.pcam` |
 | 2 | Viewer | Layers render correctly (polarity, regions, macros), zoom/pan/select, realistic board colours (see below) |
 | 3 | Analyser | Aperture table, shape gallery, command inspector, step-through playback |
@@ -67,6 +73,9 @@ so edits round-trip to valid files and analysis can point back to source lines.
 | 9 | Generic post | G-code preview + simulation, export |
 | 10 | Machine posts | LPKF E44 and Makera Carvera output tested on real machines |
 | 11 | Polish | Presets, templates, docs |
+
+Every milestone is only done when its tests (see **Testing & QA → Tests per milestone**) are
+written, passing in CI, and the previous milestones' tests still pass.
 
 ### Project file — `.pcam` (from milestone 0, extended by every milestone)
 
@@ -146,6 +155,106 @@ Comes after the CAM core because the useful checks depend on the actual tools an
 - Classic geometric checks (clearance, min width, overlaps) as a baseline.
 
 Results appear as markers in the viewer and as a list that links to the editor and source lines.
+
+## Testing & QA
+
+### Tools
+
+- **`node:test`** (built into Node, no dependencies) for all logic. Works because parse,
+  model, analyze, edit, cam, drc, post, project and check never touch the DOM.
+- **Playwright** for browser tests (end-to-end, screenshots, 3D view).
+- **fast-check** for property-based / fuzz tests (dev dependency only, never shipped).
+- **ESLint + Prettier** for lint and formatting.
+- **GitHub Actions** runs lint → unit → e2e on every push and pull request.
+- Dev tools live in `package.json` `devDependencies`; the shipped app still has no build
+  step and no runtime dependencies beyond vendored libraries.
+
+Commands:
+```
+npm test            unit + golden + property tests (fast, seconds)
+npm run test:e2e    Playwright browser tests
+npm run lint        ESLint + Prettier check
+npm run check       all of the above — must pass before every commit
+npm run golden:update   regenerate golden files (review the diff before committing!)
+```
+
+### Test layers
+
+1. **Unit tests** — one tiny fixture file per Gerber/Excellon spec feature (apertures,
+   macros, regions, step-and-repeat, polarity, arcs, mm/inch, zero suppression);
+   geometry and offsetting edge cases; unit conversion.
+2. **Round-trip tests** — parse → serialise → parse. Text may differ, so geometry is
+   compared by rasterising both at high resolution and XOR-diffing (zero differing pixels).
+   Enforces "never silently change geometry".
+3. **Reference corpus** — Ucamco's official Gerber test files plus real KiCad, Eagle and
+   Altium exports in `samples/`. Reference renders generated once with an established
+   viewer (gerbv / KiCad GerbView) and committed to `test/golden/`.
+4. **Bad input** — malformed and truncated files must give an error with a line number,
+   never crash or hang.
+5. **Property / fuzz tests** — random shapes: isolation paths never cut copper, never
+   self-intersect, always close; random byte streams never crash the parsers.
+6. **Post-processor golden files** — expected output per machine (generic, LPKF E44,
+   Makera Carvera) for a set of fixture boards. Any change shows as a diff.
+7. **G-code safety checker** (`src/check/`) — runs in tests and in the app before every
+   export; export is blocked on failure. Checks: no rapid moves below safe Z, spindle on
+   before cutting, feeds/depths within the machine profile, all moves inside the machine
+   envelope, valid tool changes, program ends safely (spindle off, Z up).
+8. **DRC tests** — small crafted boards with known violations; assert exactly the
+   expected findings (none missed, none extra).
+9. **`.pcam` tests** — save → load gives an identical project; a fixture `.pcam` from
+   every schema version must still load and migrate.
+10. **Browser e2e (Playwright)** — full flow: drop files → view → edit → toolpaths → DRC →
+    export → check the downloaded files and `.pcam`. Screenshot comparison of 2D and 3D
+    views. **No-network test**: fail if the page makes any network request. **`file://`
+    test**: app works opened straight from disk.
+11. **Performance budgets** — a large reference board must parse and render within set
+    times; CI fails on regressions.
+
+### Machine QA (manual, recorded)
+
+- **CAMmotion test board** (KiCad project + Gerbers in `samples/test-board/`): trace and
+  gap width ladders, drill size ladder, pads of each aperture type, fine text, outline
+  with tabs. Doubles as a calibration coupon and a DRC fixture.
+- Checklist per machine in `docs/qa/` for any post-processor or machine-profile change:
+  1. Safety checker passes; golden diff reviewed.
+  2. Air cut (Z raised) — watch every tool change and move.
+  3. Cut the test board on the LPKF E44 and Makera Carvera.
+  4. Measure widths, gaps and hole sizes; record results with date, commit and photos.
+- Measured errors become corrections in the machine profile **and** a new automated test.
+
+### How testing runs alongside building
+
+Tests are built with the feature, not afterwards. For every piece of work:
+
+1. **Start with the fixture and the test.** Before writing a parser feature, add the tiny
+   fixture file and a failing test. Before a CAM/DRC feature, add the board that shows
+   the problem. Before a machine feature, write the expected output.
+2. **Build until it passes**, running `npm test` constantly (it stays fast: seconds).
+3. **Check it in the browser** with the real samples and the test board.
+4. **`npm run check` passes** → commit. CI repeats it on every push; a red CI is fixed
+   before any new feature work.
+5. **Bugs:** first a test that reproduces it, then the fix.
+6. **Golden file changes are deliberate:** regenerated with `golden:update`, the diff
+   reviewed, and the reason written in the commit message.
+7. **Milestone end:** all of its tests in place, previous milestones still green, and for
+   machine milestones the `docs/qa/` checklist completed on real hardware.
+
+### Tests per milestone
+
+| # | Milestone | Tests added |
+|---|-----------|-------------|
+| 0 | Skeleton + harness | CI pipeline, no-network + `file://` e2e, empty `.pcam` round-trip, safety checker unit tests, test board Gerbers in `samples/` |
+| 1 | Parsers | Spec-feature fixtures, bad-input tests, parser fuzzing, reference corpus parses, `.gbrjob` + layer identification tests |
+| 2 | Viewer | Reference render comparisons, screenshot tests, performance budget, material table tests |
+| 3 | Analyser | Aperture/shape statistics vs. known values, source-line linking tests |
+| 4 | Editor | Round-trip (XOR) tests, undo/redo tests, edits persisted in `.pcam` |
+| 5 | Film output | Exact-scale checks (measure exported size), mirror/invert tests, print-to-PDF size check |
+| 6 | CAM core | Offsetting property tests, toolpath golden files, tool library in `.pcam` |
+| 7 | DRC | Crafted violation boards (exact findings), test board results |
+| 8 | 3D view | 3D screenshot tests, stackup-from-`.gbrjob` tests, as-milled vs. toolpath consistency |
+| 9 | Generic post | Golden G-code, safety checker on every output, simulator tests |
+| 10 | Machine posts | Golden files per machine, `docs/qa/` hardware runs on E44 + Carvera |
+| 11 | Polish | Full e2e flows for every preset, `.pcam` migration fixtures complete |
 
 ## Open questions / research
 
