@@ -1,0 +1,3 @@
+node_modules/
+# Generated at test time by tools/synth/generate.mjs — never commit
+test/fixtures/synthetic/

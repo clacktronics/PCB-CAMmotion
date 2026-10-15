@@ -1,0 +1,10 @@
+{
+  "name": "pcb-cammotion",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "synth": "node tools/synth/generate.mjs",
+    "pretest": "node tools/synth/generate.mjs --if-stale",
+    "test": "node --test"
+  }
+}
