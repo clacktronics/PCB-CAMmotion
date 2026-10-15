@@ -4,12 +4,15 @@
 //   settings.layers: { [sourceName]: { opacity, role, colour, invert } }
 //                    role = user override or null; colour = '#rrggbb' for the analysis views
 //                    or null; invert = draw the layer's complement (e.g. mask material)
-//   settings.view:   { side, mode, background, solo, activeLayer, showPaste, cx, cy, scale,
+//   settings.view:   { side, mode, background, solo, activeLayer, show, cx, cy, scale,
 //                      view3d, explode, camera3d }
 //                    solo: names of the soloed layers (none = every layer shown). Files from
 //                    before multi-solo stored solo: true|false (with activeLayer) and a
 //                    per-layer `visible`; ensureSettings converts the first, the second is
-//                    ignored (soloing is the only way to choose what is shown).
+//                    ignored (soloing and the group toggles choose what is shown).
+//                    show: { legend, soldermask, paste, copper, drill } group toggles
+//                    (model/layer-groups.js); files before them stored showPaste, which
+//                    ensureSettings turns into show.paste.
 //                    mode: realistic | debug | classic | xor | outline (model/view-modes.js)
 //                    view3d: show the 3D view; explode: 0..1 how far the 3D layers are spread;
 //                    camera3d: null | { position: [x, y, z], target: [x, y, z] } in mm
@@ -31,6 +34,7 @@ import { identifyLayer, detectFileKind, layerSortKey } from '../model/layers.js'
 import { extractOutline } from '../model/outline.js';
 import { resolveJobFiles } from '../parse/gbrjob.js';
 import { DEFAULT_STACKUP } from '../model/materials.js';
+import { DEFAULT_SHOW, normaliseShow } from '../model/layer-groups.js';
 import { unzipSync } from '../../vendor/fflate/fflate.js';
 
 export const DEFAULT_VIEW = {
@@ -39,7 +43,7 @@ export const DEFAULT_VIEW = {
   background: 'dark',
   solo: [],
   activeLayer: null,
-  showPaste: false,
+  show: DEFAULT_SHOW,
   cx: null,
   cy: null,
   scale: null,
@@ -70,6 +74,8 @@ export function ensureSettings(project) {
   s.layers ??= {};
   s.view = { ...DEFAULT_VIEW, ...(s.view || {}) };
   s.view.solo = normaliseSolo(s.view.solo, s.view.activeLayer);
+  s.view.show = normaliseShow(s.view.show, s.view.showPaste);
+  delete s.view.showPaste; // replaced by show.paste
   const explode = Number(s.view.explode);
   s.view.explode = Number.isFinite(explode) ? Math.min(1, Math.max(0, explode)) : 0;
   s.view.view3d = s.view.view3d === true;
@@ -228,6 +234,9 @@ export function buildLayers(project, opts = {}) {
     layers.push(layer);
   }
   layers.sort((a, b) => layerSortKey(a.role) - layerSortKey(b.role) || a.name.localeCompare(b.name));
+  // position in the full list: the classic palette colour stays with the file when some
+  // layers are not drawn (group toggles)
+  layers.forEach((l, i) => (l.listIndex = i));
   return { layers, job, files: loaded.map((l) => ({ name: l.src.name, ...l.file })) };
 }
 

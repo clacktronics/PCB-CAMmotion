@@ -131,8 +131,13 @@ export class LayerPictures {
     }
     if (item.type === 'copper') {
       paint(this.#mask(layer), rgba(COPPER, 1));
-      const open = item.side === 'inner' ? null : this.#openings(side);
-      if (open) {
+      const outer = item.side !== 'inner';
+      const open = outer ? this.#openings(side) : null;
+      if (outer && !this.#maskLayer(side)) {
+        // no solder mask on this side (none loaded, or switched off): all copper is exposed
+        // and carries the surface finish, as in the 2D realistic view
+        paint(this.#mask(layer), rgba(lookupMaterial('finish', st.finish).value, 1));
+      } else if (open) {
         // exposed copper carries the surface finish
         const finish = lookupMaterial('finish', st.finish).value;
         const ex = makeCanvas(w, h);

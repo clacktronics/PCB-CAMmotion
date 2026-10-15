@@ -155,6 +155,23 @@ button.on {
 .main.dragging .drop {
   display: grid;
 }
+.show-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0 10px 8px;
+}
+.show-toggles button {
+  padding: 2px 8px;
+  font-size: 12px;
+}
+.show-toggles button:not(.on) {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+.show-toggles button.none {
+  opacity: 0.45;
+}
 .layers {
   list-style: none;
   margin: 0;
@@ -183,10 +200,12 @@ button.on {
   background: rgba(var(--layer), 0.5);
   box-shadow: inset 0 0 0 2px rgba(var(--layer), 0.95);
 }
-.layer.hidden-layer {
+.layer.hidden-layer,
+.layer.group-off {
   background: rgba(var(--layer), 0.08);
 }
-.layer.hidden-layer .name {
+.layer.hidden-layer .name,
+.layer.group-off .name {
   color: var(--muted);
 }
 .layer .colour-bar {

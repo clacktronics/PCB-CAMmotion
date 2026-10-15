@@ -11,7 +11,7 @@ import { layerColour, backgroundColour, xorLayer, roleColour } from '../model/vi
  * @typedef {{id:string, role:{type:string, side:string, plated?:boolean|null, polarity?:string},
  *   image:object, visible:boolean, opacity:number, outline?:{loops:number[][]}}} RenderLayer
  * @typedef {{mode:'realistic'|'debug'|'classic'|'xor'|'outline', side:'top'|'bottom',
- *   stackup:{mask?:string, silk?:string, finish?:string, substrate?:string}, showPaste?:boolean,
+ *   stackup:{mask?:string, silk?:string, finish?:string, substrate?:string},
  *   background?:'dark'|'light', solo?:string[], activeLayerId?:string|null}} RenderSettings
  * solo: ids of the soloed layers; when any are soloed only those are drawn.
  * Layers may also carry colour ('#rrggbb', analysis views) and invert (draw the layer's
@@ -115,7 +115,7 @@ export class BoardRenderer {
     for (const l of order) {
       let m = this.mask(l, map, w, h, { outline: mode === 'outline' });
       if (l.invert) m = this.inverted(m, layers, profile, map, w, h);
-      const rgb = layerColour(l, mode, layers.indexOf(l));
+      const rgb = layerColour(l, mode, l.listIndex ?? layers.indexOf(l));
       if (xor) {
         const cov = m.getContext('2d').getImageData(0, 0, w, h).data;
         xorLayer(xor.data, cov, rgb);
@@ -216,7 +216,8 @@ export class BoardRenderer {
     const copper = pick('copper');
     const mask = pick('soldermask');
     const legend = pick('legend');
-    const paste = settings.showPaste ? pick('paste') : null;
+    // paste is drawn when its layer is passed in (the layer panel's Paste toggle)
+    const paste = pick('paste');
     const profile = layers.find((l) => vis(l) && l.role.type === 'profile');
     const drills = layers.filter((l) => vis(l) && l.role.type === 'drill');
     const st = settings.stackup || {};

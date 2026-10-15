@@ -2175,7 +2175,7 @@
       for (const l of order) {
         let m = this.mask(l, map, w2, h2, { outline: mode === "outline" });
         if (l.invert) m = this.inverted(m, layers, profile, map, w2, h2);
-        const rgb = layerColour(l, mode, layers.indexOf(l));
+        const rgb = layerColour(l, mode, l.listIndex ?? layers.indexOf(l));
         if (xor) {
           const cov = m.getContext("2d").getImageData(0, 0, w2, h2).data;
           xorLayer(xor.data, cov, rgb);
@@ -2258,7 +2258,7 @@
       const copper = pick("copper");
       const mask = pick("soldermask");
       const legend = pick("legend");
-      const paste = settings.showPaste ? pick("paste") : null;
+      const paste = pick("paste");
       const profile = layers.find((l) => vis(l) && l.role.type === "profile");
       const drills = layers.filter((l) => vis(l) && l.role.type === "drill");
       const st2 = settings.stackup || {};
@@ -2610,7 +2610,6 @@
         mode: "realistic",
         side: "top",
         stackup: {},
-        showPaste: false,
         background: "dark",
         solo: [],
         activeLayerId: null
@@ -2679,6 +2678,17 @@
       this.drawOverlay();
     }
     layersChanged() {
+      this.requestRender(true);
+    }
+    /**
+     * Change which layers are drawn (the layer group toggles) without resetting the view,
+     * highlight or playback; hover and selection on a layer no longer drawn are cleared.
+     */
+    showLayers(layers) {
+      this.layers = layers;
+      const gone = (hit) => hit && !layers.some((l) => l.id === hit.layerId);
+      if (gone(this.hover)) this.hover = null;
+      if (gone(this.selected)) this.select(null);
       this.requestRender(true);
     }
     setSettings(patch) {
@@ -18712,8 +18722,11 @@ void main() {
       }
       if (item.type === "copper") {
         paint(this.#mask(layer), rgba(COPPER, 1));
-        const open2 = item.side === "inner" ? null : this.#openings(side);
-        if (open2) {
+        const outer = item.side !== "inner";
+        const open2 = outer ? this.#openings(side) : null;
+        if (outer && !this.#maskLayer(side)) {
+          paint(this.#mask(layer), rgba(lookupMaterial("finish", st2.finish).value, 1));
+        } else if (open2) {
           const finish2 = lookupMaterial("finish", st2.finish).value;
           const ex = makeCanvas(w2, h2);
           const e = ex.getContext("2d");
@@ -18767,7 +18780,7 @@ void main() {
       this.canvas = canvas;
       this.cb = cb;
       this.layers = [];
-      this.settings = { stackup: {}, solo: [], showPaste: false, background: "dark", explode: 0, side: "top" };
+      this.settings = { stackup: {}, solo: [], background: "dark", explode: 0, side: "top" };
       this.visible = false;
       this.needsScene = true;
       this.renderCount = 0;
@@ -18837,7 +18850,7 @@ void main() {
     }
     setSettings(patch) {
       Object.assign(this.settings, patch);
-      if ("stackup" in patch || "solo" in patch || "showPaste" in patch) return this.layersChanged();
+      if ("stackup" in patch || "solo" in patch) return this.layersChanged();
       if (!this.gl) return;
       if ("explode" in patch) this.#placeItems();
       if ("side" in patch) this.fit();
@@ -18888,7 +18901,7 @@ void main() {
       this.frame = null;
       if (!bounds) return this.requestRender();
       const st2 = this.settings.stackup || {};
-      const { items } = buildStack3d(layers, st2, { showPaste: this.settings.showPaste });
+      const { items } = buildStack3d(layers, st2, { showPaste: true });
       this.items = items;
       const maxTex = Math.min(4096, this.gl.capabilities.maxTextureSize || 2048);
       this.frame = pictureFrame(bounds, Math.min(maxTex, 3072));
@@ -21689,6 +21702,33 @@ void main() {
     return { loops: loops.filter((l) => l.length >= 6), openChains };
   }
 
+  // src/model/layer-groups.js
+  var LAYER_GROUPS = [
+    { key: "legend", label: "Silkscreen", types: ["legend"] },
+    { key: "soldermask", label: "Mask", types: ["soldermask"] },
+    { key: "paste", label: "Paste", types: ["paste"] },
+    { key: "copper", label: "Copper", types: ["copper"] },
+    { key: "drill", label: "Holes", types: ["drill"] }
+  ];
+  var DEFAULT_SHOW = { legend: true, soldermask: true, paste: false, copper: true, drill: true };
+  function groupOf(role) {
+    return LAYER_GROUPS.find((g) => g.types.includes(role?.type))?.key ?? null;
+  }
+  function normaliseShow(show, showPaste) {
+    const out = { ...DEFAULT_SHOW };
+    if (typeof showPaste === "boolean") out.paste = showPaste;
+    if (show && typeof show === "object") {
+      for (const k2 of Object.keys(DEFAULT_SHOW)) if (typeof show[k2] === "boolean") out[k2] = show[k2];
+    }
+    return out;
+  }
+  function shownLayers(layers, show) {
+    return layers.filter((l) => {
+      const g = groupOf(l.role);
+      return !g || show?.[g] !== false;
+    });
+  }
+
   // src/project/project.js
   var DEFAULT_VIEW = {
     side: "top",
@@ -21696,7 +21736,7 @@ void main() {
     background: "dark",
     solo: [],
     activeLayer: null,
-    showPaste: false,
+    show: DEFAULT_SHOW,
     cx: null,
     cy: null,
     scale: null,
@@ -21722,6 +21762,8 @@ void main() {
     s.layers ??= {};
     s.view = { ...DEFAULT_VIEW, ...s.view || {} };
     s.view.solo = normaliseSolo(s.view.solo, s.view.activeLayer);
+    s.view.show = normaliseShow(s.view.show, s.view.showPaste);
+    delete s.view.showPaste;
     const explode = Number(s.view.explode);
     s.view.explode = Number.isFinite(explode) ? Math.min(1, Math.max(0, explode)) : 0;
     s.view.view3d = s.view.view3d === true;
@@ -21855,6 +21897,7 @@ void main() {
       layers.push(layer);
     }
     layers.sort((a2, b3) => layerSortKey(a2.role) - layerSortKey(b3.role) || a2.name.localeCompare(b3.name));
+    layers.forEach((l, i) => l.listIndex = i);
     return { layers, job, files: loaded.map((l) => ({ name: l.src.name, ...l.file })) };
   }
   function applyJobStackup(project, job) {
@@ -23347,14 +23390,6 @@ void main() {
         },
         "Light bg"
       );
-      this.btnPaste = h(
-        "button",
-        {
-          onclick: () => this.#setView({ showPaste: !this.view.showPaste }),
-          title: "Show solder paste in the realistic view"
-        },
-        "Paste"
-      );
       this.btnSave = h(
         "button",
         {
@@ -23415,15 +23450,29 @@ void main() {
         h("span", { class: "seg" }, [this.btnSide.top, this.btnSide.bottom]),
         h("span", { class: "seg" }, Object.values(this.btnMode)),
         this.btnBg,
-        this.btnPaste,
         this.dock.toolbarButton,
         h("span", { class: "spacer" }),
         this.nameInput
       ]);
+      this.btnShow = Object.fromEntries(
+        LAYER_GROUPS.map((g) => [
+          g.key,
+          h(
+            "button",
+            {
+              "data-testid": `show-${g.key}`,
+              onclick: () => this.#setShow(g.key, !this.view.show[g.key])
+            },
+            g.label
+          )
+        ])
+      );
+      this.showBar = h("div", { class: "show-toggles", "data-testid": "show-toggles" }, Object.values(this.btnShow));
       this.layerList = h("ul", { class: "layers", "data-testid": "layers" });
       this.stackPanel = h("div", { class: "stack" });
       const left = h("aside", { class: "panel left" }, [
         h("h2", {}, "Layers"),
+        this.showBar,
         this.layerList,
         h("h2", {}, "Board materials"),
         this.stackPanel
@@ -23601,7 +23650,6 @@ void main() {
       this.viewer.settings.solo = this.view.solo;
       this.viewer.settings.side = this.view.side;
       this.viewer.settings.mode = this.view.mode;
-      this.viewer.settings.showPaste = !!this.view.showPaste;
       this.viewer.settings.stackup = effectiveStackup(this.project);
       this.viewer.setLayers(this.#renderLayers());
       const v = this.view;
@@ -23612,7 +23660,6 @@ void main() {
         stackup: this.viewer.settings.stackup,
         solo: v.solo,
         side: v.side,
-        showPaste: !!v.showPaste,
         background: v.background,
         explode: v.explode
       });
@@ -23622,8 +23669,19 @@ void main() {
       this.dock.layersChanged();
       this.#refresh();
     }
+    /** The layers to draw: every layer whose group (silkscreen, mask, …) is switched on. */
     #renderLayers() {
-      return this.layers;
+      return shownLayers(this.layers, this.view.show);
+    }
+    /** Layer panel toggle: show or hide every layer of a group, in 2D and 3D. */
+    #setShow(key2, on3) {
+      this.view.show = { ...this.view.show, [key2]: on3 };
+      const shown = this.#renderLayers();
+      this.viewer.showLayers(shown);
+      this.viewer3d.setLayers(shown);
+      this.#refreshShow();
+      this.#refreshLayers();
+      this.#touch();
     }
     // ---------------------------------------------------------------- state changes
     #setView(patch) {
@@ -23805,6 +23863,7 @@ void main() {
       this.btnSaveAs.disabled = !this.project.sources.length;
       this.#refreshTitle();
       this.#refreshToolbar();
+      this.#refreshShow();
       this.#refreshLayers();
       this.#refreshStack();
       this.#refreshInspector();
@@ -23822,7 +23881,17 @@ void main() {
         b3.disabled = !!v.view3d;
       }
       this.btnBg.classList.toggle("on", v.background === "light");
-      this.btnPaste.classList.toggle("on", !!v.showPaste);
+    }
+    #refreshShow() {
+      for (const g of LAYER_GROUPS) {
+        const b3 = this.btnShow[g.key];
+        const on3 = this.view.show[g.key] !== false;
+        const count2 = this.layers.filter((l) => groupOf(l.role) === g.key).length;
+        b3.classList.toggle("on", on3);
+        b3.setAttribute("aria-pressed", on3 ? "true" : "false");
+        b3.classList.toggle("none", !count2);
+        b3.title = count2 ? `${on3 ? "Hide" : "Show"} every ${g.label.toLowerCase()} layer (${count2}) in 2D and 3D` : `No ${g.label.toLowerCase()} layer loaded`;
+      }
     }
     #refreshLayers() {
       clear(this.layerList);
@@ -23853,11 +23922,12 @@ void main() {
         }
         const soloed = this.view.solo.includes(l.id);
         const muted = this.view.solo.length > 0 && !soloed;
+        const groupOff = this.view.show[groupOf(l.role)] === false;
         const rgb = this.view.mode === "realistic" ? swatchColour(l, this.project).rgb : layerColour(l, this.view.mode, index);
         const row = h(
           "li",
           {
-            class: `layer source-row${l.id === this.activeLayerId ? " active" : ""}${muted ? " hidden-layer" : ""}${soloed ? " soloed" : ""}`,
+            class: `layer source-row${l.id === this.activeLayerId ? " active" : ""}${muted ? " hidden-layer" : ""}${groupOff ? " group-off" : ""}${soloed ? " soloed" : ""}`,
             style: `--layer: ${rgb.join(", ")}`,
             "data-testid": "layer",
             "data-name": l.name,

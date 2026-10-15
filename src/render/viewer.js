@@ -28,7 +28,6 @@ export class Viewer {
       mode: 'realistic',
       side: 'top',
       stackup: {},
-      showPaste: false,
       background: 'dark',
       solo: [],
       activeLayerId: null,
@@ -105,6 +104,18 @@ export class Viewer {
   }
 
   layersChanged() {
+    this.requestRender(true);
+  }
+
+  /**
+   * Change which layers are drawn (the layer group toggles) without resetting the view,
+   * highlight or playback; hover and selection on a layer no longer drawn are cleared.
+   */
+  showLayers(layers) {
+    this.layers = layers;
+    const gone = (hit) => hit && !layers.some((l) => l.id === hit.layerId);
+    if (gone(this.hover)) this.hover = null;
+    if (gone(this.selected)) this.select(null);
     this.requestRender(true);
   }
 

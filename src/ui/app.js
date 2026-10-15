@@ -16,6 +16,7 @@ import { SCHEMA_VERSION } from '../project/schema.js';
 import { APP_VERSION } from '../version.js';
 import { saveAutosave, loadAutosave, clearAutosave } from './autosave.js';
 import { LAYER_TYPES, detectFileKind } from '../model/layers.js';
+import { LAYER_GROUPS, groupOf, shownLayers } from '../model/layer-groups.js';
 import { SOLDER_MASK, SILKSCREEN, FINISH, SUBSTRATE, DEBUG, MISC, lookupMaterial } from '../model/materials.js';
 import { h, clear } from './dom.js';
 import { VIEW_MODES, VIEW_MODE_LABELS, layerColour, toHex, parseHex } from '../model/view-modes.js';
@@ -142,14 +143,6 @@ export class App {
       },
       'Light bg',
     );
-    this.btnPaste = h(
-      'button',
-      {
-        onclick: () => this.#setView({ showPaste: !this.view.showPaste }),
-        title: 'Show solder paste in the realistic view',
-      },
-      'Paste',
-    );
     this.btnSave = h(
       'button',
       {
@@ -211,16 +204,30 @@ export class App {
       h('span', { class: 'seg' }, [this.btnSide.top, this.btnSide.bottom]),
       h('span', { class: 'seg' }, Object.values(this.btnMode)),
       this.btnBg,
-      this.btnPaste,
       this.dock.toolbarButton,
       h('span', { class: 'spacer' }),
       this.nameInput,
     ]);
 
+    this.btnShow = Object.fromEntries(
+      LAYER_GROUPS.map((g) => [
+        g.key,
+        h(
+          'button',
+          {
+            'data-testid': `show-${g.key}`,
+            onclick: () => this.#setShow(g.key, !this.view.show[g.key]),
+          },
+          g.label,
+        ),
+      ]),
+    );
+    this.showBar = h('div', { class: 'show-toggles', 'data-testid': 'show-toggles' }, Object.values(this.btnShow));
     this.layerList = h('ul', { class: 'layers', 'data-testid': 'layers' });
     this.stackPanel = h('div', { class: 'stack' });
     const left = h('aside', { class: 'panel left' }, [
       h('h2', {}, 'Layers'),
+      this.showBar,
       this.layerList,
       h('h2', {}, 'Board materials'),
       this.stackPanel,
@@ -410,7 +417,6 @@ export class App {
     this.viewer.settings.solo = this.view.solo;
     this.viewer.settings.side = this.view.side;
     this.viewer.settings.mode = this.view.mode;
-    this.viewer.settings.showPaste = !!this.view.showPaste;
     this.viewer.settings.stackup = effectiveStackup(this.project);
     this.viewer.setLayers(this.#renderLayers());
     const v = this.view;
@@ -421,7 +427,6 @@ export class App {
       stackup: this.viewer.settings.stackup,
       solo: v.solo,
       side: v.side,
-      showPaste: !!v.showPaste,
       background: v.background,
       explode: v.explode,
     });
@@ -432,8 +437,20 @@ export class App {
     this.#refresh();
   }
 
+  /** The layers to draw: every layer whose group (silkscreen, mask, …) is switched on. */
   #renderLayers() {
-    return this.layers;
+    return shownLayers(this.layers, this.view.show);
+  }
+
+  /** Layer panel toggle: show or hide every layer of a group, in 2D and 3D. */
+  #setShow(key, on) {
+    this.view.show = { ...this.view.show, [key]: on };
+    const shown = this.#renderLayers();
+    this.viewer.showLayers(shown);
+    this.viewer3d.setLayers(shown);
+    this.#refreshShow();
+    this.#refreshLayers();
+    this.#touch();
   }
 
   // ---------------------------------------------------------------- state changes
@@ -635,6 +652,7 @@ export class App {
     this.btnSaveAs.disabled = !this.project.sources.length;
     this.#refreshTitle();
     this.#refreshToolbar();
+    this.#refreshShow();
     this.#refreshLayers();
     this.#refreshStack();
     this.#refreshInspector();
@@ -654,7 +672,20 @@ export class App {
       b.disabled = !!v.view3d;
     }
     this.btnBg.classList.toggle('on', v.background === 'light');
-    this.btnPaste.classList.toggle('on', !!v.showPaste);
+  }
+
+  #refreshShow() {
+    for (const g of LAYER_GROUPS) {
+      const b = this.btnShow[g.key];
+      const on = this.view.show[g.key] !== false;
+      const count = this.layers.filter((l) => groupOf(l.role) === g.key).length;
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      b.classList.toggle('none', !count);
+      b.title = count
+        ? `${on ? 'Hide' : 'Show'} every ${g.label.toLowerCase()} layer (${count}) in 2D and 3D`
+        : `No ${g.label.toLowerCase()} layer loaded`;
+    }
   }
 
   #refreshLayers() {
@@ -688,13 +719,14 @@ export class App {
       }
       const soloed = this.view.solo.includes(l.id);
       const muted = this.view.solo.length > 0 && !soloed;
+      const groupOff = this.view.show[groupOf(l.role)] === false;
       // the whole row takes the layer's colour in the current view
       const rgb =
         this.view.mode === 'realistic' ? swatchColour(l, this.project).rgb : layerColour(l, this.view.mode, index);
       const row = h(
         'li',
         {
-          class: `layer source-row${l.id === this.activeLayerId ? ' active' : ''}${muted ? ' hidden-layer' : ''}${soloed ? ' soloed' : ''}`,
+          class: `layer source-row${l.id === this.activeLayerId ? ' active' : ''}${muted ? ' hidden-layer' : ''}${groupOff ? ' group-off' : ''}${soloed ? ' soloed' : ''}`,
           style: `--layer: ${rgb.join(', ')}`,
           'data-testid': 'layer',
           'data-name': l.name,

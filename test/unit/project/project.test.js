@@ -81,7 +81,7 @@ test('viewer settings and layer overrides survive save → load (in settings/pro
     background: 'light',
     solo: [first],
     activeLayer: first,
-    showPaste: true,
+    show: { legend: false, soldermask: true, paste: true, copper: true, drill: false },
     cx: 12.5,
     cy: -3,
     scale: 42,
@@ -110,6 +110,18 @@ test('viewer settings and layer overrides survive save → load (in settings/pro
   assert.deepEqual([l.role.type, l.role.side, l.role.source], ['copper', 'bottom', 'user']);
   const f = layers.find((x) => x.id === first);
   assert.deepEqual([f.visible, f.colour, f.invert], [true, '#123456', true]);
+});
+
+test('layer group toggles: defaults for older files; the old showPaste flag becomes show.paste', () => {
+  const p = ensureSettings(loadProject(bytes(join(FIXTURES, 'pcam', 'v1-with-source.pcam'))));
+  assert.deepEqual(p.settings.view.show, { legend: true, soldermask: true, paste: false, copper: true, drill: true });
+  p.settings.view.show = undefined;
+  p.settings.view.showPaste = true;
+  ensureSettings(p);
+  assert.equal(p.settings.view.show.paste, true);
+  assert.ok(!('showPaste' in p.settings.view), 'old flag removed');
+  const back = ensureSettings(loadProject(saveProject(p)));
+  assert.deepEqual(back.settings.view.show, p.settings.view.show);
 });
 
 test('3D view settings: defaults for older files, explode kept within 0..1', () => {

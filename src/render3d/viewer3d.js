@@ -45,7 +45,7 @@ export class Viewer3D {
     this.canvas = canvas;
     this.cb = cb;
     this.layers = [];
-    this.settings = { stackup: {}, solo: [], showPaste: false, background: 'dark', explode: 0, side: 'top' };
+    this.settings = { stackup: {}, solo: [], background: 'dark', explode: 0, side: 'top' };
     this.visible = false;
     this.needsScene = true;
     this.renderCount = 0;
@@ -123,7 +123,7 @@ export class Viewer3D {
 
   setSettings(patch) {
     Object.assign(this.settings, patch);
-    if ('stackup' in patch || 'solo' in patch || 'showPaste' in patch) return this.layersChanged();
+    if ('stackup' in patch || 'solo' in patch) return this.layersChanged();
     if (!this.gl) return;
     if ('explode' in patch) this.#placeItems();
     if ('side' in patch) this.fit();
@@ -180,7 +180,8 @@ export class Viewer3D {
     this.frame = null;
     if (!bounds) return this.requestRender();
     const st = this.settings.stackup || {};
-    const { items } = buildStack3d(layers, st, { showPaste: this.settings.showPaste });
+    // paste layers are passed in only when the Paste toggle is on
+    const { items } = buildStack3d(layers, st, { showPaste: true });
     this.items = items;
     const maxTex = Math.min(4096, this.gl.capabilities.maxTextureSize || 2048);
     this.frame = pictureFrame(bounds, Math.min(maxTex, 3072));
