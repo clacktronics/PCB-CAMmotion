@@ -1,0 +1,182 @@
+/* App shell styles. System fonts only: no remote fonts (AGENTS.md → Local only).
+   Board/material colours do NOT belong here — they live in the material table (milestone 2). */
+
+:root {
+  color-scheme: light dark;
+  --bg: #f4f5f7;
+  --panel: #ffffff;
+  --text: #1d2125;
+  --muted: #5d6670;
+  --border: #d5d9de;
+  --accent: #2f6f4f;
+  --accent-text: #ffffff;
+  --error: #b42318;
+  --overlay: rgb(47 111 79 / 0.85);
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
+  font-size: 15px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15181b;
+    --panel: #1e2226;
+    --text: #e6e8ea;
+    --muted: #9aa3ab;
+    --border: #353b41;
+    --accent: #4f9b74;
+    --error: #ff7b6e;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.toolbar h1 {
+  font-size: 1.05rem;
+  margin: 0;
+}
+
+.project-name input {
+  font: inherit;
+  padding: 4px 8px;
+  min-width: 14rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+nav {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+button {
+  font: inherit;
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: var(--accent);
+}
+
+button.attention {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+main {
+  padding: 16px;
+  overflow: auto;
+}
+
+.panel {
+  max-width: 56rem;
+  padding: 12px 16px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.panel h2 {
+  font-size: 0.95rem;
+  margin: 0 0 8px;
+}
+
+.empty {
+  color: var(--muted);
+  margin: 24px 0;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+td:last-child,
+th:last-child {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.statusbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 16px;
+  font-size: 0.85rem;
+  color: var(--muted);
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+}
+
+#status[data-kind='error'] {
+  color: var(--error);
+}
+
+#drop-overlay {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: var(--overlay);
+  color: #fff;
+  font-size: 1.3rem;
+  pointer-events: none;
+}
+
+#drop-overlay[hidden],
+[hidden] {
+  display: none !important;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}

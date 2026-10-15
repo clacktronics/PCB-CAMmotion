@@ -274,7 +274,8 @@ Tests are built with the feature, not afterwards. For every piece of work:
 - Geometry library for polygon offset/boolean (e.g. Clipper2 JS) vs writing our own.
 - Exact KiCad `.gbrjob` colour names → RGB/opacity values; collect real board photos to tune them.
 - Should `.pcam` also embed rendered previews (thumbnail PNG) for file browsers?
-- Framework or vanilla JS? Default: vanilla ES modules + a small bundler only if needed.
+- ~~Framework or vanilla JS?~~ Decided in milestone 0: vanilla ES modules, bundled by esbuild
+  into a committed `dist/app.js` because browsers refuse ES modules from `file://`.
 
 ## Bonus features (later — do NOT implement yet)
 

@@ -1,0 +1,11 @@
+node_modules/
+vendor/
+dist/
+samples/
+test/fixtures/
+test/golden/
+test-results/
+playwright-report/
+package-lock.json
+# Markdown is hand-formatted (compact tables)
+*.md

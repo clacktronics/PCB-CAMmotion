@@ -34,9 +34,16 @@ The whole project is saved as one downloadable `.pcam` file.
 
 ```
 src/parse  src/model  src/render  src/render3d  src/analyze  src/edit
-src/cam    src/drc    src/post   src/export  src/project  src/ui
-test/      samples/
+src/cam    src/drc    src/post   src/export  src/project  src/ui  src/check
+test/      samples/   tools/     vendor/     dist/
 ```
+
+- `index.html` loads `dist/app.js`, an IIFE bundle of `src/ui/main.js` made by
+  `npm run build` (esbuild, dev-only). Browsers block ES modules on `file://`, so the bundle
+  is **committed**; after changing anything under `src/` run `npm run build` and commit
+  `dist/app.js` too (`npm run lint` fails if it is stale). Never edit `dist/` by hand.
+- Third-party code used at runtime is copied into `vendor/<name>/` with its LICENSE
+  (currently fflate for the `.pcam` ZIP container).
 
 - Parsers produce a command list that keeps source line numbers.
 - Stackup and layer roles come from the KiCad `.gbrjob` first, then Gerber X2 attributes,

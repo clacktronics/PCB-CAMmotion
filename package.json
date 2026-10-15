@@ -1,10 +1,32 @@
 {
   "name": "pcb-cammotion",
+  "version": "0.1.0",
   "private": true,
+  "description": "Local-only, in-browser PCB CAM: Gerber + Excellon in, toolpaths, DRC and film negatives out.",
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
+    "start": "node tools/serve.mjs",
+    "build": "node tools/build.mjs",
     "synth": "node tools/synth/generate.mjs",
+    "testboard": "node tools/testboard/generate.mjs",
     "pretest": "node tools/synth/generate.mjs --if-stale",
-    "test": "node --test"
+    "test": "node --test \"test/unit/**/*.test.js\"",
+    "test:e2e": "playwright test",
+    "lint": "eslint . && prettier --check . && node tools/build.mjs --check",
+    "format": "prettier --write .",
+    "check": "npm run lint && npm test && npm run test:e2e",
+    "golden:update": "UPDATE_GOLDEN=1 npm test"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@playwright/test": "1.56.1",
+    "esbuild": "0.25.10",
+    "eslint": "^9.39.5",
+    "fast-check": "^4.10.2",
+    "globals": "^17.13.0",
+    "prettier": "3.9.10"
   }
 }

@@ -1,3 +1,6 @@
 # Test fixtures must be stored byte-for-byte (CRLF, BOM, NUL and UTF-16 files can be deliberate).
 test/fixtures/** -text
 samples/** -text
+# Committed bundle: compared byte-for-byte by `npm run lint`
+dist/** text eol=lf linguist-generated=true
+vendor/** linguist-vendored=true

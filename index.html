@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- Local only: nothing may be fetched from the network (AGENTS.md). -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <title>PCB-CAMmotion</title>
+    <link rel="stylesheet" href="src/ui/styles.css" />
+    <script src="dist/app.js" defer></script>
+  </head>
+  <body>
+    <header class="toolbar">
+      <h1>PCB-CAMmotion</h1>
+      <label class="project-name">
+        <span class="visually-hidden">Project name</span>
+        <input id="project-name" type="text" spellcheck="false" autocomplete="off" />
+      </label>
+      <nav aria-label="Project">
+        <button id="new" type="button">New</button>
+        <button id="open" type="button" title="Open a .pcam project">Open…</button>
+        <button id="add" type="button" title="Add Gerber, drill or job files">Add files…</button>
+        <button id="save" type="button" title="Download the project as .pcam (Ctrl+S)">Save</button>
+      </nav>
+      <input id="open-input" type="file" accept=".pcam,.PCAM" hidden />
+      <input id="add-input" type="file" multiple hidden />
+    </header>
+
+    <main>
+      <section aria-labelledby="sources-heading" class="panel">
+        <h2 id="sources-heading">Source files</h2>
+        <p id="empty" class="empty">
+          Drop Gerber, Excellon drill and <code>.gbrjob</code> files here, or a <code>.pcam</code> project to open it.
+        </p>
+        <table id="sources-table" hidden>
+          <thead>
+            <tr>
+              <th scope="col">File</th>
+              <th scope="col">Size</th>
+            </tr>
+          </thead>
+          <tbody id="sources"></tbody>
+        </table>
+      </section>
+    </main>
+
+    <footer class="statusbar">
+      <span id="status" role="status"></span>
+      <span id="project-info"></span>
+    </footer>
+
+    <div id="drop-overlay" hidden><p>Drop files to add them — or a .pcam to open it</p></div>
+    <noscript>PCB-CAMmotion needs JavaScript. It runs entirely on your computer; nothing is uploaded.</noscript>
+  </body>
+</html>
