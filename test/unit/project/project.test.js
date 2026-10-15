@@ -75,10 +75,22 @@ test('viewer settings and layer overrides survive save → load (in settings/pro
   p.settings.layers[first].visible = false;
   p.settings.layers[first].opacity = 0.4;
   p.settings.layers[p.sources[1].name].role = { type: 'copper', side: 'bottom' };
-  Object.assign(p.settings.view, { side: 'bottom', mode: 'debug', showPaste: true, cx: 12.5, cy: -3, scale: 42 });
+  Object.assign(p.settings.view, {
+    side: 'bottom',
+    mode: 'xor',
+    background: 'light',
+    solo: true,
+    activeLayer: first,
+    showPaste: true,
+    cx: 12.5,
+    cy: -3,
+    scale: 42,
+  });
+  p.settings.layers[first].colour = '#123456';
+  p.settings.layers[first].invert = true;
   p.stackup = { ...p.stackup, mask: { top: 'Red', bottom: 'Blue' }, source: 'user' };
   const z = unzipSync(saveProject(p));
-  assert.ok(JSON.parse(strFromU8(z['settings/project.json'])).view.mode === 'debug');
+  assert.ok(JSON.parse(strFromU8(z['settings/project.json'])).view.mode === 'xor');
   const back = ensureSettings(loadProject(saveProject(p)));
   assert.deepEqual(back.settings, p.settings);
   assert.deepEqual(back.stackup, p.stackup);
@@ -87,7 +99,8 @@ test('viewer settings and layer overrides survive save → load (in settings/pro
   const { layers } = buildLayers(back);
   const l = layers.find((x) => x.id === p.sources[1].name);
   assert.deepEqual([l.role.type, l.role.side, l.role.source], ['copper', 'bottom', 'user']);
-  assert.equal(layers.find((x) => x.id === first).visible, false);
+  const f = layers.find((x) => x.id === first);
+  assert.deepEqual([f.visible, f.colour, f.invert], [false, '#123456', true]);
 });
 
 test('schema-1 projects from milestone 0 (no viewer settings) load into the viewer', () => {

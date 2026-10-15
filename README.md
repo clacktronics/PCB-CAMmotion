@@ -16,9 +16,16 @@ continue where you left off.
 - **Layers** are identified from the `.gbrjob`, then Gerber X2 attributes, then file names; the
   function can be changed per layer. Visibility and opacity per layer. `.zip` archives are
   unpacked.
-- **Views:** realistic board colours (solder mask, finish, silkscreen, substrate and plated or
-  non-plated holes, from the job file or the *Board materials* panel) or debug colours;
-  top or bottom (mirrored) view. Wheel to zoom, drag to pan, **F** to fit.
+- **Views:** *Realistic* board colours (solder mask, finish, silkscreen, substrate and plated
+  or non-plated holes, from the job file or the *Board materials* panel); *Layers* (one colour
+  per layer function); *Classic* (gerbv-style palette per file on black); *XOR* (layer colours
+  XORed: give two layers the same colour and identical parts cancel, so misregistration or
+  revision differences stand out); *Outline* (wireframe, clear polarity dashed). Top or
+  bottom (mirrored) view, dark or light background. Wheel to zoom, drag to pan, **F** to fit.
+- **Hidden layers:** per-layer colour and **inv**ert (e.g. show the solder mask material
+  instead of its openings, or the paste as stencil), **Solo** (**S**) to show only the
+  selected layer and **↑/↓** to flip through them, **I** to invert the selected layer,
+  **B** for the background. All of it is saved in the `.pcam`.
 - **Inspector:** click any pad, track, region or hole to see its aperture/tool, polarity,
   coordinates, X2 attributes and the source line it came from. Parser messages per file are
   listed with line numbers.

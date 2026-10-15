@@ -1,8 +1,11 @@
 // Project operations on top of the schema-1 project shape (src/project/schema.js):
 //   manifest, sources [{ name, bytes }], settings, stackup, tools, extra
 // The viewer keeps its per-layer and view settings in `settings` (settings/project.json):
-//   settings.layers: { [sourceName]: { visible, opacity, role } }   role = user override or null
-//   settings.view:   { side, mode, showPaste, cx, cy, scale }
+//   settings.layers: { [sourceName]: { visible, opacity, role, colour, invert } }
+//                    role = user override or null; colour = '#rrggbb' for the analysis views
+//                    or null; invert = draw the layer's complement (e.g. mask material)
+//   settings.view:   { side, mode, background, solo, activeLayer, showPaste, cx, cy, scale }
+//                    mode: realistic | debug | classic | xor | outline (model/view-modes.js)
 // `stackup` is null until set; it is filled from a .gbrjob (source: 'gbrjob') unless the user
 // edited it (source: 'user'). Everything derived (parsed images, layers) is rebuilt on load.
 // Pure data + functions (no DOM).
@@ -16,7 +19,17 @@ import { resolveJobFiles } from '../parse/gbrjob.js';
 import { DEFAULT_STACKUP } from '../model/materials.js';
 import { unzipSync } from '../../vendor/fflate/fflate.js';
 
-export const DEFAULT_VIEW = { side: 'top', mode: 'realistic', showPaste: false, cx: null, cy: null, scale: null };
+export const DEFAULT_VIEW = {
+  side: 'top',
+  mode: 'realistic',
+  background: 'dark',
+  solo: false,
+  activeLayer: null,
+  showPaste: false,
+  cx: null,
+  cy: null,
+  scale: null,
+};
 
 export function createProject(name = 'untitled', now = new Date()) {
   const p = createEmptyProject({ name, now: now instanceof Date ? now : new Date(now) });
@@ -34,7 +47,7 @@ export function ensureSettings(project) {
 }
 
 export function defaultLayerSettings() {
-  return { visible: true, opacity: 1, role: null };
+  return { visible: true, opacity: 1, role: null, colour: null, invert: false };
 }
 
 /** The stackup to draw with: the project's, or the defaults. */
@@ -141,6 +154,8 @@ export function buildLayers(project, opts = {}) {
       diagnostics: file.diagnostics,
       visible: settings.visible !== false,
       opacity: settings.opacity ?? 1,
+      colour: settings.colour ?? null,
+      invert: !!settings.invert,
     };
     if (role.type === 'profile') layer.outline = extractOutline(file.image);
     layers.push(layer);

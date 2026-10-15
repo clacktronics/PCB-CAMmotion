@@ -3,14 +3,18 @@
 // Browser only (canvas). Colours come from model/materials.js.
 
 import { drawImage } from './draw-image.js';
-import { CanvasTarget, makeCanvas } from './canvas-target.js';
-import { SOLDER_MASK, SILKSCREEN, SUBSTRATE, COPPER, MISC, DEBUG, lookupMaterial, rgba } from '../model/materials.js';
+import { CanvasTarget, OutlineTarget, makeCanvas } from './canvas-target.js';
+import { SOLDER_MASK, SILKSCREEN, SUBSTRATE, COPPER, MISC, lookupMaterial, rgba } from '../model/materials.js';
+import { layerColour, backgroundColour, xorLayer, roleColour } from '../model/view-modes.js';
 
 /**
  * @typedef {{id:string, role:{type:string, side:string, plated?:boolean|null, polarity?:string},
  *   image:object, visible:boolean, opacity:number, outline?:{loops:number[][]}}} RenderLayer
- * @typedef {{mode:'realistic'|'debug', side:'top'|'bottom', stackup:{mask?:string, silk?:string,
- *   finish?:string, substrate?:string}, showPaste?:boolean}} RenderSettings
+ * @typedef {{mode:'realistic'|'debug'|'classic'|'xor'|'outline', side:'top'|'bottom',
+ *   stackup:{mask?:string, silk?:string, finish?:string, substrate?:string}, showPaste?:boolean,
+ *   background?:'dark'|'light', solo?:boolean, activeLayerId?:string|null}} RenderSettings
+ * Layers may also carry colour ('#rrggbb', analysis views) and invert (draw the layer's
+ * complement inside the board area: e.g. solder mask material instead of mask openings).
  */
 
 export class BoardRenderer {
@@ -35,7 +39,7 @@ export class BoardRenderer {
   /** Mask canvas (white = covered) for one layer at this view; cached until the view changes. */
   mask(layer, map, w, h, opts = {}) {
     const key = `${map.s},${map.ox},${map.oy},${map.mirror},${w},${h},${opts.inflateMm || 0}`;
-    const id = layer.id + (opts.inflateMm ? ':inflate' : '');
+    const id = layer.id + (opts.inflateMm ? ':inflate' : '') + (opts.outline ? ':outline' : '');
     const hit = this.masks.get(id);
     if (hit && hit.key === key) return hit.canvas;
     const canvas = hit?.canvas && hit.canvas.width === w && hit.canvas.height === h ? hit.canvas : makeCanvas(w, h);
@@ -43,7 +47,7 @@ export class BoardRenderer {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalCompositeOperation = 'source-over';
     ctx.clearRect(0, 0, w, h);
-    const t = new CanvasTarget(ctx, map);
+    const t = opts.outline ? new OutlineTarget(ctx, map) : new CanvasTarget(ctx, map);
     drawImage(layer.image, t, { view: BoardRenderer.viewRect(map, w, h), inflateMm: opts.inflateMm || 0 });
     this.masks.set(id, { key, canvas });
     return canvas;
@@ -71,22 +75,57 @@ export class BoardRenderer {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalCompositeOperation = 'source-over';
     ctx.globalAlpha = 1;
-    ctx.fillStyle = rgba(MISC.background, 1);
+    const mode = settings.mode || 'realistic';
+    ctx.fillStyle = rgba({ rgb: backgroundColour(mode, settings.background) }, 1);
     ctx.fillRect(0, 0, w, h);
-    if (settings.mode === 'debug') this.renderDebug(ctx, layers, settings, map, w, h);
-    else this.renderRealistic(ctx, layers, settings, map, w, h);
+    if (mode === 'realistic') this.renderRealistic(ctx, layers, settings, map, w, h);
+    else this.renderAnalysis(ctx, layers, settings, map, w, h);
   }
 
-  renderDebug(ctx, layers, settings, map, w, h) {
-    const order = debugOrder(layers, settings.side);
+  /** Debug, classic, XOR and outline views: one colour per layer, physical order. */
+  renderAnalysis(ctx, layers, settings, map, w, h) {
+    const mode = settings.mode;
+    const shown = analysisLayers(layers, settings);
+    const order = debugOrder(shown, settings.side);
+    const xor = mode === 'xor' ? ctx.getImageData(0, 0, w, h) : null;
+    const profile = layers.find((l) => l.role.type === 'profile' && l.image);
     for (const l of order) {
-      if (!l.visible || !l.image) continue;
-      const m = this.mask(l, map, w, h);
-      const c = tint(this.workCanvas(0, w, h), m, rgba(debugColour(l.role), 1));
-      ctx.globalAlpha = l.opacity ?? 0.8;
+      let m = this.mask(l, map, w, h, { outline: mode === 'outline' });
+      if (l.invert) m = this.inverted(m, layers, profile, map, w, h);
+      const rgb = layerColour(l, mode, layers.indexOf(l));
+      if (xor) {
+        const cov = m.getContext('2d').getImageData(0, 0, w, h).data;
+        xorLayer(xor.data, cov, rgb);
+        continue;
+      }
+      const c = tint(this.workCanvas(0, w, h), m, rgba({ rgb }, 1));
+      ctx.globalAlpha = mode === 'outline' ? 1 : (l.opacity ?? 1) * (mode === 'classic' ? 0.85 : 0.8);
       ctx.drawImage(c, 0, 0);
     }
+    if (xor) ctx.putImageData(xor, 0, 0);
     ctx.globalAlpha = 1;
+  }
+
+  /** The layer's complement inside the board area (board outline, or all layers' extent). */
+  inverted(mask, layers, profile, map, w, h) {
+    const c = this.workCanvas(5, w, h);
+    const cx = c.getContext('2d');
+    const area = boardArea(layers, profile);
+    if (area) {
+      const t = new CanvasTarget(cx, map);
+      t.begin();
+      for (const loop of area) {
+        t.moveTo(loop[0], loop[1]);
+        for (let i = 2; i < loop.length; i += 2) t.lineTo(loop[i], loop[i + 1]);
+        t.closePath();
+      }
+      cx.fill('evenodd');
+      cx.setTransform(1, 0, 0, 1, 0, 0);
+    }
+    cx.globalCompositeOperation = 'destination-out';
+    cx.drawImage(mask, 0, 0);
+    cx.globalCompositeOperation = 'source-over';
+    return c;
   }
 
   renderRealistic(ctx, layers, settings, map, w, h) {
@@ -231,12 +270,6 @@ function tintInto(ctx, mask, colour, alpha, scratch) {
   ctx.globalAlpha = 1;
 }
 
-function debugColour(role) {
-  if (role.type === 'profile') return DEBUG.profile;
-  if (role.type === 'drill') return DEBUG.drill;
-  return DEBUG[`${role.type}_${role.side}`] || DEBUG.other;
-}
-
 /** Layers in painting order for the debug view (far side first). */
 export function debugOrder(layers, side) {
   const rank = (l) => {
@@ -271,3 +304,14 @@ export function boardArea(layers, profile) {
   if (!(b[0] <= b[2])) return null;
   return [[b[0], b[1], b[2], b[1], b[2], b[3], b[0], b[3]]];
 }
+
+/** Layers drawn in an analysis view: visible ones, or only the active layer when solo. */
+export function analysisLayers(layers, settings) {
+  if (settings.solo && settings.activeLayerId) {
+    const l = layers.find((x) => x.id === settings.activeLayerId && x.image);
+    if (l) return [l];
+  }
+  return layers.filter((l) => l.visible && l.image);
+}
+
+export { roleColour };

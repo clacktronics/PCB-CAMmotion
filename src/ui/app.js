@@ -16,6 +16,7 @@ import { saveAutosave, loadAutosave, clearAutosave } from './autosave.js';
 import { LAYER_TYPES, detectFileKind } from '../model/layers.js';
 import { SOLDER_MASK, SILKSCREEN, FINISH, SUBSTRATE, DEBUG, lookupMaterial, rgba } from '../model/materials.js';
 import { h, clear } from './dom.js';
+import { VIEW_MODES, VIEW_MODE_LABELS, layerColour, toHex } from '../model/view-modes.js';
 
 const SIDES = ['top', 'bottom', 'inner', 'all'];
 const KIND_LABEL = { F: 'Flash (D03)', L: 'Draw (D01, linear)', A: 'Arc (D01, G02/G03)', R: 'Region (G36/G37)' };
@@ -76,22 +77,41 @@ export class App {
       top: h('button', { onclick: () => this.#setView({ side: 'top' }), 'data-testid': 'view-top' }, 'Top'),
       bottom: h('button', { onclick: () => this.#setView({ side: 'bottom' }), 'data-testid': 'view-bottom' }, 'Bottom'),
     };
-    this.btnMode = {
-      realistic: h(
-        'button',
-        {
-          onclick: () => this.#setView({ mode: 'realistic' }),
-          'data-testid': 'mode-realistic',
-          title: 'Board in its real colours',
-        },
-        'Realistic',
-      ),
-      debug: h(
-        'button',
-        { onclick: () => this.#setView({ mode: 'debug' }), 'data-testid': 'mode-debug', title: 'One colour per layer' },
-        'Debug colours',
-      ),
+    const modeTitles = {
+      realistic: 'The board in its real materials',
+      debug: 'One colour per layer function',
+      classic: 'Classic Gerber viewer: a palette colour per file on black',
+      xor: 'XOR the layer colours: overlaps show as a mixed colour; give two layers the same colour and identical parts cancel to black',
+      outline: 'Wireframe: outlines of every object (clear polarity dashed)',
     };
+    this.btnMode = Object.fromEntries(
+      VIEW_MODES.map((m) => [
+        m,
+        h(
+          'button',
+          { onclick: () => this.#setView({ mode: m }), 'data-testid': `mode-${m}`, title: modeTitles[m] },
+          VIEW_MODE_LABELS[m],
+        ),
+      ]),
+    );
+    this.btnBg = h(
+      'button',
+      {
+        onclick: () => this.#setView({ background: this.view.background === 'light' ? 'dark' : 'light' }),
+        'data-testid': 'background',
+        title: 'Light or dark background (B)',
+      },
+      'Light bg',
+    );
+    this.btnSolo = h(
+      'button',
+      {
+        onclick: () => this.#toggleSolo(),
+        'data-testid': 'solo',
+        title: 'Show only the selected layer; ↑/↓ flip through the layers (S)',
+      },
+      'Solo',
+    );
     this.btnPaste = h(
       'button',
       {
@@ -143,7 +163,9 @@ export class App {
       h('span', { class: 'sep' }),
       h('button', { onclick: () => this.viewer.fit(), 'data-testid': 'fit', title: 'Fit board (F)' }, 'Fit'),
       h('span', { class: 'seg' }, [this.btnSide.top, this.btnSide.bottom]),
-      h('span', { class: 'seg' }, [this.btnMode.realistic, this.btnMode.debug]),
+      h('span', { class: 'seg' }, Object.values(this.btnMode)),
+      this.btnSolo,
+      this.btnBg,
       this.btnPaste,
       h('span', { class: 'spacer' }),
       this.nameInput,
@@ -204,8 +226,24 @@ export class App {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
         this.save();
-      } else if (e.target === document.body && e.key.toLowerCase() === 'f') this.viewer.fit();
-      else if (e.key === 'Escape') this.viewer.select(null);
+        return;
+      }
+      if (e.key === 'Escape') return this.viewer.select(null);
+      if (e.ctrlKey || e.metaKey || e.altKey || isTyping(e.target)) return;
+      const k = e.key.toLowerCase();
+      if (k === 'f') this.viewer.fit();
+      else if (k === 's') this.#toggleSolo();
+      else if (k === 'b') this.#setView({ background: this.view.background === 'light' ? 'dark' : 'light' });
+      else if (k === 'i' && this.activeLayerId) {
+        this.#setLayer(this.activeLayerId, { invert: !this.layerById(this.activeLayerId)?.invert });
+        this.#refreshLayers();
+      } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        // flip through the layers (with Solo: one at a time)
+        e.preventDefault();
+        const i = this.layers.findIndex((l) => l.id === this.activeLayerId);
+        const n = this.layers.length;
+        if (n) this.#setActive(this.layers[(i + (e.key === 'ArrowDown' ? 1 : n - 1) + n) % n].id);
+      }
     });
     window.addEventListener('beforeunload', (e) => {
       if (this.dirty) e.preventDefault();
@@ -313,7 +351,13 @@ export class App {
     this.job = job;
     this.textCache.clear();
     this.parseMs = performance.now() - t0;
-    if (!this.layers.find((l) => l.id === this.activeLayerId)) this.activeLayerId = this.layers[0]?.id ?? null;
+    if (!this.layers.find((l) => l.id === this.activeLayerId)) {
+      const saved = this.view.activeLayer;
+      this.activeLayerId = this.layers.find((l) => l.id === saved) ? saved : (this.layers[0]?.id ?? null);
+    }
+    this.viewer.settings.activeLayerId = this.activeLayerId;
+    this.viewer.settings.background = this.view.background;
+    this.viewer.settings.solo = !!this.view.solo;
     this.viewer.settings.side = this.view.side;
     this.viewer.settings.mode = this.view.mode;
     this.viewer.settings.showPaste = !!this.view.showPaste;
@@ -336,7 +380,23 @@ export class App {
     Object.assign(this.view, patch);
     this.viewer.setSettings(patch);
     this.#refreshToolbar();
+    if ('mode' in patch) this.#refreshLayers();
     this.#touch();
+  }
+
+  #setActive(id) {
+    this.activeLayerId = id;
+    this.view.activeLayer = id;
+    this.viewer.settings.activeLayerId = id;
+    if (this.view.solo) this.viewer.layersChanged();
+    this.#refreshLayers();
+    this.#refreshDiagnostics();
+  }
+
+  #toggleSolo() {
+    const solo = !this.view.solo;
+    // solo is an analysis tool: from the realistic view, switch to per-layer colours
+    this.#setView(solo && this.view.mode === 'realistic' ? { solo, mode: 'debug' } : { solo });
   }
 
   #onView(v) {
@@ -354,6 +414,8 @@ export class App {
     const l = this.layerById(id);
     if (l) {
       if ('visible' in patch) l.visible = patch.visible;
+      if ('colour' in patch) l.colour = patch.colour;
+      if ('invert' in patch) l.invert = patch.invert;
       if ('opacity' in patch) l.opacity = patch.opacity;
     }
     if ('role' in patch) return this.#rebuild({ keepView: true });
@@ -472,16 +534,18 @@ export class App {
     const v = this.view;
     for (const [k, b] of Object.entries(this.btnSide)) b.classList.toggle('on', v.side === k);
     for (const [k, b] of Object.entries(this.btnMode)) b.classList.toggle('on', v.mode === k);
+    this.btnBg.classList.toggle('on', v.background === 'light');
+    this.btnSolo.classList.toggle('on', !!v.solo);
     this.btnPaste.classList.toggle('on', !!v.showPaste);
   }
 
   #refreshLayers() {
     clear(this.layerList);
-    for (const l of this.layers) {
+    for (const [index, l] of this.layers.entries()) {
       const errs = l.diagnostics.list.filter((d) => d.severity === 'error').length;
       const warns = l.diagnostics.list.filter((d) => d.severity === 'warning').length;
       const roleSel = h('select', {
-        title: `Layer function (detected from ${l.autoRole.source})`,
+        title: `Layer function (found from: ${l.role.source === 'user' ? 'your choice' : l.autoRole.source})`,
         'data-testid': 'role',
         onclick: (e) => e.stopPropagation(),
         onchange: (e) => {
@@ -511,11 +575,7 @@ export class App {
           'data-testid': 'layer',
           'data-name': l.name,
           'data-role': `${l.role.type}:${l.role.side}`,
-          onclick: () => {
-            this.activeLayerId = l.id;
-            this.#refreshLayers();
-            this.#refreshDiagnostics();
-          },
+          onclick: () => this.#setActive(l.id),
         },
         [
           h('input', {
@@ -525,7 +585,17 @@ export class App {
             onclick: (e) => e.stopPropagation(),
             onchange: (e) => this.#setLayer(l.id, { visible: e.target.checked }),
           }),
-          h('span', { class: 'swatch', style: `background:${rgba(swatchColour(l, this.project), 1)}` }),
+          this.view.mode === 'realistic'
+            ? h('span', { class: 'swatch', style: `background:${rgba(swatchColour(l, this.project), 1)}` })
+            : h('input', {
+                type: 'color',
+                class: 'swatch',
+                'data-testid': 'layer-colour',
+                title: 'Layer colour in this view',
+                value: toHex(layerColour(l, this.view.mode, index)),
+                onclick: (e) => e.stopPropagation(),
+                oninput: (e) => this.#setLayer(l.id, { colour: e.target.value }),
+              }),
           h('span', { class: 'name', title: l.name }, l.name),
           h('span', { class: 'badges' }, [
             errs ? h('span', { class: 'badge error', title: 'errors' }, String(errs)) : null,
@@ -543,7 +613,23 @@ export class App {
               onclick: (e) => e.stopPropagation(),
               oninput: (e) => this.#setLayer(l.id, { opacity: Number(e.target.value) }),
             }),
-            h('span', { class: 'source', title: 'How the layer function was found' }, l.role.source),
+            h(
+              'label',
+              {
+                class: 'invert',
+                title: 'Invert: show what is not drawn, e.g. the solder mask material instead of its openings (I)',
+                onclick: (e) => e.stopPropagation(),
+              },
+              [
+                h('input', {
+                  type: 'checkbox',
+                  checked: !!l.invert,
+                  'data-testid': 'invert',
+                  onchange: (e) => this.#setLayer(l.id, { invert: e.target.checked }),
+                }),
+                'inv',
+              ],
+            ),
             h(
               'button',
               {
@@ -611,7 +697,11 @@ export class App {
 
   #onSelect(hit) {
     this.selection = hit;
-    if (hit) this.activeLayerId = hit.layerId;
+    if (hit && !this.view.solo) {
+      this.activeLayerId = hit.layerId;
+      this.view.activeLayer = hit.layerId;
+      this.viewer.settings.activeLayerId = hit.layerId;
+    }
     this.#refreshInspector();
     this.#refreshLayers();
     this.#refreshDiagnostics();
@@ -746,11 +836,6 @@ export class App {
 }
 
 function swatchColour(l, project) {
-  if (project.settings.view.mode === 'debug') {
-    if (l.role.type === 'profile') return DEBUG.profile;
-    if (l.role.type === 'drill') return DEBUG.drill;
-    return DEBUG[`${l.role.type}_${l.role.side}`] || DEBUG.other;
-  }
   const st = effectiveStackup(project);
   if (l.role.type === 'soldermask') return lookupMaterial('mask', st.mask?.[l.role.side] ?? st.mask).value;
   if (l.role.type === 'legend') return lookupMaterial('silk', st.silk?.[l.role.side] ?? st.silk).value;
@@ -789,4 +874,11 @@ function downloadBytes(bytes, name) {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+/** Keyboard shortcuts must not fire while the user types or uses a control that takes keys. */
+function isTyping(el) {
+  if (!el || el === document.body) return false;
+  if (el.isContentEditable || el.tagName === 'SELECT' || el.tagName === 'TEXTAREA') return true;
+  return el.tagName === 'INPUT' && !['checkbox', 'button', 'color'].includes(el.type);
 }

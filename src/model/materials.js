@@ -89,6 +89,34 @@ export const DEBUG = {
   other: { rgb: [120, 200, 120] },
 };
 
+/**
+ * Classic Gerber-viewer palette (gerbv's default layer colours), assigned to layers in list
+ * order in the Classic and XOR views.
+ */
+export const CLASSIC = [
+  { rgb: [115, 115, 222] },
+  { rgb: [255, 127, 115] },
+  { rgb: [193, 0, 224] },
+  { rgb: [117, 242, 103] },
+  { rgb: [0, 195, 195] },
+  { rgb: [213, 253, 51] },
+  { rgb: [209, 27, 104] },
+  { rgb: [255, 197, 51] },
+  { rgb: [186, 186, 186] },
+  { rgb: [211, 211, 255] },
+  { rgb: [253, 210, 206] },
+  { rgb: [236, 194, 242] },
+  { rgb: [208, 249, 204] },
+  { rgb: [183, 255, 255] },
+  { rgb: [241, 255, 183] },
+  { rgb: [255, 202, 225] },
+  { rgb: [253, 219, 142] },
+  { rgb: [226, 226, 226] },
+];
+
+/** Background of the Classic and XOR views (classic viewers draw on black). */
+export const CLASSIC_BACKGROUND = { rgb: [0, 0, 0] };
+
 /** Default stackup used when no .gbrjob is present. */
 export const DEFAULT_STACKUP = {
   mask: 'Green',

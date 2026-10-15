@@ -202,7 +202,14 @@ button.on {
   font-size: 12px;
 }
 .layer .controls input[type='range'] {
-  width: 56px;
+  width: 48px;
+  flex: none;
+}
+.layer .controls select {
+  max-width: 104px;
+  flex: none;
+}
+.layer .controls {
   min-width: 0;
 }
 .layer .controls button {
@@ -316,4 +323,25 @@ button.on {
 }
 button.attention {
   border-color: var(--warn);
+}
+input[type='color'].swatch {
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  background: none;
+  cursor: pointer;
+}
+input[type='color'].swatch::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+input[type='color'].swatch::-webkit-color-swatch {
+  border: none;
+}
+.layer .invert {
+  font-size: 11px;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
 }

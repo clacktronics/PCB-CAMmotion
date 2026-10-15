@@ -1858,6 +1858,28 @@
   function release(c) {
     if (pool.length < 4) pool.push(c);
   }
+  var OutlineTarget = class extends CanvasTarget {
+    // shadow the fast round-stroke path: draw-image then emits outlines for line draws
+    get stroke() {
+      return void 0;
+    }
+    fill(dark) {
+      const ctx = this.ctx;
+      const px = 1 / this.map.s;
+      ctx.globalCompositeOperation = "source-over";
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 1.25 * px;
+      ctx.lineJoin = "round";
+      ctx.setLineDash(dark ? [] : [4 * px, 3 * px]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    group() {
+      return this;
+    }
+    endGroup() {
+    }
+  };
 
   // src/model/materials.js
   var SOLDER_MASK = {
@@ -1936,6 +1958,27 @@
     drill: { rgb: [240, 240, 240] },
     other: { rgb: [120, 200, 120] }
   };
+  var CLASSIC = [
+    { rgb: [115, 115, 222] },
+    { rgb: [255, 127, 115] },
+    { rgb: [193, 0, 224] },
+    { rgb: [117, 242, 103] },
+    { rgb: [0, 195, 195] },
+    { rgb: [213, 253, 51] },
+    { rgb: [209, 27, 104] },
+    { rgb: [255, 197, 51] },
+    { rgb: [186, 186, 186] },
+    { rgb: [211, 211, 255] },
+    { rgb: [253, 210, 206] },
+    { rgb: [236, 194, 242] },
+    { rgb: [208, 249, 204] },
+    { rgb: [183, 255, 255] },
+    { rgb: [241, 255, 183] },
+    { rgb: [255, 202, 225] },
+    { rgb: [253, 219, 142] },
+    { rgb: [226, 226, 226] }
+  ];
+  var CLASSIC_BACKGROUND = { rgb: [0, 0, 0] };
   var DEFAULT_STACKUP = {
     mask: "Green",
     silk: "White",
@@ -1968,6 +2011,52 @@
     return `rgba(${c.rgb[0]},${c.rgb[1]},${c.rgb[2]},${alpha})`;
   }
 
+  // src/model/view-modes.js
+  var VIEW_MODES = ["realistic", "debug", "classic", "xor", "outline"];
+  var VIEW_MODE_LABELS = {
+    realistic: "Realistic",
+    debug: "Layers",
+    classic: "Classic",
+    xor: "XOR",
+    outline: "Outline"
+  };
+  function parseHex(hex) {
+    const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || "").trim());
+    if (!m) return null;
+    const v = parseInt(m[1], 16);
+    return [v >> 16 & 255, v >> 8 & 255, v & 255];
+  }
+  function toHex(rgb) {
+    return "#" + rgb.map((c) => c.toString(16).padStart(2, "0")).join("");
+  }
+  function roleColour(role) {
+    if (role.type === "profile") return DEBUG.profile.rgb;
+    if (role.type === "drill") return DEBUG.drill.rgb;
+    return (DEBUG[`${role.type}_${role.side}`] || DEBUG.other).rgb;
+  }
+  function layerColour(layer, mode, index) {
+    const own = parseHex(layer.colour);
+    if (own) return own;
+    if (mode === "classic" || mode === "xor") return CLASSIC[index % CLASSIC.length].rgb;
+    return roleColour(layer.role);
+  }
+  function backgroundColour(mode, background) {
+    if (background === "light") return MISC.backgroundLight.rgb;
+    if (mode === "classic" || mode === "xor") return CLASSIC_BACKGROUND.rgb;
+    return MISC.background.rgb;
+  }
+  function xorLayer(dst, coverage, rgb) {
+    const [r, g, b] = rgb;
+    for (let i = 0; i < dst.length; i += 4) {
+      if (coverage[i + 3] >= 128) {
+        dst[i] ^= r;
+        dst[i + 1] ^= g;
+        dst[i + 2] ^= b;
+      }
+    }
+    return dst;
+  }
+
   // src/render/board-render.js
   var BoardRenderer = class _BoardRenderer {
     constructor() {
@@ -1988,7 +2077,7 @@
     /** Mask canvas (white = covered) for one layer at this view; cached until the view changes. */
     mask(layer, map, w, h2, opts = {}) {
       const key2 = `${map.s},${map.ox},${map.oy},${map.mirror},${w},${h2},${opts.inflateMm || 0}`;
-      const id = layer.id + (opts.inflateMm ? ":inflate" : "");
+      const id = layer.id + (opts.inflateMm ? ":inflate" : "") + (opts.outline ? ":outline" : "");
       const hit = this.masks.get(id);
       if (hit && hit.key === key2) return hit.canvas;
       const canvas = hit?.canvas && hit.canvas.width === w && hit.canvas.height === h2 ? hit.canvas : makeCanvas(w, h2);
@@ -1996,7 +2085,7 @@
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.globalCompositeOperation = "source-over";
       ctx.clearRect(0, 0, w, h2);
-      const t = new CanvasTarget(ctx, map);
+      const t = opts.outline ? new OutlineTarget(ctx, map) : new CanvasTarget(ctx, map);
       drawImage(layer.image, t, { view: _BoardRenderer.viewRect(map, w, h2), inflateMm: opts.inflateMm || 0 });
       this.masks.set(id, { key: key2, canvas });
       return canvas;
@@ -2022,21 +2111,55 @@
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.globalCompositeOperation = "source-over";
       ctx.globalAlpha = 1;
-      ctx.fillStyle = rgba(MISC.background, 1);
+      const mode = settings.mode || "realistic";
+      ctx.fillStyle = rgba({ rgb: backgroundColour(mode, settings.background) }, 1);
       ctx.fillRect(0, 0, w, h2);
-      if (settings.mode === "debug") this.renderDebug(ctx, layers, settings, map, w, h2);
-      else this.renderRealistic(ctx, layers, settings, map, w, h2);
+      if (mode === "realistic") this.renderRealistic(ctx, layers, settings, map, w, h2);
+      else this.renderAnalysis(ctx, layers, settings, map, w, h2);
     }
-    renderDebug(ctx, layers, settings, map, w, h2) {
-      const order = debugOrder(layers, settings.side);
+    /** Debug, classic, XOR and outline views: one colour per layer, physical order. */
+    renderAnalysis(ctx, layers, settings, map, w, h2) {
+      const mode = settings.mode;
+      const shown = analysisLayers(layers, settings);
+      const order = debugOrder(shown, settings.side);
+      const xor = mode === "xor" ? ctx.getImageData(0, 0, w, h2) : null;
+      const profile = layers.find((l) => l.role.type === "profile" && l.image);
       for (const l of order) {
-        if (!l.visible || !l.image) continue;
-        const m = this.mask(l, map, w, h2);
-        const c = tint(this.workCanvas(0, w, h2), m, rgba(debugColour(l.role), 1));
-        ctx.globalAlpha = l.opacity ?? 0.8;
+        let m = this.mask(l, map, w, h2, { outline: mode === "outline" });
+        if (l.invert) m = this.inverted(m, layers, profile, map, w, h2);
+        const rgb = layerColour(l, mode, layers.indexOf(l));
+        if (xor) {
+          const cov = m.getContext("2d").getImageData(0, 0, w, h2).data;
+          xorLayer(xor.data, cov, rgb);
+          continue;
+        }
+        const c = tint(this.workCanvas(0, w, h2), m, rgba({ rgb }, 1));
+        ctx.globalAlpha = mode === "outline" ? 1 : (l.opacity ?? 1) * (mode === "classic" ? 0.85 : 0.8);
         ctx.drawImage(c, 0, 0);
       }
+      if (xor) ctx.putImageData(xor, 0, 0);
       ctx.globalAlpha = 1;
+    }
+    /** The layer's complement inside the board area (board outline, or all layers' extent). */
+    inverted(mask, layers, profile, map, w, h2) {
+      const c = this.workCanvas(5, w, h2);
+      const cx = c.getContext("2d");
+      const area = boardArea(layers, profile);
+      if (area) {
+        const t = new CanvasTarget(cx, map);
+        t.begin();
+        for (const loop of area) {
+          t.moveTo(loop[0], loop[1]);
+          for (let i = 2; i < loop.length; i += 2) t.lineTo(loop[i], loop[i + 1]);
+          t.closePath();
+        }
+        cx.fill("evenodd");
+        cx.setTransform(1, 0, 0, 1, 0, 0);
+      }
+      cx.globalCompositeOperation = "destination-out";
+      cx.drawImage(mask, 0, 0);
+      cx.globalCompositeOperation = "source-over";
+      return c;
     }
     renderRealistic(ctx, layers, settings, map, w, h2) {
       const side = settings.side;
@@ -2168,11 +2291,6 @@
     ctx.drawImage(scratch2, 0, 0);
     ctx.globalAlpha = 1;
   }
-  function debugColour(role) {
-    if (role.type === "profile") return DEBUG.profile;
-    if (role.type === "drill") return DEBUG.drill;
-    return DEBUG[`${role.type}_${role.side}`] || DEBUG.other;
-  }
   function debugOrder(layers, side) {
     const rank = (l) => {
       const r = l.role;
@@ -2203,6 +2321,13 @@
     }
     if (!(b[0] <= b[2])) return null;
     return [[b[0], b[1], b[2], b[1], b[2], b[3], b[0], b[3]]];
+  }
+  function analysisLayers(layers, settings) {
+    if (settings.solo && settings.activeLayerId) {
+      const l = layers.find((x) => x.id === settings.activeLayerId && x.image);
+      if (l) return [l];
+    }
+    return layers.filter((l) => l.visible && l.image);
   }
 
   // src/model/hit-test.js
@@ -2365,7 +2490,15 @@
       this.cb = cb;
       this.renderer = new BoardRenderer();
       this.layers = [];
-      this.settings = { mode: "realistic", side: "top", stackup: {}, showPaste: false };
+      this.settings = {
+        mode: "realistic",
+        side: "top",
+        stackup: {},
+        showPaste: false,
+        background: "dark",
+        solo: false,
+        activeLayerId: null
+      };
       this.view = { cx: 0, cy: 0, scale: 10 };
       this.selected = null;
       this.hover = null;
@@ -2502,7 +2635,7 @@
       this.octx.clearRect(0, 0, this.overlay.width, this.overlay.height);
       const ctx = this.ctx;
       ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.fillStyle = rgba(MISC.background, 1);
+      ctx.fillStyle = rgba({ rgb: backgroundColour(this.settings.mode, this.settings.background) }, 1);
       ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
       ctx.setTransform(k, 0, 0, k, now.ox - k * old.ox, now.oy - k * old.oy);
       ctx.drawImage(this.snapshot.canvas, 0, 0);
@@ -2555,7 +2688,8 @@
         if (r.side === "inner") return 3;
         return 4;
       };
-      return this.layers.filter((l) => l.visible && l.image).sort((a, b) => rank(a) - rank(b));
+      const shown = this.settings.mode === "realistic" ? this.layers.filter((l) => l.visible && l.image) : analysisLayers(this.layers, this.settings);
+      return shown.sort((a, b) => rank(a) - rank(b));
     }
     select(hit) {
       this.selected = hit;
@@ -5216,7 +5350,17 @@
   }
 
   // src/project/project.js
-  var DEFAULT_VIEW = { side: "top", mode: "realistic", showPaste: false, cx: null, cy: null, scale: null };
+  var DEFAULT_VIEW = {
+    side: "top",
+    mode: "realistic",
+    background: "dark",
+    solo: false,
+    activeLayer: null,
+    showPaste: false,
+    cx: null,
+    cy: null,
+    scale: null
+  };
   function createProject(name = "untitled", now = /* @__PURE__ */ new Date()) {
     const p = createEmptyProject({ name, now: now instanceof Date ? now : new Date(now) });
     ensureSettings(p);
@@ -5230,7 +5374,7 @@
     return project;
   }
   function defaultLayerSettings() {
-    return { visible: true, opacity: 1, role: null };
+    return { visible: true, opacity: 1, role: null, colour: null, invert: false };
   }
   function effectiveStackup(project) {
     return project.stackup ?? {
@@ -5318,7 +5462,9 @@
         commands: file.commands,
         diagnostics: file.diagnostics,
         visible: settings.visible !== false,
-        opacity: settings.opacity ?? 1
+        opacity: settings.opacity ?? 1,
+        colour: settings.colour ?? null,
+        invert: !!settings.invert
       };
       if (role.type === "profile") layer.outline = extractOutline(file.image);
       layers.push(layer);
@@ -5456,22 +5602,41 @@
         top: h("button", { onclick: () => this.#setView({ side: "top" }), "data-testid": "view-top" }, "Top"),
         bottom: h("button", { onclick: () => this.#setView({ side: "bottom" }), "data-testid": "view-bottom" }, "Bottom")
       };
-      this.btnMode = {
-        realistic: h(
-          "button",
-          {
-            onclick: () => this.#setView({ mode: "realistic" }),
-            "data-testid": "mode-realistic",
-            title: "Board in its real colours"
-          },
-          "Realistic"
-        ),
-        debug: h(
-          "button",
-          { onclick: () => this.#setView({ mode: "debug" }), "data-testid": "mode-debug", title: "One colour per layer" },
-          "Debug colours"
-        )
+      const modeTitles = {
+        realistic: "The board in its real materials",
+        debug: "One colour per layer function",
+        classic: "Classic Gerber viewer: a palette colour per file on black",
+        xor: "XOR the layer colours: overlaps show as a mixed colour; give two layers the same colour and identical parts cancel to black",
+        outline: "Wireframe: outlines of every object (clear polarity dashed)"
       };
+      this.btnMode = Object.fromEntries(
+        VIEW_MODES.map((m) => [
+          m,
+          h(
+            "button",
+            { onclick: () => this.#setView({ mode: m }), "data-testid": `mode-${m}`, title: modeTitles[m] },
+            VIEW_MODE_LABELS[m]
+          )
+        ])
+      );
+      this.btnBg = h(
+        "button",
+        {
+          onclick: () => this.#setView({ background: this.view.background === "light" ? "dark" : "light" }),
+          "data-testid": "background",
+          title: "Light or dark background (B)"
+        },
+        "Light bg"
+      );
+      this.btnSolo = h(
+        "button",
+        {
+          onclick: () => this.#toggleSolo(),
+          "data-testid": "solo",
+          title: "Show only the selected layer; ↑/↓ flip through the layers (S)"
+        },
+        "Solo"
+      );
       this.btnPaste = h(
         "button",
         {
@@ -5523,7 +5688,9 @@
         h("span", { class: "sep" }),
         h("button", { onclick: () => this.viewer.fit(), "data-testid": "fit", title: "Fit board (F)" }, "Fit"),
         h("span", { class: "seg" }, [this.btnSide.top, this.btnSide.bottom]),
-        h("span", { class: "seg" }, [this.btnMode.realistic, this.btnMode.debug]),
+        h("span", { class: "seg" }, Object.values(this.btnMode)),
+        this.btnSolo,
+        this.btnBg,
         this.btnPaste,
         h("span", { class: "spacer" }),
         this.nameInput
@@ -5579,8 +5746,23 @@
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
           e.preventDefault();
           this.save();
-        } else if (e.target === document.body && e.key.toLowerCase() === "f") this.viewer.fit();
-        else if (e.key === "Escape") this.viewer.select(null);
+          return;
+        }
+        if (e.key === "Escape") return this.viewer.select(null);
+        if (e.ctrlKey || e.metaKey || e.altKey || isTyping(e.target)) return;
+        const k = e.key.toLowerCase();
+        if (k === "f") this.viewer.fit();
+        else if (k === "s") this.#toggleSolo();
+        else if (k === "b") this.#setView({ background: this.view.background === "light" ? "dark" : "light" });
+        else if (k === "i" && this.activeLayerId) {
+          this.#setLayer(this.activeLayerId, { invert: !this.layerById(this.activeLayerId)?.invert });
+          this.#refreshLayers();
+        } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+          e.preventDefault();
+          const i = this.layers.findIndex((l) => l.id === this.activeLayerId);
+          const n = this.layers.length;
+          if (n) this.#setActive(this.layers[(i + (e.key === "ArrowDown" ? 1 : n - 1) + n) % n].id);
+        }
       });
       window.addEventListener("beforeunload", (e) => {
         if (this.dirty) e.preventDefault();
@@ -5681,7 +5863,13 @@
       this.job = job;
       this.textCache.clear();
       this.parseMs = performance.now() - t0;
-      if (!this.layers.find((l) => l.id === this.activeLayerId)) this.activeLayerId = this.layers[0]?.id ?? null;
+      if (!this.layers.find((l) => l.id === this.activeLayerId)) {
+        const saved = this.view.activeLayer;
+        this.activeLayerId = this.layers.find((l) => l.id === saved) ? saved : this.layers[0]?.id ?? null;
+      }
+      this.viewer.settings.activeLayerId = this.activeLayerId;
+      this.viewer.settings.background = this.view.background;
+      this.viewer.settings.solo = !!this.view.solo;
       this.viewer.settings.side = this.view.side;
       this.viewer.settings.mode = this.view.mode;
       this.viewer.settings.showPaste = !!this.view.showPaste;
@@ -5701,7 +5889,20 @@
       Object.assign(this.view, patch);
       this.viewer.setSettings(patch);
       this.#refreshToolbar();
+      if ("mode" in patch) this.#refreshLayers();
       this.#touch();
+    }
+    #setActive(id) {
+      this.activeLayerId = id;
+      this.view.activeLayer = id;
+      this.viewer.settings.activeLayerId = id;
+      if (this.view.solo) this.viewer.layersChanged();
+      this.#refreshLayers();
+      this.#refreshDiagnostics();
+    }
+    #toggleSolo() {
+      const solo = !this.view.solo;
+      this.#setView(solo && this.view.mode === "realistic" ? { solo, mode: "debug" } : { solo });
     }
     #onView(v) {
       const changed = this.view.cx !== v.cx || this.view.cy !== v.cy || this.view.scale !== v.scale;
@@ -5717,6 +5918,8 @@
       const l = this.layerById(id);
       if (l) {
         if ("visible" in patch) l.visible = patch.visible;
+        if ("colour" in patch) l.colour = patch.colour;
+        if ("invert" in patch) l.invert = patch.invert;
         if ("opacity" in patch) l.opacity = patch.opacity;
       }
       if ("role" in patch) return this.#rebuild({ keepView: true });
@@ -5824,15 +6027,17 @@
       const v = this.view;
       for (const [k, b] of Object.entries(this.btnSide)) b.classList.toggle("on", v.side === k);
       for (const [k, b] of Object.entries(this.btnMode)) b.classList.toggle("on", v.mode === k);
+      this.btnBg.classList.toggle("on", v.background === "light");
+      this.btnSolo.classList.toggle("on", !!v.solo);
       this.btnPaste.classList.toggle("on", !!v.showPaste);
     }
     #refreshLayers() {
       clear(this.layerList);
-      for (const l of this.layers) {
+      for (const [index, l] of this.layers.entries()) {
         const errs = l.diagnostics.list.filter((d) => d.severity === "error").length;
         const warns = l.diagnostics.list.filter((d) => d.severity === "warning").length;
         const roleSel = h("select", {
-          title: `Layer function (detected from ${l.autoRole.source})`,
+          title: `Layer function (found from: ${l.role.source === "user" ? "your choice" : l.autoRole.source})`,
           "data-testid": "role",
           onclick: (e) => e.stopPropagation(),
           onchange: (e) => {
@@ -5860,11 +6065,7 @@
             "data-testid": "layer",
             "data-name": l.name,
             "data-role": `${l.role.type}:${l.role.side}`,
-            onclick: () => {
-              this.activeLayerId = l.id;
-              this.#refreshLayers();
-              this.#refreshDiagnostics();
-            }
+            onclick: () => this.#setActive(l.id)
           },
           [
             h("input", {
@@ -5874,7 +6075,15 @@
               onclick: (e) => e.stopPropagation(),
               onchange: (e) => this.#setLayer(l.id, { visible: e.target.checked })
             }),
-            h("span", { class: "swatch", style: `background:${rgba(swatchColour(l, this.project), 1)}` }),
+            this.view.mode === "realistic" ? h("span", { class: "swatch", style: `background:${rgba(swatchColour(l, this.project), 1)}` }) : h("input", {
+              type: "color",
+              class: "swatch",
+              "data-testid": "layer-colour",
+              title: "Layer colour in this view",
+              value: toHex(layerColour(l, this.view.mode, index)),
+              onclick: (e) => e.stopPropagation(),
+              oninput: (e) => this.#setLayer(l.id, { colour: e.target.value })
+            }),
             h("span", { class: "name", title: l.name }, l.name),
             h("span", { class: "badges" }, [
               errs ? h("span", { class: "badge error", title: "errors" }, String(errs)) : null,
@@ -5892,7 +6101,23 @@
                 onclick: (e) => e.stopPropagation(),
                 oninput: (e) => this.#setLayer(l.id, { opacity: Number(e.target.value) })
               }),
-              h("span", { class: "source", title: "How the layer function was found" }, l.role.source),
+              h(
+                "label",
+                {
+                  class: "invert",
+                  title: "Invert: show what is not drawn, e.g. the solder mask material instead of its openings (I)",
+                  onclick: (e) => e.stopPropagation()
+                },
+                [
+                  h("input", {
+                    type: "checkbox",
+                    checked: !!l.invert,
+                    "data-testid": "invert",
+                    onchange: (e) => this.#setLayer(l.id, { invert: e.target.checked })
+                  }),
+                  "inv"
+                ]
+              ),
               h(
                 "button",
                 {
@@ -5961,7 +6186,11 @@
     }
     #onSelect(hit) {
       this.selection = hit;
-      if (hit) this.activeLayerId = hit.layerId;
+      if (hit && !this.view.solo) {
+        this.activeLayerId = hit.layerId;
+        this.view.activeLayer = hit.layerId;
+        this.viewer.settings.activeLayerId = hit.layerId;
+      }
       this.#refreshInspector();
       this.#refreshLayers();
       this.#refreshDiagnostics();
@@ -6083,11 +6312,6 @@
     }
   };
   function swatchColour(l, project) {
-    if (project.settings.view.mode === "debug") {
-      if (l.role.type === "profile") return DEBUG.profile;
-      if (l.role.type === "drill") return DEBUG.drill;
-      return DEBUG[`${l.role.type}_${l.role.side}`] || DEBUG.other;
-    }
     const st = effectiveStackup(project);
     if (l.role.type === "soldermask") return lookupMaterial("mask", st.mask?.[l.role.side] ?? st.mask).value;
     if (l.role.type === "legend") return lookupMaterial("silk", st.silk?.[l.role.side] ?? st.silk).value;
@@ -6121,6 +6345,11 @@
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1e4);
+  }
+  function isTyping(el) {
+    if (!el || el === document.body) return false;
+    if (el.isContentEditable || el.tagName === "SELECT" || el.tagName === "TEXTAREA") return true;
+    return el.tagName === "INPUT" && !["checkbox", "button", "color"].includes(el.type);
   }
 
   // src/ui/main.js

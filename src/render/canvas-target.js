@@ -113,3 +113,33 @@ function scratch(w, h) {
 function release(c) {
   if (pool.length < 4) pool.push(c);
 }
+
+/**
+ * Wireframe target: strokes every object's outline (1 device pixel) instead of filling it.
+ * Clear-polarity objects are dashed. No stroke() batches and no isolated groups, so line
+ * draws arrive as outlines too and every macro part is visible.
+ */
+export class OutlineTarget extends CanvasTarget {
+  // shadow the fast round-stroke path: draw-image then emits outlines for line draws
+  get stroke() {
+    return undefined;
+  }
+
+  fill(dark) {
+    const ctx = this.ctx;
+    const px = 1 / this.map.s;
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1.25 * px;
+    ctx.lineJoin = 'round';
+    ctx.setLineDash(dark ? [] : [4 * px, 3 * px]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  group() {
+    return this;
+  }
+
+  endGroup() {}
+}

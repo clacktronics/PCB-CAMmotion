@@ -1,6 +1,7 @@
 // 2D board viewer: canvas, zoom/pan, top/bottom view, selection and hover. Browser only.
 
-import { BoardRenderer } from './board-render.js';
+import { BoardRenderer, analysisLayers } from './board-render.js';
+import { backgroundColour } from '../model/view-modes.js';
 import { emitObject, transformedParts } from './draw-image.js';
 import { emitPath } from '../model/path.js';
 import { hitTest } from '../model/hit-test.js';
@@ -23,7 +24,15 @@ export class Viewer {
     this.cb = cb;
     this.renderer = new BoardRenderer();
     this.layers = [];
-    this.settings = { mode: 'realistic', side: 'top', stackup: {}, showPaste: false };
+    this.settings = {
+      mode: 'realistic',
+      side: 'top',
+      stackup: {},
+      showPaste: false,
+      background: 'dark',
+      solo: false,
+      activeLayerId: null,
+    };
     this.view = { cx: 0, cy: 0, scale: 10 }; // centre (mm) and CSS px per mm
     this.selected = null;
     this.hover = null;
@@ -176,7 +185,7 @@ export class Viewer {
     this.octx.clearRect(0, 0, this.overlay.width, this.overlay.height);
     const ctx = this.ctx;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.fillStyle = rgba(MISC.background, 1);
+    ctx.fillStyle = rgba({ rgb: backgroundColour(this.settings.mode, this.settings.background) }, 1);
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
     // device point p_old maps to p_now = now.o + k (p_old - old.o)
     ctx.setTransform(k, 0, 0, k, now.ox - k * old.ox, now.oy - k * old.oy);
@@ -233,7 +242,11 @@ export class Viewer {
       if (r.side === 'inner') return 3;
       return 4;
     };
-    return this.layers.filter((l) => l.visible && l.image).sort((a, b) => rank(a) - rank(b));
+    const shown =
+      this.settings.mode === 'realistic'
+        ? this.layers.filter((l) => l.visible && l.image)
+        : analysisLayers(this.layers, this.settings);
+    return shown.sort((a, b) => rank(a) - rank(b));
   }
 
   select(hit) {
