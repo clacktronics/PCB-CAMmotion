@@ -1,0 +1,22 @@
+# Sample boards
+
+Real-world Gerber and drill sets used by the tests ("reference corpus": every file must load
+without errors, and every layer must be identified as `tracespace-layers.json` says).
+
+They come from the [tracespace](https://github.com/tracespace/tracespace) project's
+`@tracespace/fixtures` package (4.2.7). Each board keeps its own licence file:
+
+| Folder | Board | CAD | Licence |
+|--------|-------|-----|---------|
+| `8bit-mixtape/` | 8bit mixtape | Eagle | GPL-2.0 (`LICENSE`) |
+| `arduino-uno/` | Arduino Uno | Eagle (legacy names) | CC BY-SA (`LICENSE`) |
+| `bus-pirate/` | Bus Pirate v3.6a | Eagle | CC BY-SA 3.0 (`LICENSE`) |
+| `clockblock/` | clockblock | KiCad | CC BY-SA 3.0 (`LICENSE`) |
+| `core/` | Particle Core | Altium | CC BY-SA 4.0 (`LICENSE`) |
+| `freeduino/` | Freeduino | Eagle (legacy names) | CC BY-SA 2.5 (`LICENSE.md`) |
+| `mchck/` | MC HCK | KiCad (`.pho`) | see `LICENSE` |
+| `usbvil/` | USBvil (PIC18F14K50) | Altium-style names | GPL-3.0 (`LICENSE`) |
+
+`tracespace-layers.json` is tracespace's expected layer type/side for each file.
+
+The CAMmotion test board (`samples/test-board/`, milestone 0) is still to be designed.

@@ -1,0 +1,8 @@
+G04 Rectangle aperture draw: swept hull (hexagon area = 10 x 1 + 1 x 1)*
+%FSLAX46Y46*%
+%MOMM*%
+%ADD10R,1X1*%
+D10*
+X0Y0D02*
+X10000000Y0D01*
+M02*

@@ -1,0 +1,16 @@
+G04 Dark square, clear square inside, dark flash inside that*
+%FSLAX46Y46*%
+%MOMM*%
+%ADD10R,10X10*%
+%ADD11R,6X6*%
+%ADD12C,2*%
+%LPD*%
+D10*
+X0Y0D03*
+%LPC*%
+D11*
+X0Y0D03*
+%LPD*%
+D12*
+X0Y0D03*
+M02*

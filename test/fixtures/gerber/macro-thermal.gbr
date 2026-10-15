@@ -1,0 +1,9 @@
+G04 Thermal macro: outer 4, inner 2, gap 1 (mm)*
+%FSLAX46Y46*%
+%MOMM*%
+%AMTH*
+7,0,0,4,2,1,0*%
+%ADD10TH*%
+D10*
+X0Y0D03*
+M02*

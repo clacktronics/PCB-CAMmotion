@@ -1,0 +1,22 @@
+// Screenshot baselines of the synthetic board (canvas only, so fonts do not matter).
+// Update deliberately with: npx playwright test screenshot --update-snapshots
+
+import { test, expect } from '@playwright/test';
+import { openApp, loadBoard, waitRendered } from './helpers.js';
+
+const views = [
+  ['top-realistic', []],
+  ['bottom-realistic', ['view-bottom']],
+  ['top-debug', ['mode-debug']],
+];
+
+for (const [name, clicks] of views) {
+  test(`synthetic board: ${name}`, async ({ page }) => {
+    await openApp(page);
+    await loadBoard(page);
+    for (const c of clicks) await page.locator(`[data-testid=${c}]`).click();
+    await waitRendered(page);
+    await page.mouse.move(0, 0);
+    await expect(page.locator('[data-testid=board]')).toHaveScreenshot(`${name}.png`, { maxDiffPixelRatio: 0.002 });
+  });
+}

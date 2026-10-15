@@ -1,0 +1,8 @@
+G04 FS 2.5 inch, leading zeros omitted, signed coordinates*
+%FSLAX25Y25*%
+%MOIN*%
+%ADD10C,0.01*%
+D10*
+X-100000Y+50000D02*
+X0Y0D01*
+M02*

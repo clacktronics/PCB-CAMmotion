@@ -1,0 +1,9 @@
+G04 Step and repeat 3 x 2 of a 1 mm square flash, step 5 x 4 mm*
+%FSLAX46Y46*%
+%MOMM*%
+%ADD10R,1X1*%
+%SRX3Y2I5J4*%
+D10*
+X0Y0D03*
+%SR*%
+M02*

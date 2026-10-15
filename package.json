@@ -1,10 +1,25 @@
 {
   "name": "pcb-cammotion",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
+    "build": "node tools/build.mjs",
     "synth": "node tools/synth/generate.mjs",
     "pretest": "node tools/synth/generate.mjs --if-stale",
-    "test": "node --test"
+    "test": "node --test --test-reporter=dot \"test/unit/**/*.test.js\"",
+    "test:e2e": "node tools/synth/generate.mjs --if-stale && playwright test",
+    "lint": "eslint . && prettier --check . && node tools/build.mjs --check",
+    "format": "prettier --write . && node tools/build.mjs",
+    "check": "npm run lint && npm test && npm run test:e2e"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.17.0",
+    "@playwright/test": "1.56.1",
+    "esbuild": "0.25.0",
+    "eslint": "9.17.0",
+    "fast-check": "3.23.2",
+    "globals": "15.14.0",
+    "prettier": "3.3.3"
   }
 }

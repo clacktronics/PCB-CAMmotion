@@ -1,0 +1,19 @@
+G04 Aperture block flashed with clear polarity toggles every object polarity*
+%FSLAX46Y46*%
+%MOMM*%
+%ADD10R,10X10*%
+%ADD11R,2X2*%
+%ABD100*%
+%LPD*%
+D11*
+X0Y0D03*
+%LPC*%
+X3000000Y0D03*
+%AB*%
+%LPD*%
+D10*
+X0Y0D03*
+%LPC*%
+D100*
+X0Y0D03*
+M02*

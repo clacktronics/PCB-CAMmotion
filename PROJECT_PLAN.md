@@ -79,6 +79,23 @@ so edits round-trip to valid files and analysis can point back to source lines.
 Every milestone is only done when its tests (see **Testing & QA → Tests per milestone**) are
 written, passing in CI, and the previous milestones' tests still pass.
 
+**Status (2026-10):** milestones 1 (parsers) and 2 (viewer) are implemented with their tests.
+From milestone 0, the app shell, file drop, `.pcam` save/load (+ autosave), `node:test`,
+Playwright, ESLint/Prettier, CI and the no-network/`file://` e2e tests are in place; still open
+are the **G-code safety checker** (`src/check/`) and the **CAMmotion test board** in `samples/`.
+Decisions made on the way:
+- No framework: plain ES modules, bundled by esbuild (dev dependency) into the committed
+  `dist/app.js` classic script, because browsers block ES module imports on `file://`.
+  `npm run lint` fails if the bundle is stale.
+- Rendering: one DOM-free draw routine (`src/render/draw-image.js`) drives both the canvas
+  and a pure-JS rasteriser, so Node tests check what the viewer draws; an e2e test compares
+  the two pixel by pixel. "Reference renders" from gerbv/GerbView are not available yet, so
+  correctness is pinned by analytic areas/pixels, mm-vs-inch XOR and screenshot baselines.
+- Reference corpus: real boards and spec-feature files from tracespace (licences kept with
+  them) in `samples/` and `test/fixtures/tracespace/`.
+- Step-and-repeat closed only by M02 is accepted with a deprecation warning (older spec
+  revisions allowed it and real files rely on it).
+
 ### Project file — `.pcam` (from milestone 0, extended by every milestone)
 
 One file holds the whole project, so it can be downloaded, backed up, emailed or

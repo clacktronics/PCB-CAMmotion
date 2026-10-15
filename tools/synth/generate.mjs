@@ -791,7 +791,7 @@ bad('polygon-2-vertices.gbr', 'Polygon aperture with 2 vertices (must be 3–12)
 bad('polygon-13-vertices.gbr', 'Polygon aperture with 13 vertices (must be 3–12)', new Gerber({ fn: 'Copper,L1,Top' }).raw('%ADD10P,1X13*%', 'D10*').flash(0, 0).end(), '%ADD10P');
 bad('hole-larger-than-aperture.gbr', 'Circle aperture whose hole is larger than the aperture', new Gerber({ fn: 'Copper,L1,Top' }).raw('%ADD10C,0.5X1.0*%', 'D10*').flash(0, 0).end(), '%ADD10C');
 bad('invalid-polarity.gbr', '%LPX*% is not a valid polarity', base().raw('%LPX*%').flash(0, 0).end(), '%LPX*%');
-bad('sr-unclosed.gbr', 'Step-and-repeat block never closed', base().raw('%SRX2Y2I1J1*%').flash(0, 0).end(), 'M02*');
+bad('sr-unclosed.gbr', 'Step-and-repeat block never closed with %SR*%: older spec revisions let M02 close it (deprecated), so warn and close it', base().raw('%SRX2Y2I1J1*%').flash(0, 0).end(), 'M02*', 'warning');
 bad('ab-unclosed.gbr', 'Aperture block never closed', base().raw('%ABD100*%').flash(0, 0).end(), 'M02*');
 bad('ab-self-reference.gbr', 'Aperture block that flashes itself (infinite recursion)', base().raw('%ABD100*%').raw('D100*').flash(0, 0).raw('%AB*%').raw('D100*').flash(0, 0).end(), 'D100*');
 bad('unknown-commands.gbr', 'Unknown G-code G99, M-code M99 and extended %XX% command', base().raw('G99*', 'M99*', '%XXHELLO*%').flash(0, 0).end(), 'G99*');
@@ -973,7 +973,7 @@ dbad('tool-redefined.drl', 'T1 defined twice with different sizes', 'M48\nMETRIC
     { Type: 'Legend', Color: 'Yellow', Name: 'Bottom Silk Screen' },
   ];
   const files = ['L1,Top', 'L2,Inr', 'L3,Inr', 'L4,Bot'].map((f, i) => ({ Path: `four-layer-${i + 1}.gbr`, FileFunction: `Copper,${f}`, FilePolarity: 'Positive' }));
-  add('gbrjob/four-layer-black-yellow-enig.gbrjob', 'gbrjob', 'ok', 'stackup', '4-layer stackup, black mask, yellow silk, ENIG, inner layers (referenced files intentionally absent: stackup-only test)', job(files, { Size: { X: 50, Y: 50 }, LayerNumber: 4, BoardThickness: 1.6, Finish: 'ENIG', ImpedanceControlled: true }, stack4), { facts: { copperLayers: 4, mask: 'Black', silk: 'Yellow' } });
+  add('gbrjob/four-layer-black-yellow-enig.gbrjob', 'gbrjob', 'warning', 'stackup', '4-layer stackup, black mask, yellow silk, ENIG, inner layers (stackup-only test: the referenced Gerbers are intentionally absent, so loading it from this folder must warn about the missing files)', job(files, { Size: { X: 50, Y: 50 }, LayerNumber: 4, BoardThickness: 1.6, Finish: 'ENIG', ImpedanceControlled: true }, stack4), { facts: { copperLayers: 4, mask: 'Black', silk: 'Yellow' } });
   const stackOdd = stack2.map((l) => (l.Type === 'SolderMask' ? { ...l, Color: 'Sparkly Teal' } : l.Type === 'Dielectric' ? { ...l, Material: 'Unobtainium' } : l));
   add('gbrjob/unknown-colours-materials.gbrjob', 'gbrjob', 'warning', 'stackup', 'Unrecognised mask colour and dielectric material — must fall back to a default and warn', job(boardFileAttrs, specs2, stackOdd));
   const stackZero = stack2.map((l) => (l.Type === 'Dielectric' ? { ...l, Thickness: 0 } : l.Type === 'Copper' ? { ...l, Thickness: -0.035 } : l));

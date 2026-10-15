@@ -1,0 +1,14 @@
+G04 LM/LR/LS transform a 2 x 1 rectangle flashed at the origin*
+%FSLAX46Y46*%
+%MOMM*%
+%ADD10R,2X1*%
+D10*
+%LR90*%
+X0Y0D03*
+%LR0*%
+%LS2*%
+X10000000Y0D03*
+%LS1*%
+%LMY*%
+X20000000Y0D03*
+M02*

@@ -1,0 +1,9 @@
+G04 G74 single quadrant: unsigned I/J, centre chosen for an arc of at most 90 deg*
+%FSLAX46Y46*%
+%MOMM*%
+%ADD10C,0.1*%
+D10*
+G74*
+X10000000Y0D02*
+G03X0Y10000000I10000000J0D01*
+M02*
