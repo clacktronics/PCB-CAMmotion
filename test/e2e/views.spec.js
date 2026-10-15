@@ -189,3 +189,37 @@ test('each layer row takes its layer colour, and follows the colour picker', asy
   await row(page, 'synthetic-board-F_Cu.gbr').locator('[data-testid=layer-colour]').fill('#00ff00');
   await expect.poll(() => bar('synthetic-board-F_Cu.gbr')).toBe('rgb(0, 255, 0)');
 });
+
+test('per-layer S button solos like a mixer: press again and every layer comes back', async ({ page }) => {
+  await openApp(page);
+  await loadBoard(page);
+  await mode(page, 'debug');
+  const solo = (name) => row(page, name).locator('[data-testid=solo]');
+  const settings = () => page.evaluate(() => window.__pcam.state().project.settings);
+  const visibleBefore = (await settings()).layers;
+
+  await solo('synthetic-board-F_Cu.gbr').click();
+  await waitRendered(page);
+  expect((await settings()).view).toMatchObject({ solo: true, activeLayer: 'synthetic-board-F_Cu.gbr' });
+  await expect(solo('synthetic-board-F_Cu.gbr')).toHaveAttribute('aria-pressed', 'true');
+  await expect(row(page, 'synthetic-board-B_Cu.gbr')).toHaveClass(/hidden-layer/);
+  expect(near(await pixelAt(page, 80, 35), MISC.background.rgb, 10)).toBe(false); // top pour shown
+  expect(near(await pixelAt(page, 30, 8), MISC.background.rgb, 10)).toBe(true); // bottom pour hidden
+
+  // soloing another layer moves the solo there
+  await solo('synthetic-board-B_Cu.gbr').click();
+  await waitRendered(page);
+  expect((await settings()).view.activeLayer).toBe('synthetic-board-B_Cu.gbr');
+  await expect(solo('synthetic-board-F_Cu.gbr')).toHaveAttribute('aria-pressed', 'false');
+  expect(near(await pixelAt(page, 80, 35), MISC.background.rgb, 10)).toBe(true);
+  expect(near(await pixelAt(page, 30, 8), MISC.background.rgb, 10)).toBe(false);
+
+  // pressing it again turns every layer back on, visibility settings untouched
+  await solo('synthetic-board-B_Cu.gbr').click();
+  await waitRendered(page);
+  expect((await settings()).view.solo).toBe(false);
+  expect((await settings()).layers).toEqual(visibleBefore);
+  expect(near(await pixelAt(page, 80, 35), MISC.background.rgb, 10)).toBe(false);
+  expect(near(await pixelAt(page, 30, 8), MISC.background.rgb, 10)).toBe(false);
+  await expect(page.locator('.layer.hidden-layer')).toHaveCount(0);
+});

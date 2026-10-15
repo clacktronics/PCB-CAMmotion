@@ -103,15 +103,6 @@ export class App {
       },
       'Light bg',
     );
-    this.btnSolo = h(
-      'button',
-      {
-        onclick: () => this.#toggleSolo(),
-        'data-testid': 'solo',
-        title: 'Show only the selected layer; ↑/↓ flip through the layers (S)',
-      },
-      'Solo',
-    );
     this.btnPaste = h(
       'button',
       {
@@ -164,7 +155,6 @@ export class App {
       h('button', { onclick: () => this.viewer.fit(), 'data-testid': 'fit', title: 'Fit board (F)' }, 'Fit'),
       h('span', { class: 'seg' }, [this.btnSide.top, this.btnSide.bottom]),
       h('span', { class: 'seg' }, Object.values(this.btnMode)),
-      this.btnSolo,
       this.btnBg,
       this.btnPaste,
       h('span', { class: 'spacer' }),
@@ -380,7 +370,7 @@ export class App {
     Object.assign(this.view, patch);
     this.viewer.setSettings(patch);
     this.#refreshToolbar();
-    if ('mode' in patch) this.#refreshLayers();
+    if ('mode' in patch || 'solo' in patch) this.#refreshLayers();
     this.#touch();
   }
 
@@ -396,6 +386,17 @@ export class App {
   #toggleSolo() {
     // in the realistic view, solo shows the selected layer as a slice of the board
     this.#setView({ solo: !this.view.solo });
+  }
+
+  /**
+   * Mixer-style solo button on a layer: solo this layer; pressed again, everything comes back.
+   * Soloing another layer moves the solo there. Visibility checkboxes are never changed, so
+   * un-soloing restores exactly the layers that were on.
+   */
+  #soloLayer(id) {
+    if (this.view.solo && this.activeLayerId === id) return this.#setView({ solo: false });
+    this.#setActive(id);
+    if (!this.view.solo) this.#setView({ solo: true });
   }
 
   #onView(v) {
@@ -534,7 +535,6 @@ export class App {
     for (const [k, b] of Object.entries(this.btnSide)) b.classList.toggle('on', v.side === k);
     for (const [k, b] of Object.entries(this.btnMode)) b.classList.toggle('on', v.mode === k);
     this.btnBg.classList.toggle('on', v.background === 'light');
-    this.btnSolo.classList.toggle('on', !!v.solo);
     this.btnPaste.classList.toggle('on', !!v.showPaste);
   }
 
@@ -567,13 +567,15 @@ export class App {
           );
         }
       }
+      const soloed = !!this.view.solo && l.id === this.activeLayerId;
+      const muted = !l.visible || (this.view.solo && !soloed);
       // the whole row takes the layer's colour in the current view
       const rgb =
         this.view.mode === 'realistic' ? swatchColour(l, this.project).rgb : layerColour(l, this.view.mode, index);
       const row = h(
         'li',
         {
-          class: `layer source-row${l.id === this.activeLayerId ? ' active' : ''}${l.visible ? '' : ' hidden-layer'}`,
+          class: `layer source-row${l.id === this.activeLayerId ? ' active' : ''}${muted ? ' hidden-layer' : ''}${soloed ? ' soloed' : ''}`,
           style: `--layer: ${rgb.join(', ')}`,
           'data-testid': 'layer',
           'data-name': l.name,
@@ -605,6 +607,20 @@ export class App {
               }),
           h('span', { class: 'name', title: l.name }, l.name),
           h('span', { class: 'badges' }, [
+            h(
+              'button',
+              {
+                class: `solo-btn${soloed ? ' on' : ''}`,
+                'data-testid': 'solo',
+                title: soloed ? 'Solo: press again to show all layers (S)' : 'Solo: show only this layer (S)',
+                'aria-pressed': soloed ? 'true' : 'false',
+                onclick: (e) => {
+                  e.stopPropagation();
+                  this.#soloLayer(l.id);
+                },
+              },
+              'S',
+            ),
             errs ? h('span', { class: 'badge error', title: 'errors' }, String(errs)) : null,
             warns ? h('span', { class: 'badge warning', title: 'warnings' }, String(warns)) : null,
           ]),
