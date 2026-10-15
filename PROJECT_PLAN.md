@@ -5,7 +5,8 @@ them, and output either CNC toolpaths (machine-specific) or UV-exposure negative
 
 ## Goals
 
-1. **Import & view** Gerber (RS-274X / X2) and Excellon drill files.
+1. **Import & view** Gerber (RS-274X / X2), Excellon drill files and the KiCad Gerber job
+   file (`.gbrjob`). Render the board in its **real colours** in 2D and as a 3D stackup.
 2. **Analyse** the internals of a Gerber: commands, apertures, macros, polarity, regions,
    and the shapes they produce.
 3. **Edit** Gerber and drill data with real editing tools, then export valid files again.
@@ -28,9 +29,10 @@ them, and output either CNC toolpaths (machine-specific) or UV-exposure negative
 
 ```
 src/
-  parse/      Gerber + Excellon parsers  -> command list (AST) with source line refs
-  model/      Geometry model: primitives, apertures, layers, board
-  render/     Canvas/WebGL viewer, layer stack, zoom/pan, selection
+  parse/      Gerber + Excellon + .gbrjob parsers -> command list (AST) with source line refs
+  model/      Geometry model: primitives, apertures, layers, board, stackup
+  render/     WebGL 2D viewer, layer stack, zoom/pan, selection, realistic materials
+  render3d/   3D stackup, exploded view, cross-section, as-milled preview (vendored three.js)
   analyze/    Aperture/shape stats, command inspector, step-through playback
   edit/       Editing tools + undo/redo; serialise back to Gerber/Excellon
   cam/        Offsetting (isolation), drill grouping, outline, tool library
@@ -50,16 +52,52 @@ so edits round-trip to valid files and analysis can point back to source lines.
 | # | Milestone | Done when |
 |---|-----------|-----------|
 | 0 | Skeleton | Static app loads, file drop works, tests run |
-| 1 | Parsers | Gerber + Excellon parse into the command model; sample files pass |
-| 2 | Viewer | Layers render correctly (polarity, regions, macros), zoom/pan/select |
+| 1 | Parsers | Gerber + Excellon + `.gbrjob` parse into the command model; layers auto-identified; sample files pass |
+| 2 | Viewer | Layers render correctly (polarity, regions, macros), zoom/pan/select, realistic board colours (see below) |
 | 3 | Analyser | Aperture table, shape gallery, command inspector, step-through playback |
 | 4 | Editor | Select/move/delete/add pads, traces, regions, drills; undo/redo; export round-trips |
 | 5 | Film output | Scaled, mirrored, inverted negatives print at exact size |
 | 6 | CAM core | Isolation paths (multi-pass), drilling, outline with tabs; tool library |
 | 7 | DRC | Milling-aware checks report issues on the board, linked to source lines (see below) |
-| 8 | Generic post | G-code preview + simulation, export |
-| 9 | Machine posts | LPKF E44 and Makera Carvera output tested on real machines |
-| 10 | Polish | Project save/load (local file), presets, docs |
+| 8 | 3D view | Stackup in 3D with real colours, exploded view, cross-section, as-milled preview (see below) |
+| 9 | Generic post | G-code preview + simulation, export |
+| 10 | Machine posts | LPKF E44 and Makera Carvera output tested on real machines |
+| 11 | Polish | Project save/load (local file), presets, docs |
+
+### Stackup & real colours (milestones 1, 2, 8)
+
+The board is drawn in the colours it will actually be made in, not abstract per-layer
+debug colours.
+
+- **Source of truth: KiCad `.gbrjob`.** Read `GeneralSpecs` (board size, thickness, finish)
+  and `MaterialStackup` (each layer's type, thickness, material and colour), plus `FilesAttributes`
+  to map each Gerber to its layer. Fall back to Gerber X2 `.FileFunction` attributes, then to
+  filename guessing, then to user-chosen stackup presets.
+- **Real material colours** (a vendored, editable table):
+  - Solder mask: green, red, blue, black, white, yellow, purple, matte/glossy variants —
+    semi-transparent, so copper under it shows as a darker/lighter tone.
+  - Silkscreen: white, black, yellow.
+  - Exposed copper by finish: HASL (silver), ENIG (gold), OSP / bare copper (copper, can
+    look oxidised), immersion silver/tin.
+  - Substrate: FR4 (translucent tan/green), aluminium, polyimide, etc., visible through
+    gaps, slots and board edges.
+  - Plated holes show a plated barrel and ring; non-plated holes show bare substrate.
+- **2D (milestone 2):** composite layers in physical order with these materials, light
+  sheen on metal, top/bottom view with correct mirroring. Per-layer opacity and a
+  "debug colours" toggle for analysis work.
+- **3D (milestone 8):** each layer extruded at its stackup thickness; drills as plated
+  barrels; orbit/zoom; exploded-view slider; draggable cross-section plane; X-ray per layer.
+- **As-milled preview (milestone 8):** the board as it will come off the machine — bare
+  copper on FR4, V-bit grooves at true width/depth, drilled holes, outline cut —
+  toggled against the as-designed board. DRC findings drawn in place; optional probed
+  height map overlay. UV/film preview overlays the negative on the board.
+
+### Viewer extras (milestones 2–3)
+
+- Hover a feature → aperture, D-code, polarity, source line; click → jump to inspector.
+- Animated photoplotter playback of the command stream.
+- Connected-copper highlight (geometry-based, no netlist needed).
+- Measure tool with snapping to pad centres / edges.
 
 ### DRC (milestone 7)
 
@@ -81,8 +119,9 @@ Results appear as markers in the viewer and as a list that links to the editor a
   Need sample files and the tool/head-change conventions.
 - Makera: confirm model (Carvera / Carvera Air), ATC tool numbering, probing/auto-level commands.
 - Geometry library for polygon offset/boolean (e.g. Clipper2 JS) vs writing our own.
+- Exact KiCad `.gbrjob` colour names → RGB/opacity values; collect real board photos to tune them.
 - Framework or vanilla JS? Default: vanilla ES modules + a small bundler only if needed.
 
 ## Out of scope (for now)
 
-- PCB design/routing, schematic, netlist-based (electrical) DRC, cloud features.
+- PCB design/routing, schematic, 3D component models, netlist-based (electrical) DRC, cloud features.

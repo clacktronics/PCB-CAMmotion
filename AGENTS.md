@@ -23,12 +23,15 @@ machine-specific toolpaths (LPKF E44, Makera Carvera, generic G-code), manufactu
 ## Code layout
 
 ```
-src/parse  src/model  src/render  src/analyze  src/edit
+src/parse  src/model  src/render  src/render3d  src/analyze  src/edit
 src/cam    src/drc    src/post   src/export  src/ui
 test/      samples/
 ```
 
 - Parsers produce a command list that keeps source line numbers.
+- Stackup and layer roles come from the KiCad `.gbrjob` first, then Gerber X2 attributes,
+  then filename guesses. Material colours live in one data table — never hard-code colours
+  in render code.
 - `edit/` operates on the command model, not on rendered pixels.
 - `drc/` checks use the same tool library and toolpaths as `cam/` — don't duplicate
   offsetting logic. Every finding should carry a location and source line ref.
