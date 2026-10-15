@@ -1,6 +1,7 @@
 // Drill image: Excellon commands -> the same object model as Gerber images, so drills render,
 // hit-test and analyse with the same code. Tools become circular apertures; hits are flashes,
-// G85 slots and routed segments are draws/arcs. All in mm.
+// G85 slots and routed segments are draws/arcs. All in mm. image.commandEnds as for Gerber
+// (src/model/gerber-image.js): objects in the image after each command.
 
 import { standardShape } from './aperture.js';
 import { computeBounds } from './gerber-image.js';
@@ -48,7 +49,9 @@ export function interpretExcellon(parsed) {
   // plunges explicitly, treat route moves after G00 as cutting, and say so.
   const usesPlunge = parsed.commands.some((c) => c.type === 'PLUNGE');
   let routeMode = false;
-  for (const c of parsed.commands) {
+  const ends = (image.commandEnds = new Int32Array(parsed.commands.length));
+  for (let ci = 0; ci < parsed.commands.length; ci++) {
+    const c = parsed.commands[ci];
     switch (c.type) {
       case 'TOOL_DEF': {
         const ap = {
@@ -56,6 +59,7 @@ export function interpretExcellon(parsed) {
           template: 'C',
           kind: 'C',
           params: [c.diaMm],
+          mm: [c.diaMm],
           dia: c.diaMm,
           line: c.line,
           attributes: {},
@@ -159,6 +163,7 @@ export function interpretExcellon(parsed) {
       default:
         break;
     }
+    ends[ci] = image.objects.length;
   }
   image.stats.tools = tools.size;
   computeBounds(image);

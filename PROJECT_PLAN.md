@@ -79,8 +79,9 @@ so edits round-trip to valid files and analysis can point back to source lines.
 Every milestone is only done when its tests (see **Testing & QA → Tests per milestone**) are
 written, passing in CI, and the previous milestones' tests still pass.
 
-**Status (2026-10):** milestones 0 (skeleton + harness), 1 (parsers) and 2 (viewer) are
-implemented with their tests; the machine-run part of the test board QA is still to do.
+**Status (2026-10):** milestones 0 (skeleton + harness), 1 (parsers), 2 (viewer) and
+3 (analyser) are implemented with their tests; the machine-run part of the test board QA is
+still to do.
 A first part of milestone 8 was brought forward: the 3D view (stackup in real colours from
 the `.gbrjob` thicknesses, plated barrels, orbit/pan/zoom, exploded-view slider, saved in the
 `.pcam`). Cross-section, X-ray and the as-milled preview are still to come.
@@ -99,6 +100,14 @@ Decisions made on the way:
   them) in `samples/` and `test/fixtures/tracespace/`.
 - Step-and-repeat closed only by M02 is accepted with a deprecation warning (older spec
   revisions allowed it and real files rely on it).
+- Analyser (milestone 3): the interpreters record, per command, how many image objects exist
+  after it (`image.commandEnds`), which links commands and objects both ways without a field
+  per object; step and repeat copies belong to the closing `%SR*%`, region fills to `G37`,
+  aperture block contents to the `D03` that flashes the block. Playback draws a layer's first
+  N objects and extends the cached mask incrementally. Aperture areas are exact for standard
+  apertures, rasterised for macros and blocks. The dock's state lives in
+  `settings.analyze` of the schema-1 `.pcam` (no schema change). Connected-copper highlight
+  and the measure tool (viewer extras) are not built yet.
 
 ### Project file — `.pcam` (from milestone 0, extended by every milestone)
 

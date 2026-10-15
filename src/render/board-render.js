@@ -37,20 +37,42 @@ export class BoardRenderer {
     else this.masks.delete(id);
   }
 
-  /** Mask canvas (white = covered) for one layer at this view; cached until the view changes. */
+  /**
+   * Mask canvas (white = covered) for one layer at this view; cached until the view changes.
+   * A layer with `limit` (step-through playback) is drawn up to that many objects; when the
+   * limit grows, only the new objects are drawn on top of the cached mask.
+   */
   mask(layer, map, w, h, opts = {}) {
     const key = `${map.s},${map.ox},${map.oy},${map.mirror},${w},${h},${opts.inflateMm || 0}`;
     const id = layer.id + (opts.inflateMm ? ':inflate' : '') + (opts.outline ? ':outline' : '');
+    const limit = Number.isInteger(layer.limit) ? layer.limit : null;
     const hit = this.masks.get(id);
-    if (hit && hit.key === key) return hit.canvas;
+    const same = hit && hit.key === key && hit.image === layer.image;
+    if (same && hit.limit === limit) return hit.canvas;
+    const draw = (canvas, from) => {
+      const ctx = canvas.getContext('2d');
+      const t = opts.outline ? new OutlineTarget(ctx, map) : new CanvasTarget(ctx, map);
+      drawImage(layer.image, t, {
+        view: BoardRenderer.viewRect(map, w, h),
+        inflateMm: opts.inflateMm || 0,
+        from,
+        limit: limit ?? undefined,
+      });
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.globalCompositeOperation = 'source-over';
+    };
+    if (same && limit !== null && hit.limit !== null && limit > hit.limit) {
+      draw(hit.canvas, hit.limit);
+      hit.limit = limit;
+      return hit.canvas;
+    }
     const canvas = hit?.canvas && hit.canvas.width === w && hit.canvas.height === h ? hit.canvas : makeCanvas(w, h);
     const ctx = canvas.getContext('2d');
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalCompositeOperation = 'source-over';
     ctx.clearRect(0, 0, w, h);
-    const t = opts.outline ? new OutlineTarget(ctx, map) : new CanvasTarget(ctx, map);
-    drawImage(layer.image, t, { view: BoardRenderer.viewRect(map, w, h), inflateMm: opts.inflateMm || 0 });
-    this.masks.set(id, { key, canvas });
+    draw(canvas, 0);
+    this.masks.set(id, { key, canvas, limit, image: layer.image });
     return canvas;
   }
 

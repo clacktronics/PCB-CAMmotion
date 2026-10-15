@@ -89,6 +89,12 @@ test('viewer settings and layer overrides survive save → load (in settings/pro
     explode: 0.35,
     camera3d: { position: [10, -60, 80], target: [40, 30, 0] },
   });
+  p.settings.analyze = {
+    open: false,
+    tab: 'commands',
+    highlight: { layer: first, code: 10 },
+    playback: { layer: first, step: 7, by: 'object', speed: 100 },
+  };
   p.settings.layers[first].colour = '#123456';
   p.settings.layers[first].invert = true;
   p.stackup = { ...p.stackup, mask: { top: 'Red', bottom: 'Blue' }, source: 'user' };
@@ -118,6 +124,43 @@ test('3D view settings: defaults for older files, explode kept within 0..1', () 
     p.settings.view.explode = given;
     assert.equal(ensureSettings(p).settings.view.explode, want, String(given));
   }
+});
+
+test('analyser settings: defaults for older files, bad values replaced', () => {
+  const p = ensureSettings(loadProject(bytes(join(FIXTURES, 'pcam', 'v1-with-source.pcam'))));
+  assert.deepEqual(p.settings.analyze, {
+    open: true,
+    tab: 'apertures',
+    highlight: null,
+    playback: { layer: null, step: null, by: 'command', speed: 20 },
+  });
+  p.settings.analyze = {
+    open: 'yes',
+    tab: 'nope',
+    highlight: { layer: 3, code: 'x' },
+    playback: { layer: 'a.gbr', step: -2, by: 'pixel', speed: 7 },
+    future: 1,
+  };
+  const a = ensureSettings(p).settings.analyze;
+  assert.deepEqual(a, {
+    open: true,
+    tab: 'apertures',
+    highlight: null,
+    playback: { layer: null, step: null, by: 'command', speed: 20 },
+    future: 1, // unknown fields are kept
+  });
+  p.settings.analyze.highlight = { layer: 'a.gbr', code: null }; // regions
+  assert.deepEqual(ensureSettings(p).settings.analyze.highlight, { layer: 'a.gbr', code: null });
+});
+
+test('removing a source clears its analyser highlight and playback', () => {
+  const { p } = load(join(SYNTH, 'board'));
+  const name = p.sources[0].name;
+  p.settings.analyze.highlight = { layer: name, code: 10 };
+  p.settings.analyze.playback = { layer: name, step: 3, by: 'command', speed: 20 };
+  removeSource(p, name);
+  assert.equal(p.settings.analyze.highlight, null);
+  assert.deepEqual([p.settings.analyze.playback.layer, p.settings.analyze.playback.step], [null, null]);
 });
 
 test('schema-1 projects from milestone 0 (no viewer settings) load into the viewer', () => {

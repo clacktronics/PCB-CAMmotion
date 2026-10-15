@@ -13,6 +13,13 @@
 //                    mode: realistic | debug | classic | xor | outline (model/view-modes.js)
 //                    view3d: show the 3D view; explode: 0..1 how far the 3D layers are spread;
 //                    camera3d: null | { position: [x, y, z], target: [x, y, z] } in mm
+//   settings.analyze: { open, tab, highlight, playback }   the analyser dock (milestone 3)
+//                    tab: apertures | shapes | commands; highlight: null | { layer, code }
+//                    (code = aperture/tool number, or null for regions) marks every use;
+//                    playback: { layer, step, by, speed } step-through of a layer's commands:
+//                    step = commands run (null = playback off, whole image shown), by =
+//                    command | object (object steps skip commands that draw nothing),
+//                    speed = commands per second while playing
 // `stackup` is null until set; it is filled from a .gbrjob (source: 'gbrjob') unless the user
 // edited it (source: 'user'). Everything derived (parsed images, layers) is rebuilt on load.
 // Pure data + functions (no DOM).
@@ -41,6 +48,16 @@ export const DEFAULT_VIEW = {
   camera3d: null,
 };
 
+export const ANALYZE_TABS = ['apertures', 'shapes', 'commands'];
+export const PLAYBACK_SPEEDS = [1, 5, 20, 100, 1000, 10000];
+
+export const DEFAULT_ANALYZE = {
+  open: true,
+  tab: 'apertures',
+  highlight: null,
+  playback: { layer: null, step: null, by: 'command', speed: 20 },
+};
+
 export function createProject(name = 'untitled', now = new Date()) {
   const p = createEmptyProject({ name, now: now instanceof Date ? now : new Date(now) });
   ensureSettings(p);
@@ -56,8 +73,34 @@ export function ensureSettings(project) {
   const explode = Number(s.view.explode);
   s.view.explode = Number.isFinite(explode) ? Math.min(1, Math.max(0, explode)) : 0;
   s.view.view3d = s.view.view3d === true;
+  s.analyze = normaliseAnalyze(s.analyze);
   for (const src of project.sources) s.layers[src.name] ??= defaultLayerSettings();
   return project;
+}
+
+/** Analyser dock settings with defaults filled in and nonsense values replaced. */
+export function normaliseAnalyze(a) {
+  const d = DEFAULT_ANALYZE;
+  const src = a && typeof a === 'object' ? a : {};
+  const pb = src.playback && typeof src.playback === 'object' ? src.playback : {};
+  const step = Number.isInteger(pb.step) && pb.step >= 0 ? pb.step : null;
+  const hl = src.highlight;
+  return {
+    ...src,
+    open: typeof src.open === 'boolean' ? src.open : d.open,
+    tab: ANALYZE_TABS.includes(src.tab) ? src.tab : d.tab,
+    highlight:
+      hl && typeof hl.layer === 'string' && (hl.code === null || Number.isInteger(hl.code))
+        ? { layer: hl.layer, code: hl.code }
+        : null,
+    playback: {
+      ...pb,
+      layer: typeof pb.layer === 'string' && step !== null ? pb.layer : null,
+      step: typeof pb.layer === 'string' ? step : null,
+      by: pb.by === 'object' ? 'object' : 'command',
+      speed: PLAYBACK_SPEEDS.includes(pb.speed) ? pb.speed : d.playback.speed,
+    },
+  };
 }
 
 export function defaultLayerSettings() {
@@ -130,6 +173,9 @@ export function removeSource(project, name, now = new Date()) {
   project.sources = project.sources.filter((s) => s.name !== name);
   delete project.settings?.layers?.[name];
   if (project.settings?.view?.solo) project.settings.view.solo = project.settings.view.solo.filter((n) => n !== name);
+  const a = project.settings?.analyze;
+  if (a?.highlight?.layer === name) a.highlight = null;
+  if (a?.playback?.layer === name) Object.assign(a.playback, { layer: null, step: null });
   touch(project, now);
 }
 

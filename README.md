@@ -4,7 +4,7 @@ Local-only, in-browser PCB CAM: Gerber + Excellon in; analysis, editing, machine
 toolpaths, manufacturability DRC and UV film negatives out. Nothing is uploaded — the app
 runs entirely on your computer, and the whole project is one `.pcam` file.
 
-**Status:** milestones 0–2 (harness, parsers, viewer). See [`PROJECT_PLAN.md`](PROJECT_PLAN.md).
+**Status:** milestones 0–3 (harness, parsers, viewer, analyser). See [`PROJECT_PLAN.md`](PROJECT_PLAN.md).
 
 ## Use
 
@@ -32,6 +32,20 @@ continue where you left off.
 - **Inspector:** click any pad, track, region or hole to see its aperture/tool, polarity,
   coordinates, X2 attributes and the source line it came from. Parser messages per file are
   listed with line numbers.
+- **Analyser** (the dock under the board, for the selected layer; **▾** folds it away):
+  - *Apertures*: every aperture (or drill tool) with its shape, size, area, flashes, draws, arcs,
+    drawn length, `.AperFunction` and definition line; unused ones greyed out. Click a column to
+    sort, click a row to highlight every use on the board.
+  - *Shapes*: layer statistics (objects by kind and polarity, drawn length, narrowest draw,
+    smallest/largest flash, regions) and a gallery of the aperture shapes, macros and blocks.
+  - *Commands*: the command stream with source lines, each command in file syntax and what it
+    does (coordinates in mm). Clicking a command selects what it drew; the inspector's
+    **Show command** jumps from a clicked feature to the command that drew it.
+  - *Playback*: ⏮ ◀ ▶ ▶| ⏭ and the slider step through the commands like a photoplotter,
+    by command or by drawn object, at 1–10 000 commands per second (**,** / **.** step back /
+    forward). ⏭ ends playback and shows the whole layer again.
+  - Hovering a feature shows its aperture, kind, polarity and source line in the status bar.
+    Highlight, playback position and the dock's tab are saved in the `.pcam`.
 - **Save as…** (Chrome/Edge) writes back to the chosen file on later saves. A crash-recovery
   copy is kept in the browser and offered on the next start.
 
@@ -56,7 +70,8 @@ npm run check                     # lint + unit + e2e — must pass before every
 
 Source layout: `src/parse` (Gerber, Excellon, `.gbrjob` → command lists with line numbers),
 `src/model` (images in mm, apertures/macros, layer identification, materials table, outline,
-hit testing), `src/render` (one draw routine for the canvas and a pure-JS rasteriser, board
+hit testing), `src/analyze` (aperture table, shape statistics, command ↔ object links,
+playback), `src/render` (one draw routine for the canvas and a pure-JS rasteriser, board
 compositing, viewer), `src/project` (`.pcam`), `src/check` (G-code safety), `src/ui`.
 Real-world boards for the reference corpus are in `samples/` (licences kept with each board).
 

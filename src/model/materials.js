@@ -87,6 +87,9 @@ export const MISC = {
   backgroundLight: { rgb: [236, 238, 242] },
   selection: { rgb: [0, 200, 255] },
   hover: { rgb: [255, 255, 255] },
+  highlight: { rgb: [255, 0, 200] }, // analyser: every use of an aperture
+  playhead: { rgb: [255, 140, 0] }, // step-through playback: the last command's objects
+  thumbnail: { rgb: [214, 160, 92] }, // analyser shape gallery
 };
 
 /** Debug colours per layer role (the "debug colours" toggle). */

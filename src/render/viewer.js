@@ -6,7 +6,7 @@ import { emitObject, transformedParts } from './draw-image.js';
 import { emitPath } from '../model/path.js';
 import { hitTest } from '../model/hit-test.js';
 import { MISC, rgba } from '../model/materials.js';
-import { CanvasTarget } from './canvas-target.js';
+import { CanvasTarget, makeCanvas } from './canvas-target.js';
 
 const MIN_SCALE = 0.01; // px per mm
 const MAX_SCALE = 20000;
@@ -36,6 +36,9 @@ export class Viewer {
     this.view = { cx: 0, cy: 0, scale: 10 }; // centre (mm) and CSS px per mm
     this.selected = null;
     this.hover = null;
+    this.highlight = null; // { layerId, indices: number[] } every use of an aperture
+    this.playhead = null; // { layerId, current: [start, end), head: [x, y] | null }
+    this.hlCache = null;
     this.pending = 0;
     this.snapshot = null; // last rendered frame + its map, used while gestures are in flight
     this.lastRenderMs = 0;
@@ -82,7 +85,23 @@ export class Viewer {
     this.renderer.invalidate();
     this.selected = null;
     this.hover = null;
+    this.highlight = null;
+    this.playhead = null;
+    this.hlCache = null;
     this.requestRender(true);
+  }
+
+  /** Mark objects of one layer (e.g. every use of an aperture); null clears. */
+  setHighlight(hl) {
+    this.highlight = hl && hl.indices.length ? hl : null;
+    this.hlCache = null;
+    this.drawOverlay();
+  }
+
+  /** Step-through playback: the objects of the current command and the plotter head. */
+  setPlayhead(p) {
+    this.playhead = p;
+    this.drawOverlay();
   }
 
   layersChanged() {
@@ -193,31 +212,84 @@ export class Viewer {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
   }
 
-  /** Hover and selection outlines on the overlay canvas (cheap: no board re-render). */
+  /** Highlight, playback, hover and selection outlines on the overlay canvas (no board re-render). */
   drawOverlay() {
     const map = this.map();
     const ctx = this.octx;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, this.overlay.width, this.overlay.height);
+    if (this.highlight) ctx.drawImage(this.#highlightCanvas(map), 0, 0);
+    const pl = this.playhead;
+    if (pl) {
+      const layer = this.layers.find((l) => l.id === pl.layerId);
+      const [a, b] = pl.current;
+      if (layer && b > a) this.#outline(ctx, map, layer, range(a, Math.min(b, a + 20000)), MISC.playhead, 0.45);
+      if (pl.head) this.#crosshair(ctx, map, pl.head, MISC.playhead);
+    }
     for (const [hit, colour, fillAlpha] of [
       [this.hover, MISC.hover, 0.15],
       [this.selected, MISC.selection, 0.3],
     ]) {
       if (!hit) continue;
       const layer = this.layers.find((l) => l.id === hit.layerId);
-      const o = layer?.image?.objects[hit.index];
-      if (!o) continue;
-      const t = new CanvasTarget(ctx, map);
-      ctx.beginPath();
-      if (o.k === 'F' && o.ap.shape) for (const p of transformedParts(o.ap, o.m)) emitPath(t, p.path, o.x, o.y);
-      else emitObject(o, t, 0);
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.fillStyle = rgba(colour, fillAlpha);
-      ctx.fill('nonzero');
-      ctx.strokeStyle = rgba(colour, 1);
-      ctx.lineWidth = Math.max(1, this.dpr * 1.5);
-      ctx.stroke();
+      if (layer?.image?.objects[hit.index]) this.#outline(ctx, map, layer, [hit.index], colour, fillAlpha);
     }
+  }
+
+  /** Fill and outline some objects of a layer; objects outside the view are skipped. */
+  #outline(ctx, map, layer, indices, colour, fillAlpha) {
+    const objs = layer.image.objects;
+    const ob = layer.image.objBounds;
+    const v = BoardRenderer.viewRect(map, this.canvas.width, this.canvas.height);
+    const t = new CanvasTarget(ctx, map);
+    ctx.beginPath();
+    for (const i of indices) {
+      const o = objs[i];
+      if (!o) continue;
+      if (ob && (ob[i * 4] > v[2] || ob[i * 4 + 2] < v[0] || ob[i * 4 + 1] > v[3] || ob[i * 4 + 3] < v[1])) continue;
+      if (o.k === 'F' && o.ap.shape) for (const p of transformedParts(o.ap, o.m)) emitPath(t, p.path, o.x, o.y);
+      else emitObject(o, t, t.pixelMm);
+    }
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = rgba(colour, fillAlpha);
+    ctx.fill('nonzero');
+    ctx.strokeStyle = rgba(colour, 1);
+    ctx.lineWidth = Math.max(1, this.dpr * 1.5);
+    ctx.stroke();
+  }
+
+  /** The highlighted objects, drawn once per view (there can be many). */
+  #highlightCanvas(map) {
+    const w = this.overlay.width;
+    const h = this.overlay.height;
+    const key = `${map.s},${map.ox},${map.oy},${map.mirror},${w},${h}`;
+    if (this.hlCache?.key === key) return this.hlCache.canvas;
+    const canvas =
+      this.hlCache?.canvas?.width === w && this.hlCache.canvas.height === h ? this.hlCache.canvas : makeCanvas(w, h);
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    const layer = this.layers.find((l) => l.id === this.highlight.layerId);
+    if (layer?.image) this.#outline(ctx, map, layer, this.highlight.indices, MISC.highlight, 0.35);
+    this.hlCache = { key, canvas };
+    return canvas;
+  }
+
+  #crosshair(ctx, map, [x, y], colour) {
+    const px = map.ox + (map.mirror ? -map.s : map.s) * x;
+    const py = map.oy - map.s * y;
+    const r = 9 * this.dpr;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.strokeStyle = rgba(colour, 1);
+    ctx.lineWidth = Math.max(1, this.dpr * 1.5);
+    ctx.beginPath();
+    ctx.moveTo(px - r, py);
+    ctx.lineTo(px + r, py);
+    ctx.moveTo(px, py - r);
+    ctx.lineTo(px, py + r);
+    ctx.moveTo(px + r / 2, py);
+    ctx.arc(px, py, r / 2, 0, Math.PI * 2);
+    ctx.stroke();
   }
 
   /** Topmost visible object under a client point. */
@@ -314,6 +386,12 @@ export class Viewer {
     });
     new ResizeObserver(() => this.resize()).observe(c);
   }
+}
+
+function range(a, b) {
+  const out = new Array(b - a);
+  for (let i = a; i < b; i++) out[i - a] = i;
+  return out;
 }
 
 function clamp(v, a, b) {

@@ -8,6 +8,10 @@
 //   R  region  { contours: number[][] }         filled contours (flattened, counter-clockwise)
 // Common: dark (polarity), ln (line), at (index into image.objectAttributes), m (2x2 linear
 // aperture transform [a,b,c,d] from LM/LR/LS or aperture blocks, or null).
+//
+// image.commandEnds (Int32Array, one per command): number of image objects after that command
+// ran, so command i produced objects [commandEnds[i-1], commandEnds[i]). Objects inside a step
+// and repeat block appear when the block is closed; aperture block contents when flashed.
 
 import { Diagnostics } from '../parse/diagnostics.js';
 import { standardShape, macroShape, ApertureError } from './aperture.js';
@@ -78,13 +82,23 @@ class Interpreter {
   }
 
   run(commands) {
+    const n = commands.length;
+    const ends = new Int32Array(n);
+    const objs = this.image.objects;
+    let i = 0;
     try {
-      for (const c of commands) this.cmd(c);
+      for (; i < n; i++) {
+        this.cmd(commands[i]);
+        ends[i] = objs.length;
+      }
     } catch (e) {
       if (!(e instanceof LimitExceeded)) throw e;
       this.image.truncated = true;
     }
-    this.finish(commands.length ? commands[commands.length - 1].line : 1, false);
+    this.finish(n ? commands[n - 1].line : 1, false);
+    // an SR block closed by the end of file belongs to the last command
+    ends.fill(objs.length, Math.min(i, Math.max(0, n - 1)));
+    this.image.commandEnds = ends;
     computeBounds(this.image);
   }
 
@@ -291,6 +305,7 @@ class Interpreter {
       if (t === 'C' || t === 'R' || t === 'O' || t === 'P') {
         const p = ap.params.map((v, i) => (t === 'P' && (i === 1 || i === 2) ? v : v * k));
         ap.kind = t;
+        ap.mm = p; // parameters in mm (polygon vertex count and rotation are unitless)
         ap.shape = standardShape(t, p);
         if (ap.shape.deprecatedRectHole) {
           this.diag.warn('DEPRECATED_RECT_HOLE', `D${ap.code}: rectangular aperture holes are deprecated`, ap.line);

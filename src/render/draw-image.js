@@ -26,9 +26,12 @@ const STROKE_BATCH_LIMIT = 20000;
 /**
  * @param {object} image  from interpretGerber / interpretExcellon
  * @param {object} target see above
- * @param {{view?: number[]|null, only?: number[], inflateMm?: number}} [opts]
+ * @param {{view?: number[]|null, only?: number[], inflateMm?: number, from?: number, limit?: number}} [opts]
  *   view = [minx,miny,maxx,maxy] cull rect (mm); only = object indices to draw;
- *   inflateMm grows circular apertures (used to draw plated hole walls around drills)
+ *   inflateMm grows circular apertures (used to draw plated hole walls around drills);
+ *   from/limit = draw only objects [from, limit) (of `only` if given). Drawing [0, a) then
+ *   [a, b) on the same target gives the same picture as [0, b): step-through playback
+ *   extends the picture without redrawing it.
  */
 export function drawImage(image, target, opts = {}) {
   const view = opts.view || null;
@@ -36,7 +39,8 @@ export function drawImage(image, target, opts = {}) {
   const objs = image.objects;
   const ob = image.objBounds;
   const neg = !!image.negative;
-  if (neg && image.bounds) {
+  const from = Math.max(0, opts.from || 0);
+  if (neg && image.bounds && from === 0) {
     // deprecated %IPNEG%: the image area starts dark and every object's polarity is inverted
     const [x0, y0, x1, y1] = image.bounds;
     target.begin();
@@ -67,8 +71,8 @@ export function drawImage(image, target, opts = {}) {
     px = py = NaN;
   };
   const list = opts.only || null;
-  const n = list ? list.length : objs.length;
-  for (let q = 0; q < n; q++) {
+  const n = Math.min(list ? list.length : objs.length, opts.limit ?? Infinity);
+  for (let q = from; q < n; q++) {
     const i = list ? list[q] : q;
     if (view && ob) {
       const b = i * 4;

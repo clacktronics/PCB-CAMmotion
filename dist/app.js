@@ -558,10 +558,10 @@
         if (!Number.isInteger(n2) || n2 < 3) {
           throw new ApertureError(`Macro ${name}: outline needs at least 3 vertices, got ${n2}`, item.line);
         }
-        const count = 2 * (n2 + 1) + 3;
-        if (v.length !== count) {
+        const count2 = 2 * (n2 + 1) + 3;
+        if (v.length !== count2) {
           throw new ApertureError(
-            `Macro ${name}: outline with ${n2} vertices needs ${count} parameters, got ${v.length}`,
+            `Macro ${name}: outline with ${n2} vertices needs ${count2} parameters, got ${v.length}`,
             item.line
           );
         }
@@ -572,7 +572,7 @@
         }
         let ring = pts.slice(0, m - 2);
         if (signedArea(ring) < 0) ring = reverseFlat(ring);
-        return [{ dark, path: rotated(polygonPath(ring), v[count - 1]) }];
+        return [{ dark, path: rotated(polygonPath(ring), v[count2 - 1]) }];
       }
       case 5: {
         need(v, 6, code, item, name);
@@ -710,13 +710,22 @@
       return this.unit === "IN" ? 25.4 : 1;
     }
     run(commands) {
+      const n2 = commands.length;
+      const ends = new Int32Array(n2);
+      const objs = this.image.objects;
+      let i = 0;
       try {
-        for (const c of commands) this.cmd(c);
+        for (; i < n2; i++) {
+          this.cmd(commands[i]);
+          ends[i] = objs.length;
+        }
       } catch (e) {
         if (!(e instanceof LimitExceeded)) throw e;
         this.image.truncated = true;
       }
-      this.finish(commands.length ? commands[commands.length - 1].line : 1, false);
+      this.finish(n2 ? commands[n2 - 1].line : 1, false);
+      ends.fill(objs.length, Math.min(i, Math.max(0, n2 - 1)));
+      this.image.commandEnds = ends;
       computeBounds(this.image);
     }
     finish(line, atM02) {
@@ -907,6 +916,7 @@
         if (t === "C" || t === "R" || t === "O" || t === "P") {
           const p = ap2.params.map((v, i) => t === "P" && (i === 1 || i === 2) ? v : v * k2);
           ap2.kind = t;
+          ap2.mm = p;
           ap2.shape = standardShape(t, p);
           if (ap2.shape.deprecatedRectHole) {
             this.diag.warn("DEPRECATED_RECT_HOLE", `D${ap2.code}: rectangular aperture holes are deprecated`, ap2.line);
@@ -1475,7 +1485,8 @@
     const objs = image.objects;
     const ob = image.objBounds;
     const neg = !!image.negative;
-    if (neg && image.bounds) {
+    const from = Math.max(0, opts.from || 0);
+    if (neg && image.bounds && from === 0) {
       const [x0, y0, x1, y1] = image.bounds;
       target.begin();
       target.moveTo(x0, y0);
@@ -1502,8 +1513,8 @@
       px = py = NaN;
     };
     const list = opts.only || null;
-    const n2 = list ? list.length : objs.length;
-    for (let q = 0; q < n2; q++) {
+    const n2 = Math.min(list ? list.length : objs.length, opts.limit ?? Infinity);
+    for (let q = from; q < n2; q++) {
       const i = list ? list[q] : q;
       if (view && ob) {
         const b3 = i * 4;
@@ -1951,7 +1962,13 @@
     background: { rgb: [30, 32, 36] },
     backgroundLight: { rgb: [236, 238, 242] },
     selection: { rgb: [0, 200, 255] },
-    hover: { rgb: [255, 255, 255] }
+    hover: { rgb: [255, 255, 255] },
+    highlight: { rgb: [255, 0, 200] },
+    // analyser: every use of an aperture
+    playhead: { rgb: [255, 140, 0] },
+    // step-through playback: the last command's objects
+    thumbnail: { rgb: [214, 160, 92] }
+    // analyser shape gallery
   };
   var DEBUG = {
     copper_top: { rgb: [220, 60, 50] },
@@ -2083,20 +2100,42 @@
       if (id3 === void 0) this.masks.clear();
       else this.masks.delete(id3);
     }
-    /** Mask canvas (white = covered) for one layer at this view; cached until the view changes. */
+    /**
+     * Mask canvas (white = covered) for one layer at this view; cached until the view changes.
+     * A layer with `limit` (step-through playback) is drawn up to that many objects; when the
+     * limit grows, only the new objects are drawn on top of the cached mask.
+     */
     mask(layer, map, w2, h2, opts = {}) {
       const key2 = `${map.s},${map.ox},${map.oy},${map.mirror},${w2},${h2},${opts.inflateMm || 0}`;
       const id3 = layer.id + (opts.inflateMm ? ":inflate" : "") + (opts.outline ? ":outline" : "");
+      const limit = Number.isInteger(layer.limit) ? layer.limit : null;
       const hit = this.masks.get(id3);
-      if (hit && hit.key === key2) return hit.canvas;
+      const same = hit && hit.key === key2 && hit.image === layer.image;
+      if (same && hit.limit === limit) return hit.canvas;
+      const draw = (canvas2, from) => {
+        const ctx2 = canvas2.getContext("2d");
+        const t = opts.outline ? new OutlineTarget(ctx2, map) : new CanvasTarget(ctx2, map);
+        drawImage(layer.image, t, {
+          view: _BoardRenderer.viewRect(map, w2, h2),
+          inflateMm: opts.inflateMm || 0,
+          from,
+          limit: limit ?? void 0
+        });
+        ctx2.setTransform(1, 0, 0, 1, 0, 0);
+        ctx2.globalCompositeOperation = "source-over";
+      };
+      if (same && limit !== null && hit.limit !== null && limit > hit.limit) {
+        draw(hit.canvas, hit.limit);
+        hit.limit = limit;
+        return hit.canvas;
+      }
       const canvas = hit?.canvas && hit.canvas.width === w2 && hit.canvas.height === h2 ? hit.canvas : makeCanvas(w2, h2);
       const ctx = canvas.getContext("2d");
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.globalCompositeOperation = "source-over";
       ctx.clearRect(0, 0, w2, h2);
-      const t = opts.outline ? new OutlineTarget(ctx, map) : new CanvasTarget(ctx, map);
-      drawImage(layer.image, t, { view: _BoardRenderer.viewRect(map, w2, h2), inflateMm: opts.inflateMm || 0 });
-      this.masks.set(id3, { key: key2, canvas });
+      draw(canvas, 0);
+      this.masks.set(id3, { key: key2, canvas, limit, image: layer.image });
       return canvas;
     }
     workCanvas(i, w2, h2) {
@@ -2579,6 +2618,9 @@
       this.view = { cx: 0, cy: 0, scale: 10 };
       this.selected = null;
       this.hover = null;
+      this.highlight = null;
+      this.playhead = null;
+      this.hlCache = null;
       this.pending = 0;
       this.snapshot = null;
       this.lastRenderMs = 0;
@@ -2620,7 +2662,21 @@
       this.renderer.invalidate();
       this.selected = null;
       this.hover = null;
+      this.highlight = null;
+      this.playhead = null;
+      this.hlCache = null;
       this.requestRender(true);
+    }
+    /** Mark objects of one layer (e.g. every use of an aperture); null clears. */
+    setHighlight(hl3) {
+      this.highlight = hl3 && hl3.indices.length ? hl3 : null;
+      this.hlCache = null;
+      this.drawOverlay();
+    }
+    /** Step-through playback: the objects of the current command and the plotter head. */
+    setPlayhead(p) {
+      this.playhead = p;
+      this.drawOverlay();
     }
     layersChanged() {
       this.requestRender(true);
@@ -2718,31 +2774,80 @@
       ctx.drawImage(this.snapshot.canvas, 0, 0);
       ctx.setTransform(1, 0, 0, 1, 0, 0);
     }
-    /** Hover and selection outlines on the overlay canvas (cheap: no board re-render). */
+    /** Highlight, playback, hover and selection outlines on the overlay canvas (no board re-render). */
     drawOverlay() {
       const map = this.map();
       const ctx = this.octx;
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, this.overlay.width, this.overlay.height);
+      if (this.highlight) ctx.drawImage(this.#highlightCanvas(map), 0, 0);
+      const pl3 = this.playhead;
+      if (pl3) {
+        const layer = this.layers.find((l) => l.id === pl3.layerId);
+        const [a2, b3] = pl3.current;
+        if (layer && b3 > a2) this.#outline(ctx, map, layer, range(a2, Math.min(b3, a2 + 2e4)), MISC.playhead, 0.45);
+        if (pl3.head) this.#crosshair(ctx, map, pl3.head, MISC.playhead);
+      }
       for (const [hit, colour, fillAlpha] of [
         [this.hover, MISC.hover, 0.15],
         [this.selected, MISC.selection, 0.3]
       ]) {
         if (!hit) continue;
         const layer = this.layers.find((l) => l.id === hit.layerId);
-        const o2 = layer?.image?.objects[hit.index];
-        if (!o2) continue;
-        const t = new CanvasTarget(ctx, map);
-        ctx.beginPath();
-        if (o2.k === "F" && o2.ap.shape) for (const p of transformedParts(o2.ap, o2.m)) emitPath(t, p.path, o2.x, o2.y);
-        else emitObject(o2, t, 0);
-        ctx.setTransform(1, 0, 0, 1, 0, 0);
-        ctx.fillStyle = rgba(colour, fillAlpha);
-        ctx.fill("nonzero");
-        ctx.strokeStyle = rgba(colour, 1);
-        ctx.lineWidth = Math.max(1, this.dpr * 1.5);
-        ctx.stroke();
+        if (layer?.image?.objects[hit.index]) this.#outline(ctx, map, layer, [hit.index], colour, fillAlpha);
       }
+    }
+    /** Fill and outline some objects of a layer; objects outside the view are skipped. */
+    #outline(ctx, map, layer, indices, colour, fillAlpha) {
+      const objs = layer.image.objects;
+      const ob = layer.image.objBounds;
+      const v = BoardRenderer.viewRect(map, this.canvas.width, this.canvas.height);
+      const t = new CanvasTarget(ctx, map);
+      ctx.beginPath();
+      for (const i of indices) {
+        const o2 = objs[i];
+        if (!o2) continue;
+        if (ob && (ob[i * 4] > v[2] || ob[i * 4 + 2] < v[0] || ob[i * 4 + 1] > v[3] || ob[i * 4 + 3] < v[1])) continue;
+        if (o2.k === "F" && o2.ap.shape) for (const p of transformedParts(o2.ap, o2.m)) emitPath(t, p.path, o2.x, o2.y);
+        else emitObject(o2, t, t.pixelMm);
+      }
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.fillStyle = rgba(colour, fillAlpha);
+      ctx.fill("nonzero");
+      ctx.strokeStyle = rgba(colour, 1);
+      ctx.lineWidth = Math.max(1, this.dpr * 1.5);
+      ctx.stroke();
+    }
+    /** The highlighted objects, drawn once per view (there can be many). */
+    #highlightCanvas(map) {
+      const w2 = this.overlay.width;
+      const h2 = this.overlay.height;
+      const key2 = `${map.s},${map.ox},${map.oy},${map.mirror},${w2},${h2}`;
+      if (this.hlCache?.key === key2) return this.hlCache.canvas;
+      const canvas = this.hlCache?.canvas?.width === w2 && this.hlCache.canvas.height === h2 ? this.hlCache.canvas : makeCanvas(w2, h2);
+      const ctx = canvas.getContext("2d");
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, w2, h2);
+      const layer = this.layers.find((l) => l.id === this.highlight.layerId);
+      if (layer?.image) this.#outline(ctx, map, layer, this.highlight.indices, MISC.highlight, 0.35);
+      this.hlCache = { key: key2, canvas };
+      return canvas;
+    }
+    #crosshair(ctx, map, [x2, y2], colour) {
+      const px = map.ox + (map.mirror ? -map.s : map.s) * x2;
+      const py = map.oy - map.s * y2;
+      const r2 = 9 * this.dpr;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.strokeStyle = rgba(colour, 1);
+      ctx.lineWidth = Math.max(1, this.dpr * 1.5);
+      ctx.beginPath();
+      ctx.moveTo(px - r2, py);
+      ctx.lineTo(px + r2, py);
+      ctx.moveTo(px, py - r2);
+      ctx.lineTo(px, py + r2);
+      ctx.moveTo(px + r2 / 2, py);
+      ctx.arc(px, py, r2 / 2, 0, Math.PI * 2);
+      ctx.stroke();
     }
     /** Topmost visible object under a client point. */
     pick(clientX, clientY) {
@@ -2836,6 +2941,11 @@
       new ResizeObserver(() => this.resize()).observe(c);
     }
   };
+  function range(a2, b3) {
+    const out = new Array(b3 - a2);
+    for (let i = a2; i < b3; i++) out[i - a2] = i;
+    return out;
+  }
   function clamp(v, a2, b3) {
     return Math.min(b3, Math.max(a2, v));
   }
@@ -21164,7 +21274,9 @@ void main() {
     };
     const usesPlunge = parsed.commands.some((c) => c.type === "PLUNGE");
     let routeMode = false;
-    for (const c of parsed.commands) {
+    const ends = image.commandEnds = new Int32Array(parsed.commands.length);
+    for (let ci2 = 0; ci2 < parsed.commands.length; ci2++) {
+      const c = parsed.commands[ci2];
       switch (c.type) {
         case "TOOL_DEF": {
           const ap2 = {
@@ -21172,6 +21284,7 @@ void main() {
             template: "C",
             kind: "C",
             params: [c.diaMm],
+            mm: [c.diaMm],
             dia: c.diaMm,
             line: c.line,
             attributes: {},
@@ -21275,6 +21388,7 @@ void main() {
         default:
           break;
       }
+      ends[ci2] = image.objects.length;
     }
     image.stats.tools = tools.size;
     computeBounds(image);
@@ -21590,6 +21704,14 @@ void main() {
     explode: 0,
     camera3d: null
   };
+  var ANALYZE_TABS = ["apertures", "shapes", "commands"];
+  var PLAYBACK_SPEEDS = [1, 5, 20, 100, 1e3, 1e4];
+  var DEFAULT_ANALYZE = {
+    open: true,
+    tab: "apertures",
+    highlight: null,
+    playback: { layer: null, step: null, by: "command", speed: 20 }
+  };
   function createProject(name = "untitled", now = /* @__PURE__ */ new Date()) {
     const p = createEmptyProject({ name, now: now instanceof Date ? now : new Date(now) });
     ensureSettings(p);
@@ -21603,8 +21725,29 @@ void main() {
     const explode = Number(s.view.explode);
     s.view.explode = Number.isFinite(explode) ? Math.min(1, Math.max(0, explode)) : 0;
     s.view.view3d = s.view.view3d === true;
+    s.analyze = normaliseAnalyze(s.analyze);
     for (const src of project.sources) s.layers[src.name] ??= defaultLayerSettings();
     return project;
+  }
+  function normaliseAnalyze(a2) {
+    const d = DEFAULT_ANALYZE;
+    const src = a2 && typeof a2 === "object" ? a2 : {};
+    const pb = src.playback && typeof src.playback === "object" ? src.playback : {};
+    const step = Number.isInteger(pb.step) && pb.step >= 0 ? pb.step : null;
+    const hl3 = src.highlight;
+    return {
+      ...src,
+      open: typeof src.open === "boolean" ? src.open : d.open,
+      tab: ANALYZE_TABS.includes(src.tab) ? src.tab : d.tab,
+      highlight: hl3 && typeof hl3.layer === "string" && (hl3.code === null || Number.isInteger(hl3.code)) ? { layer: hl3.layer, code: hl3.code } : null,
+      playback: {
+        ...pb,
+        layer: typeof pb.layer === "string" && step !== null ? pb.layer : null,
+        step: typeof pb.layer === "string" ? step : null,
+        by: pb.by === "object" ? "object" : "command",
+        speed: PLAYBACK_SPEEDS.includes(pb.speed) ? pb.speed : d.playback.speed
+      }
+    };
   }
   function defaultLayerSettings() {
     return { opacity: 1, role: null, colour: null, invert: false };
@@ -21662,6 +21805,9 @@ void main() {
     project.sources = project.sources.filter((s) => s.name !== name);
     delete project.settings?.layers?.[name];
     if (project.settings?.view?.solo) project.settings.view.solo = project.settings.view.solo.filter((n2) => n2 !== name);
+    const a2 = project.settings?.analyze;
+    if (a2?.highlight?.layer === name) a2.highlight = null;
+    if (a2?.playback?.layer === name) Object.assign(a2.playback, { layer: null, step: null });
     touch(project, now);
   }
   function buildLayers(project, opts = {}) {
@@ -21784,6 +21930,1252 @@ void main() {
   }
   function clear(el3) {
     while (el3.firstChild) el3.firstChild.remove();
+  }
+
+  // src/render/raster.js
+  var Raster = class _Raster {
+    /**
+     * @param {number} width  pixels
+     * @param {number} height pixels
+     * @param {{x0:number, y0:number, pxPerMm:number}} map  (x0, y0) = mm at the bottom-left corner
+     */
+    constructor(width, height, map) {
+      this.width = width;
+      this.height = height;
+      this.x0 = map.x0;
+      this.y0 = map.y0;
+      this.s = map.pxPerMm;
+      this.pixelMm = 1 / map.pxPerMm;
+      this.data = new Uint8Array(width * height);
+      this.edges = [];
+      this.cx = 0;
+      this.cy = 0;
+      this.sx = 0;
+      this.sy = 0;
+      this.open = false;
+    }
+    // mm -> pixel coordinates (y down)
+    px(x2) {
+      return (x2 - this.x0) * this.s;
+    }
+    py(y2) {
+      return this.height - (y2 - this.y0) * this.s;
+    }
+    begin() {
+      this.edges = [];
+      this.open = false;
+    }
+    moveTo(x2, y2) {
+      this.closePath();
+      this.cx = this.sx = this.px(x2);
+      this.cy = this.sy = this.py(y2);
+      this.open = true;
+    }
+    lineTo(x2, y2) {
+      const nx = this.px(x2);
+      const ny = this.py(y2);
+      if (!this.open) {
+        this.cx = this.sx = nx;
+        this.cy = this.sy = ny;
+        this.open = true;
+        return;
+      }
+      this.edge(this.cx, this.cy, nx, ny);
+      this.cx = nx;
+      this.cy = ny;
+    }
+    arc(cx, cy, r2, a0, a1, anticlockwise) {
+      let sw = a1 - a0;
+      const TAU4 = Math.PI * 2;
+      if (!anticlockwise) {
+        if (sw < 0) sw += TAU4 * Math.ceil(-sw / TAU4);
+        if (sw > TAU4) sw = TAU4;
+      } else {
+        if (sw > 0) sw -= TAU4 * Math.ceil(sw / TAU4);
+        if (sw < -TAU4) sw = -TAU4;
+      }
+      const rpx = r2 * this.s;
+      const tol = 0.2;
+      const step = rpx > tol ? 2 * Math.acos(1 - tol / rpx) : Math.PI / 2;
+      const n2 = Math.min(4096, Math.max(1, Math.ceil(Math.abs(sw) / step)));
+      for (let k2 = 0; k2 <= n2; k2++) {
+        const a2 = a0 + sw * k2 / n2;
+        this.lineTo(cx + r2 * Math.cos(a2), cy + r2 * Math.sin(a2));
+      }
+    }
+    closePath() {
+      if (this.open && (this.cx !== this.sx || this.cy !== this.sy)) this.edge(this.cx, this.cy, this.sx, this.sy);
+      this.cx = this.sx;
+      this.cy = this.sy;
+      this.open = false;
+    }
+    edge(x0, y0, x1, y1) {
+      if (y0 === y1) return;
+      this.edges.push(x0, y0, x1, y1);
+    }
+    fill(dark) {
+      this.closePath();
+      const e = this.edges;
+      const W2 = this.width;
+      const H3 = this.height;
+      const v = dark ? 1 : 0;
+      const n2 = e.length / 4;
+      if (!n2) return;
+      const buckets = /* @__PURE__ */ new Map();
+      for (let k2 = 0; k2 < n2; k2++) {
+        const ya3 = Math.min(e[k2 * 4 + 1], e[k2 * 4 + 3]);
+        const yb = Math.max(e[k2 * 4 + 1], e[k2 * 4 + 3]);
+        const r0 = Math.max(0, Math.ceil(ya3 - 0.5));
+        const r1 = Math.min(H3 - 1, Math.ceil(yb - 0.5) - 1);
+        if (r1 < r0) continue;
+        let b3 = buckets.get(r0);
+        if (!b3) buckets.set(r0, b3 = []);
+        b3.push(k2, r1);
+      }
+      const rows = [...buckets.keys()].sort((a2, b3) => a2 - b3);
+      let active = [];
+      let ri2 = 0;
+      const xs3 = [];
+      for (let row = rows.length ? rows[0] : H3; row < H3; row++) {
+        if (ri2 < rows.length && rows[ri2] === row) {
+          const b3 = buckets.get(row);
+          for (let q = 0; q < b3.length; q += 2) active.push([b3[q], b3[q + 1]]);
+          ri2++;
+        }
+        if (!active.length) {
+          if (ri2 >= rows.length) break;
+          row = rows[ri2] - 1;
+          continue;
+        }
+        const yc3 = row + 0.5;
+        xs3.length = 0;
+        for (const [k2] of active) {
+          const x0 = e[k2 * 4];
+          const y0 = e[k2 * 4 + 1];
+          const x1 = e[k2 * 4 + 2];
+          const y1 = e[k2 * 4 + 3];
+          const x2 = x0 + (yc3 - y0) * (x1 - x0) / (y1 - y0);
+          xs3.push(x2, y1 > y0 ? 1 : -1);
+        }
+        const idx = [];
+        for (let q = 0; q < xs3.length; q += 2) idx.push(q);
+        idx.sort((a2, b3) => xs3[a2] - xs3[b3]);
+        let wind = 0;
+        let start2 = 0;
+        const base = row * W2;
+        for (const q of idx) {
+          const was = wind;
+          wind += xs3[q + 1];
+          if (was === 0 && wind !== 0) start2 = xs3[q];
+          else if (was !== 0 && wind === 0) {
+            const c0 = Math.max(0, Math.ceil(start2 - 0.5));
+            const c1 = Math.min(W2 - 1, Math.ceil(xs3[q] - 0.5) - 1);
+            if (c1 >= c0) this.data.fill(v, base + c0, base + c1 + 1);
+          }
+        }
+        active = active.filter(([, last]) => last > row);
+      }
+      this.edges = [];
+    }
+    group(bbox) {
+      const c0 = Math.max(0, Math.floor(this.px(bbox[0])) - 1);
+      const c1 = Math.min(this.width, Math.ceil(this.px(bbox[2])) + 1);
+      const r0 = Math.max(0, Math.floor(this.py(bbox[3])) - 1);
+      const r1 = Math.min(this.height, Math.ceil(this.py(bbox[1])) + 1);
+      if (c1 <= c0 || r1 <= r0) return null;
+      const sub = new _Raster(c1 - c0, r1 - r0, {
+        x0: this.x0 + c0 / this.s,
+        y0: this.y0 + (this.height - r1) / this.s,
+        pxPerMm: this.s
+      });
+      sub.offset = [c0, r0];
+      return sub;
+    }
+    endGroup(sub, dark) {
+      const [c0, r0] = sub.offset;
+      const v = dark ? 1 : 0;
+      for (let r2 = 0; r2 < sub.height; r2++) {
+        for (let c = 0; c < sub.width; c++) {
+          if (sub.data[r2 * sub.width + c]) this.data[(r2 + r0) * this.width + c + c0] = v;
+        }
+      }
+    }
+    /** Pixel value at a point in mm (0 outside). */
+    at(x2, y2) {
+      const c = Math.floor(this.px(x2));
+      const r2 = Math.floor(this.py(y2));
+      if (c < 0 || r2 < 0 || c >= this.width || r2 >= this.height) return 0;
+      return this.data[r2 * this.width + c];
+    }
+    count() {
+      let n2 = 0;
+      for (let i = 0; i < this.data.length; i++) n2 += this.data[i];
+      return n2;
+    }
+    /** Dark area in mm². */
+    areaMm2() {
+      return this.count() / (this.s * this.s);
+    }
+  };
+
+  // src/analyze/apertures.js
+  var SHAPE_NAME = { C: "circle", R: "rectangle", O: "obround", P: "polygon", macro: "macro", block: "block" };
+  function describeAperture(ap2) {
+    const mm2 = ap2.mm || [];
+    const hole = (i) => mm2[i] > 0 ? `, hole ⌀${fmtMm(mm2[i])}` : "";
+    switch (ap2.kind) {
+      case "C":
+        return `circle ⌀${fmtMm(ap2.dia)} mm${hole(1)}`;
+      case "R":
+      case "O":
+        return `${SHAPE_NAME[ap2.kind]} ${fmtMm(ap2.w)} × ${fmtMm(ap2.h)} mm${hole(2)}`;
+      case "P":
+        return `polygon ${mm2[1]}-gon ⌀${fmtMm(mm2[0])} mm${mm2[2] ? `, rotated ${mm2[2]}°` : ""}${hole(3)}`;
+      case "macro":
+        return `macro ${ap2.template}(${ap2.params.join(", ")})`;
+      case "block":
+        return `block of ${ap2.objects.length} object${ap2.objects.length === 1 ? "" : "s"}`;
+    }
+    return `${ap2.template} ${ap2.params.join(" × ")}`;
+  }
+  function apertureArea(ap2) {
+    if (ap2._area) return ap2._area;
+    let r2 = null;
+    const mm2 = ap2.mm;
+    if (mm2 && !ap2.shape?.deprecatedRectHole) {
+      const holeArea = (d) => d > 0 ? Math.PI * d * d / 4 : 0;
+      if (ap2.kind === "C") r2 = Math.PI * ap2.dia * ap2.dia / 4 - holeArea(mm2[1]);
+      else if (ap2.kind === "R") r2 = ap2.w * ap2.h - holeArea(mm2[2]);
+      else if (ap2.kind === "O") {
+        const rad = Math.min(ap2.w, ap2.h) / 2;
+        r2 = ap2.w * ap2.h - (4 - Math.PI) * rad * rad - holeArea(mm2[2]);
+      } else if (ap2.kind === "P") {
+        const n2 = mm2[1];
+        const rad = mm2[0] / 2;
+        r2 = n2 / 2 * rad * rad * Math.sin(2 * Math.PI / n2) - holeArea(mm2[3]);
+      }
+    }
+    ap2._area = r2 !== null ? { areaMm2: r2, exact: true } : { areaMm2: rasterArea(apertureImage(ap2)), exact: false };
+    return ap2._area;
+  }
+  function apertureImage(ap2) {
+    const objects = ap2.kind === "block" ? ap2.objects : [{ k: "F", dark: true, ap: ap2, x: 0, y: 0, m: null, ln: ap2.line }];
+    const b3 = ap2.kind === "block" ? ap2.bbox : ap2.shape.bbox;
+    return { objects, objBounds: null, negative: false, bounds: b3[0] <= b3[2] ? b3 : null };
+  }
+  function rasterArea(image, pixels = 600) {
+    const b3 = image.bounds;
+    if (!b3) return 0;
+    const w2 = b3[2] - b3[0];
+    const h2 = b3[3] - b3[1];
+    if (!(w2 > 0 && h2 > 0)) return 0;
+    const s = pixels / Math.max(w2, h2);
+    const r2 = new Raster(Math.ceil(w2 * s) + 2, Math.ceil(h2 * s) + 2, { x0: b3[0] - 1 / s, y0: b3[1] - 1 / s, pxPerMm: s });
+    drawImage(image, r2);
+    return r2.areaMm2();
+  }
+  function objectLength(o2) {
+    if (o2.k === "L") return Math.hypot(o2.x2 - o2.x1, o2.y2 - o2.y1);
+    if (o2.k === "A") return Math.abs(o2.sw) * o2.r;
+    return 0;
+  }
+  function apertureTable(image, commands = []) {
+    const drill = image.format === "excellon";
+    const rows = /* @__PURE__ */ new Map();
+    for (const ap2 of image.apertures.values()) {
+      const b3 = ap2.kind === "block" ? ap2.bbox : ap2.shape.bbox;
+      const area = apertureArea(ap2);
+      rows.set(ap2.code, {
+        code: ap2.code,
+        label: `${drill ? "T" : "D"}${ap2.code}`,
+        kind: ap2.kind,
+        shape: SHAPE_NAME[ap2.kind] || ap2.template,
+        template: ap2.template,
+        description: describeAperture(ap2),
+        widthMm: b3[2] - b3[0],
+        heightMm: b3[3] - b3[1],
+        areaMm2: area.areaMm2,
+        areaExact: area.exact,
+        function: ap2.attributes?.[".AperFunction"]?.join(",") || "",
+        line: ap2.line,
+        flashes: 0,
+        draws: 0,
+        arcs: 0,
+        uses: 0,
+        clear: 0,
+        lengthMm: 0,
+        firstUseLine: null
+      });
+    }
+    for (const o2 of image.objects) {
+      if (!o2.ap) continue;
+      const r2 = rows.get(o2.ap.code);
+      if (!r2) continue;
+      if (o2.k === "F") r2.flashes++;
+      else if (o2.k === "L") r2.draws++;
+      else if (o2.k === "A") r2.arcs++;
+      r2.uses++;
+      if (!o2.dark) r2.clear++;
+      r2.lengthMm += objectLength(o2);
+      if (r2.firstUseLine === null || o2.ln < r2.firstUseLine) r2.firstUseLine = o2.ln;
+    }
+    if (!drill) countBlockFlashes(commands, rows);
+    return [...rows.values()].sort((a2, b3) => a2.code - b3.code);
+  }
+  function countBlockFlashes(commands, rows) {
+    let cur = null;
+    for (const c of commands) {
+      if (c.type === "Dnn") cur = rows.get(c.code);
+      else if (c.type === "D" && c.op === 3 && cur?.kind === "block") {
+        cur.flashes++;
+        cur.uses++;
+        if (cur.firstUseLine === null) cur.firstUseLine = c.line;
+      }
+    }
+  }
+  function objectsWithAperture(image, code) {
+    const out = [];
+    const objs = image.objects;
+    for (let i = 0; i < objs.length; i++) {
+      const o2 = objs[i];
+      if (code === null ? o2.k === "R" : o2.ap?.code === code) out.push(i);
+    }
+    return out;
+  }
+  function imageStats(image) {
+    const s = {
+      objects: image.objects.length,
+      flashes: 0,
+      draws: 0,
+      arcs: 0,
+      regions: 0,
+      dark: 0,
+      clear: 0,
+      drawLengthMm: 0,
+      regionContours: 0,
+      regionVertices: 0,
+      regionAreaMm2: 0,
+      minDrawWidthMm: null,
+      maxDrawWidthMm: null,
+      minFlashMm: null,
+      maxFlashMm: null,
+      aperturesDefined: image.apertures.size,
+      aperturesUsed: 0,
+      bounds: image.bounds
+    };
+    const used = /* @__PURE__ */ new Set();
+    const widths = /* @__PURE__ */ new Map();
+    for (const o2 of image.objects) {
+      if (o2.dark) s.dark++;
+      else s.clear++;
+      if (o2.k === "R") {
+        s.regions++;
+        s.regionContours += o2.contours.length;
+        for (const c of o2.contours) {
+          s.regionVertices += c.length / 2;
+          s.regionAreaMm2 += signedArea(c);
+        }
+        continue;
+      }
+      used.add(o2.ap);
+      if (o2.k === "F") {
+        s.flashes++;
+        const b3 = o2.ap.shape?.bbox;
+        if (!b3) continue;
+        const k2 = o2.m ? Math.sqrt(Math.abs(o2.m[0] * o2.m[3] - o2.m[1] * o2.m[2])) : 1;
+        const d = Math.min(b3[2] - b3[0], b3[3] - b3[1]) * k2;
+        const D3 = Math.max(b3[2] - b3[0], b3[3] - b3[1]) * k2;
+        if (s.minFlashMm === null || d < s.minFlashMm) s.minFlashMm = d;
+        if (s.maxFlashMm === null || D3 > s.maxFlashMm) s.maxFlashMm = D3;
+        continue;
+      }
+      if (o2.k === "L") s.draws++;
+      else s.arcs++;
+      s.drawLengthMm += objectLength(o2);
+      let w2 = o2.m ? null : widths.get(o2.ap);
+      if (w2 === void 0 || w2 === null) {
+        w2 = drawWidth(o2.ap, o2.m);
+        if (!o2.m) widths.set(o2.ap, w2);
+      }
+      if (s.minDrawWidthMm === null || w2 < s.minDrawWidthMm) s.minDrawWidthMm = w2;
+      if (s.maxDrawWidthMm === null || w2 > s.maxDrawWidthMm) s.maxDrawWidthMm = w2;
+    }
+    s.aperturesUsed = used.size;
+    return s;
+  }
+  function drawWidth(ap2, m) {
+    if (ap2.kind === "C") return 2 * drawRadius(ap2, m);
+    const b3 = ap2.shape.bbox;
+    const k2 = m ? Math.sqrt(Math.abs(m[0] * m[3] - m[1] * m[2])) : 1;
+    return Math.min(b3[2] - b3[0], b3[3] - b3[1]) * k2;
+  }
+  function fmtMm(v) {
+    if (!Number.isFinite(v)) return "—";
+    return Math.abs(v) >= 1e3 ? v.toFixed(2) : v.toFixed(4).replace(/\.?0+$/, "") || "0";
+  }
+
+  // src/analyze/commands.js
+  function commandObjectRange(image, ci2) {
+    const ends = image.commandEnds;
+    if (!ends || ci2 < 0 || ci2 >= ends.length) return [0, 0];
+    return [ci2 > 0 ? ends[ci2 - 1] : 0, ends[ci2]];
+  }
+  function objectCommand(image, oi2) {
+    const ends = image.commandEnds;
+    if (!ends || oi2 < 0 || oi2 >= image.objects.length) return -1;
+    let lo3 = 0;
+    let hi2 = ends.length - 1;
+    if (hi2 < 0 || ends[hi2] <= oi2) return -1;
+    while (lo3 < hi2) {
+      const mid = lo3 + hi2 >> 1;
+      if (ends[mid] > oi2) hi2 = mid;
+      else lo3 = mid + 1;
+    }
+    return lo3;
+  }
+  function coordinateContext(commands) {
+    const changes = [];
+    let dec = 6;
+    let unit = 1;
+    let incremental = false;
+    for (let i = 0; i < commands.length; i++) {
+      const c = commands[i];
+      if (c.type === "FS") {
+        dec = c.dec;
+        incremental = c.notation === "I";
+      } else if (c.type === "MO") unit = c.unit === "IN" ? 25.4 : 1;
+      else if (c.type === "NOTATION") incremental = c.notation === "I";
+      else continue;
+      changes.push([i, unit / 10 ** dec, incremental]);
+    }
+    const at2 = (i) => {
+      let lo3 = 0;
+      let hi2 = changes.length - 1;
+      let best = null;
+      while (lo3 <= hi2) {
+        const mid = lo3 + hi2 >> 1;
+        if (changes[mid][0] <= i) {
+          best = changes[mid];
+          lo3 = mid + 1;
+        } else hi2 = mid - 1;
+      }
+      return best;
+    };
+    return {
+      scaleAt: (i) => at2(i)?.[1] ?? 1e-6,
+      incrementalAt: (i) => at2(i)?.[2] ?? false
+    };
+  }
+  var G_TEXT = {
+    1: "Linear interpolation (G01)",
+    2: "Clockwise circular interpolation (G02)",
+    3: "Counter-clockwise circular interpolation (G03)",
+    36: "Region start (G36)",
+    37: "Region end (G37): fill the contours",
+    74: "Single-quadrant arc mode (G74, deprecated)",
+    75: "Multi-quadrant arc mode (G75)"
+  };
+  var KIND_TEXT = { F: "flash", L: "line", A: "arc", R: "region" };
+  function describeCommand(layer, i, ctx) {
+    const c = layer.commands[i];
+    const [a2, b3] = commandObjectRange(layer.image, i);
+    const made = b3 - a2;
+    const produced = made ? ` → ${made === 1 ? `1 ${KIND_TEXT[layer.image.objects[a2].k]}` : `${made.toLocaleString("en")} objects`}` : "";
+    if (layer.kind === "excellon")
+      return { code: c.raw ?? c.type, text: excellonText(c, layer) + produced, objects: made };
+    ctx ??= coordinateContext(layer.commands);
+    const { code, text } = gerberText(c, i, ctx, layer.image);
+    return { code, text: text + produced, objects: made };
+  }
+  function gerberText(c, i, ctx, image) {
+    switch (c.type) {
+      case "FS":
+        return {
+          code: `%FS${c.zero}${c.notation}X${c.int}${c.dec}Y${c.int}${c.dec}*%`,
+          text: `Format ${c.int}.${c.dec}, ${c.zero === "T" ? "trailing" : "leading"} zeros omitted, ${c.notation === "I" ? "incremental" : "absolute"}`
+        };
+      case "MO":
+        return {
+          code: c.deprecated ? c.unit === "IN" ? "G70" : "G71" : `%MO${c.unit}*%`,
+          text: `Units: ${c.unit === "IN" ? "inches" : "millimetres"}`
+        };
+      case "NOTATION":
+        return {
+          code: c.notation === "A" ? "G90" : "G91",
+          text: `${c.notation === "A" ? "Absolute" : "Incremental"} coordinates (deprecated)`
+        };
+      case "AD": {
+        const ap2 = image.apertures.get(c.code);
+        const params = c.params.length ? `,${c.params.join("X")}` : "";
+        return {
+          code: `%ADD${c.code}${c.template}${params}*%`,
+          text: `Define aperture D${c.code}${ap2 && ap2.line === c.line ? `: ${describeAperture(ap2)}` : ""}`
+        };
+      }
+      case "AM": {
+        const n2 = c.body.filter((x2) => x2.kind === "primitive").length;
+        return { code: `%AM${c.name}*…%`, text: `Define macro ${c.name} (${n2} primitive${n2 === 1 ? "" : "s"})` };
+      }
+      case "Dnn": {
+        const ap2 = image.apertures.get(c.code);
+        return { code: `D${c.code}`, text: `Select aperture D${c.code}${ap2 ? ` (${describeAperture(ap2)})` : ""}` };
+      }
+      case "D":
+        return dText(c, i, ctx);
+      case "G":
+        return { code: `G${String(c.code).padStart(2, "0")}`, text: G_TEXT[c.code] || `G${c.code}` };
+      case "G04":
+        return { code: `G04 ${c.text}`, text: "Comment" };
+      case "LP":
+        return {
+          code: `%LP${c.polarity}*%`,
+          text: `Polarity ${c.polarity === "D" ? "dark: objects add" : "clear: objects erase"}`
+        };
+      case "LM":
+        return { code: `%LM${c.mirror}*%`, text: c.mirror === "N" ? "No mirroring" : `Mirror aperture in ${c.mirror}` };
+      case "LR":
+        return { code: `%LR${c.deg}*%`, text: `Rotate apertures by ${c.deg}°` };
+      case "LS":
+        return { code: `%LS${c.scale}*%`, text: `Scale apertures by ${c.scale}` };
+      case "AB":
+        return c.close ? { code: "%AB*%", text: "End aperture block" } : { code: `%ABD${c.code}*%`, text: `Start aperture block D${c.code}` };
+      case "SR":
+        return c.close ? { code: "%SR*%", text: "End step and repeat: place the copies" } : {
+          code: `%SRX${c.x}Y${c.y}I${c.i}J${c.j}*%`,
+          text: c.x * c.y > 1 ? `Step and repeat ${c.x} × ${c.y}, step ${c.i} × ${c.j}` : "End step and repeat"
+        };
+      case "TF":
+      case "TA":
+      case "TO":
+        return {
+          code: `%${c.type}${c.name}${c.values.length ? "," + c.values.join(",") : ""}*%`,
+          text: `${{ TF: "File", TA: "Aperture", TO: "Object" }[c.type]} attribute ${c.name}`
+        };
+      case "TD":
+        return { code: `%TD${c.name ?? ""}*%`, text: c.name ? `Delete attribute ${c.name}` : "Delete all attributes" };
+      case "IP":
+        return {
+          code: `%IP${c.negative ? "NEG" : "POS"}*%`,
+          text: `Image polarity ${c.negative ? "negative" : "positive"} (deprecated)`
+        };
+      case "IN":
+      case "LN":
+        return { code: `%${c.type}${c.name}*%`, text: `${c.type === "IN" ? "Image" : "Layer"} name (deprecated)` };
+      case "M02":
+        return { code: c.deprecated || "M02", text: "End of file" };
+      default:
+        return { code: `%${c.type}${c.value ?? ""}*%`, text: "Image setting (deprecated)" };
+    }
+  }
+  function dText(c, i, ctx) {
+    const k2 = ctx.scaleAt(i);
+    const inc = ctx.incrementalAt(i);
+    const parts = [];
+    let code = c.g ? `G${String(c.g).padStart(2, "0")}` : "";
+    for (const ax of ["x", "y", "i", "j"]) {
+      if (c[ax] === void 0) continue;
+      code += `${ax.toUpperCase()}${c[ax]}`;
+      parts.push(`${ax.toUpperCase()} ${fmtMm(c[ax] * k2)}`);
+    }
+    if (c.op) code += `D0${c.op}`;
+    const where = parts.length ? `${inc ? " by" : " to"} ${parts.join(" ")} mm` : "";
+    const what = { 0: "Coordinate (modal D01, deprecated)", 1: "Interpolate (D01)", 2: "Move (D02)", 3: "Flash (D03)" }[c.op];
+    return { code, text: what + where };
+  }
+  function excellonText(c, layer) {
+    const xy = () => [c.x !== void 0 ? `X ${fmtMm(c.x)}` : "", c.y !== void 0 ? `Y ${fmtMm(c.y)}` : ""].filter(Boolean).join(" ");
+    switch (c.type) {
+      case "M48":
+        return "Header start";
+      case "HEADER_END":
+        return "Header end";
+      case "UNITS":
+        return `Units: ${c.units === "INCH" ? "inches" : "millimetres"}`;
+      case "TOOL_DEF":
+        return `Define tool T${c.tool}: ⌀${fmtMm(c.diaMm)} mm`;
+      case "TOOL": {
+        if (c.tool === 0) return "Unload tool";
+        const t = layer.image.apertures.get(c.tool);
+        return `Select tool T${c.tool}${t ? ` (⌀${fmtMm(t.dia)} mm)` : ""}`;
+      }
+      case "HIT":
+        return `Drill at ${xy()} mm`;
+      case "REPEAT":
+        return `Repeat hole ${c.count}× by ${fmtMm(c.dx)}, ${fmtMm(c.dy)} mm`;
+      case "SLOT":
+        return "Slot (G85)";
+      case "ROUTE_MOVE":
+        return `Rapid move (G00) to ${xy()} mm`;
+      case "ROUTE":
+        return `Route ${c.g === 1 ? "line" : c.g === 2 ? "CW arc" : "CCW arc"} to ${xy()} mm`;
+      case "PLUNGE":
+        return "Tool down (M15)";
+      case "RETRACT":
+        return "Tool up";
+      case "DRILL_MODE":
+        return "Drill mode";
+      case "MODE":
+        return "Mode";
+      case "END":
+        return "End of program";
+      case "COMMENT":
+        return "Comment";
+      case "ATTR":
+        return `Attribute ${c.name}`;
+      case "HEADER":
+        return "Header setting";
+    }
+    return c.type;
+  }
+
+  // src/analyze/playback.js
+  function visibleObjects(image, step) {
+    const ends = image.commandEnds;
+    if (!ends || step <= 0) return 0;
+    return ends[Math.min(step, ends.length) - 1];
+  }
+  function playbackState(image, step) {
+    const total = image.commandEnds?.length ?? 0;
+    const s = clampStep(step, total);
+    const objects = visibleObjects(image, s);
+    const command = s - 1;
+    const current = command >= 0 ? commandObjectRange(image, command) : [0, 0];
+    const last = objects > 0 ? image.objects[objects - 1] : null;
+    return { step: s, total, command, objects, current, head: last ? endPoint(last) : null };
+  }
+  function endPoint(o2) {
+    if (o2.k === "F") return [o2.x, o2.y];
+    if (o2.k === "L" || o2.k === "A") return [o2.x2, o2.y2];
+    if (o2.k === "R") {
+      const c = o2.contours[o2.contours.length - 1];
+      return [c[0], c[1]];
+    }
+    return null;
+  }
+  function clampStep(step, total) {
+    if (!Number.isFinite(step)) return total;
+    return Math.max(0, Math.min(total, Math.round(step)));
+  }
+  function nextStep(image, step, dir, by = "command") {
+    const total = image.commandEnds?.length ?? 0;
+    let s = clampStep(step, total);
+    if (by !== "object") return clampStep(s + dir, total);
+    const ends = image.commandEnds;
+    const made = (ci2) => ends[ci2] - (ci2 > 0 ? ends[ci2 - 1] : 0);
+    if (dir > 0) {
+      while (s < total) {
+        s++;
+        if (made(s - 1) > 0) return s;
+      }
+      return total;
+    }
+    while (s > 0) {
+      s--;
+      if (s === 0 || made(s - 1) > 0) return s;
+    }
+    return 0;
+  }
+
+  // src/ui/analyser.js
+  var ROW_PX = 20;
+  var THUMB_PX = 64;
+  var TAB_LABELS = { apertures: "Apertures", shapes: "Shapes", commands: "Commands" };
+  var AnalyserDock = class {
+    /** @param {DockHost} host */
+    constructor(host) {
+      this.host = host;
+      this.playing = false;
+      this.selectedCommand = null;
+      this.#build();
+    }
+    get s() {
+      return this.host.settings();
+    }
+    // ---------------------------------------------------------------- layout
+    #build() {
+      this.tabs = Object.fromEntries(
+        Object.entries(TAB_LABELS).map(([k2, label]) => [
+          k2,
+          h("button", { "data-testid": `tab-${k2}`, onclick: () => this.setTab(k2) }, label)
+        ])
+      );
+      const btn = (label, title, testid, onclick) => h("button", { title, "data-testid": testid, onclick }, label);
+      this.btnPlay = btn("▶", "Play the layer as a photoplotter would draw it", "pb-play", () => this.togglePlay());
+      this.slider = h("input", {
+        type: "range",
+        min: 0,
+        max: 0,
+        step: 1,
+        value: 0,
+        class: "pb-slider",
+        "data-testid": "pb-slider",
+        title: "Playback position (commands run)",
+        oninput: (e) => this.#setStep(Number(e.target.value), { start: true })
+      });
+      this.bySel = h(
+        "select",
+        {
+          title: "Step by command, or skip to the next command that draws something",
+          "data-testid": "pb-by",
+          onchange: (e) => {
+            this.s.playback.by = e.target.value;
+            this.host.touch();
+          }
+        },
+        [h("option", { value: "command" }, "by command"), h("option", { value: "object" }, "by object")]
+      );
+      this.speedSel = h(
+        "select",
+        {
+          title: "Playback speed (commands per second)",
+          "data-testid": "pb-speed",
+          onchange: (e) => {
+            this.s.playback.speed = Number(e.target.value);
+            this.host.touch();
+          }
+        },
+        PLAYBACK_SPEEDS.map((v) => h("option", { value: v }, `${v.toLocaleString("en")}/s`))
+      );
+      this.pos = h("span", { class: "pb-pos", "data-testid": "pb-pos" }, "");
+      this.btnOpen = h("button", {
+        class: "dock-toggle",
+        "data-testid": "dock-toggle",
+        title: "Show or hide the analyser",
+        onclick: () => this.setOpen(!this.s.open)
+      });
+      this.head = h("div", { class: "dock-head" }, [
+        this.btnOpen,
+        h("span", { class: "seg" }, Object.values(this.tabs)),
+        h("span", { class: "playback" }, [
+          btn("⏮", "Rewind: start playback from an empty layer", "pb-rewind", () => this.rewind()),
+          btn("◀", "Step back (,)", "pb-back", () => this.step(-1)),
+          this.btnPlay,
+          btn("▶|", "Step forward (.)", "pb-forward", () => this.step(1)),
+          btn("⏭", "End playback: show the whole layer", "pb-end", () => this.stop()),
+          this.slider,
+          this.bySel,
+          this.speedSel
+        ]),
+        this.pos
+      ]);
+      this.body = h("div", { class: "dock-body", "data-testid": "analyser" });
+      this.el = h("section", { class: "analyser" }, [this.head, this.body]);
+    }
+    setOpen(open2) {
+      this.s.open = open2;
+      this.host.touch();
+      this.refresh();
+    }
+    setTab(tab) {
+      this.s.tab = tab;
+      if (!this.s.open) this.s.open = true;
+      this.host.touch();
+      this.refresh();
+    }
+    // ---------------------------------------------------------------- analysis cache
+    /** Per-layer analysis, computed once (layers are rebuilt when the project changes). */
+    #analysis(layer) {
+      if (!layer._analysis) {
+        layer._analysis = {
+          table: apertureTable(layer.image, layer.commands),
+          stats: imageStats(layer.image),
+          ctx: layer.kind === "gerber" ? coordinateContext(layer.commands) : null
+        };
+      }
+      return layer._analysis;
+    }
+    // ---------------------------------------------------------------- refresh
+    /** The layers were rebuilt: re-apply highlight and playback from the settings. */
+    layersChanged() {
+      this.#pause();
+      this.selectedCommand = null;
+      const pb = this.s.playback;
+      if (pb.layer && !this.#layer(pb.layer)) Object.assign(pb, { layer: null, step: null });
+      const hl3 = this.s.highlight;
+      if (hl3 && !this.#layer(hl3.layer)) this.s.highlight = null;
+      this.#applyHighlight();
+      this.#applyPlayback();
+      this.refresh();
+    }
+    #layer(id3) {
+      return this.host.layers().find((l) => l.id === id3) || null;
+    }
+    refresh() {
+      const s = this.s;
+      this.el.classList.toggle("closed", !s.open);
+      this.btnOpen.textContent = s.open ? "▾" : "▴";
+      for (const [k2, b3] of Object.entries(this.tabs)) b3.classList.toggle("on", s.open && s.tab === k2);
+      this.bySel.value = s.playback.by;
+      this.speedSel.value = String(s.playback.speed);
+      this.#refreshPlaybackBar();
+      clear(this.body);
+      this.cmdList = null;
+      if (!s.open) return;
+      const layer = this.host.layer();
+      if (!layer) {
+        this.body.append(h("p", { class: "muted" }, "Load Gerber or drill files and select a layer to analyse it."));
+        return;
+      }
+      if (s.tab === "apertures") this.#renderApertures(layer);
+      else if (s.tab === "shapes") this.#renderShapes(layer);
+      else this.#renderCommands(layer);
+    }
+    /** The selection changed (viewer click, inspector, command list). */
+    onSelection() {
+      if (!this.s.open) return;
+      if (this.s.tab === "commands" && this.cmdList) {
+        const hit = this.host.selection();
+        if (hit && hit.layerId === this.cmdList.layer.id) {
+          const ci2 = objectCommand(this.cmdList.layer.image, hit.index);
+          if (ci2 >= 0) this.#scrollTo(ci2);
+        }
+        this.#renderRows();
+      } else if (this.s.tab === "apertures") this.refresh();
+    }
+    /** Open the command list at the command that produced an object. */
+    showCommand(layerId, index) {
+      const layer = this.#layer(layerId);
+      if (!layer) return;
+      this.s.tab = "commands";
+      this.s.open = true;
+      this.refresh();
+      const ci2 = objectCommand(layer.image, index);
+      if (ci2 >= 0) {
+        this.selectedCommand = { layerId, ci: ci2 };
+        this.#scrollTo(ci2, true);
+        this.#renderRows();
+      }
+    }
+    // ---------------------------------------------------------------- highlight
+    /** Mark every use of aperture `code` (null = regions) on a layer; same again clears it. */
+    toggleHighlight(layer, code) {
+      const hl3 = this.s.highlight;
+      const same = hl3 && hl3.layer === layer.id && hl3.code === code;
+      this.s.highlight = same ? null : { layer: layer.id, code };
+      this.#applyHighlight();
+      this.host.touch();
+      if (!same) {
+        const n2 = this.host.viewer.highlight?.indices.length ?? 0;
+        const what = code === null ? "regions" : `${layer.kind === "excellon" ? "T" : "D"}${code}`;
+        this.host.message(`${what}: ${n2.toLocaleString("en")} use${n2 === 1 ? "" : "s"} highlighted on ${layer.name}`);
+      }
+      this.refresh();
+    }
+    #applyHighlight() {
+      const hl3 = this.s.highlight;
+      const layer = hl3 && this.#layer(hl3.layer);
+      this.host.viewer.setHighlight(
+        layer ? { layerId: layer.id, indices: objectsWithAperture(layer.image, hl3.code) } : null
+      );
+    }
+    // ---------------------------------------------------------------- apertures
+    #renderApertures(layer) {
+      const { table, stats } = this.#analysis(layer);
+      const drill = layer.kind === "excellon";
+      const hl3 = this.s.highlight;
+      const sel = this.host.selection();
+      const selCode = sel && sel.layerId === layer.id ? sel.object.ap?.code ?? null : void 0;
+      const cols = [
+        ["label", drill ? "Tool" : "D-code", (r2) => r2.label, "code"],
+        ["shape", "Shape", (r2) => r2.description],
+        ["size", "Size (mm)", (r2) => `${fmtMm(r2.widthMm)} × ${fmtMm(r2.heightMm)}`, "widthMm"],
+        ["area", "Area (mm²)", (r2) => (r2.areaExact ? "" : "≈") + fmtMm(r2.areaMm2), "areaMm2"],
+        ["flashes", drill ? "Holes" : "Flashes", (r2) => count(r2.flashes), "flashes"],
+        ["draws", drill ? "Slots" : "Draws", (r2) => count(r2.draws), "draws"],
+        ["arcs", "Arcs", (r2) => count(r2.arcs), "arcs"],
+        ["length", drill ? "Routed (mm)" : "Length (mm)", (r2) => r2.lengthMm ? fmtMm(r2.lengthMm) : "", "lengthMm"],
+        ["function", "Function", (r2) => r2.function],
+        ["line", "Line", (r2) => String(r2.line), "line"]
+      ];
+      const sort = this.s.sort && cols.some((c) => c[3] === this.s.sort.key) ? this.s.sort : { key: "code", desc: false };
+      const rows = table.slice().sort((a2, b3) => {
+        const va2 = a2[sort.key];
+        const vb = b3[sort.key];
+        return (va2 < vb ? -1 : va2 > vb ? 1 : a2.code - b3.code) * (sort.desc ? -1 : 1);
+      });
+      const thead = h(
+        "tr",
+        {},
+        cols.map(
+          ([k2, label, , key2]) => h(
+            "th",
+            {
+              class: `c-${k2}${key2 ? " sortable" : ""}`,
+              title: key2 ? "Sort" : void 0,
+              onclick: key2 ? () => {
+                this.s.sort = { key: key2, desc: sort.key === key2 ? !sort.desc : false };
+                this.host.touch();
+                this.refresh();
+              } : void 0
+            },
+            label + (sort.key === key2 ? sort.desc ? " ▾" : " ▴" : "")
+          )
+        )
+      );
+      const body = rows.map(
+        (r2) => h(
+          "tr",
+          {
+            class: `${r2.uses ? "" : "unused"}${hl3 && hl3.layer === layer.id && hl3.code === r2.code ? " on" : ""}${selCode === r2.code ? " sel" : ""}`,
+            "data-testid": "aperture-row",
+            "data-code": r2.code,
+            title: r2.uses ? "Click: highlight every use on the board" : "Not used",
+            onclick: () => this.toggleHighlight(layer, r2.code)
+          },
+          cols.map(([k2, , f2]) => h("td", { class: `c-${k2}` }, f2(r2)))
+        )
+      );
+      if (stats.regions) {
+        const on3 = hl3 && hl3.layer === layer.id && hl3.code === null;
+        body.push(
+          h(
+            "tr",
+            {
+              class: `regions${on3 ? " on" : ""}${selCode === null ? " sel" : ""}`,
+              "data-testid": "aperture-row",
+              "data-code": "regions",
+              title: "Click: highlight every region on the board",
+              onclick: () => this.toggleHighlight(layer, null)
+            },
+            [
+              h("td", { class: "c-label" }, "G36"),
+              h("td", { class: "c-shape" }, `regions (${count(stats.regionVertices)} vertices)`),
+              h("td", {}, ""),
+              h("td", { class: "c-area" }, fmtMm(stats.regionAreaMm2)),
+              h("td", { class: "c-flashes" }, count(stats.regions)),
+              h("td", { colspan: 5 }, "")
+            ]
+          )
+        );
+      }
+      const unused = table.filter((r2) => !r2.uses).length;
+      this.body.append(
+        h("div", { class: "dock-note muted" }, [
+          `${layer.name}: ${table.length} ${drill ? "tool" : "aperture"}${table.length === 1 ? "" : "s"}`,
+          unused ? `, ${unused} unused` : "",
+          " · click a row to highlight its uses"
+        ]),
+        h("table", { class: "apt", "data-testid": "aperture-table" }, [h("thead", {}, thead), h("tbody", {}, body)])
+      );
+    }
+    // ---------------------------------------------------------------- shapes
+    #renderShapes(layer) {
+      const { table, stats } = this.#analysis(layer);
+      const drill = layer.kind === "excellon";
+      const b3 = stats.bounds;
+      const facts = [
+        ["Objects", count(stats.objects)],
+        [drill ? "Holes" : "Flashes", count(stats.flashes)],
+        [drill ? "Slots / routes" : "Draws", count(stats.draws)],
+        ["Arcs", count(stats.arcs)],
+        drill ? null : ["Regions", `${count(stats.regions)} (${count(stats.regionVertices)} vertices)`],
+        drill ? null : ["Polarity", `${count(stats.dark)} dark · ${count(stats.clear)} clear`],
+        ["Drawn length", `${fmtMm(stats.drawLengthMm)} mm`],
+        [
+          drill ? "Narrowest slot" : "Narrowest draw",
+          stats.minDrawWidthMm === null ? "—" : `${fmtMm(stats.minDrawWidthMm)} mm`
+        ],
+        [drill ? "Smallest hole" : "Smallest flash", stats.minFlashMm === null ? "—" : `${fmtMm(stats.minFlashMm)} mm`],
+        [drill ? "Largest hole" : "Largest flash", stats.maxFlashMm === null ? "—" : `${fmtMm(stats.maxFlashMm)} mm`],
+        [drill ? "Tools used" : "Apertures used", `${stats.aperturesUsed} of ${stats.aperturesDefined}`],
+        ["Extent", b3 ? `${fmtMm(b3[2] - b3[0])} × ${fmtMm(b3[3] - b3[1])} mm` : "—"]
+      ].filter(Boolean);
+      const hl3 = this.s.highlight;
+      const card = (key2, title, sub, uses, image, code) => h(
+        "button",
+        {
+          class: `shape-card${uses ? "" : " unused"}${hl3 && hl3.layer === layer.id && hl3.code === code ? " hl" : ""}`,
+          "data-testid": "shape-card",
+          "data-code": key2,
+          title: `${title}: ${sub}${uses ? " · click to highlight every use" : " · not used"}`,
+          onclick: () => this.toggleHighlight(layer, code)
+        },
+        [
+          thumbnail(image),
+          h("span", { class: "shape-title" }, title),
+          h("span", { class: "shape-sub" }, sub),
+          h("span", { class: "shape-uses" }, `×${count(uses)}`)
+        ]
+      );
+      const cards = table.map(
+        (r2) => card(r2.code, r2.label, r2.description, r2.uses, apertureImage(layer.image.apertures.get(r2.code)), r2.code)
+      );
+      if (stats.regions) {
+        const first = layer.image.objects.find((o2) => o2.k === "R");
+        const bb = [Infinity, Infinity, -Infinity, -Infinity];
+        for (const c of first.contours)
+          for (let i = 0; i < c.length; i += 2) {
+            bb[0] = Math.min(bb[0], c[i]);
+            bb[1] = Math.min(bb[1], c[i + 1]);
+            bb[2] = Math.max(bb[2], c[i]);
+            bb[3] = Math.max(bb[3], c[i + 1]);
+          }
+        cards.push(
+          card("regions", "Regions", "G36/G37 filled contours", stats.regions, { objects: [first], bounds: bb }, null)
+        );
+      }
+      this.body.append(
+        h("div", { class: "shapes" }, [
+          h(
+            "dl",
+            { class: "kv shape-stats", "data-testid": "shape-stats" },
+            facts.flatMap(([k2, v]) => [h("dt", {}, k2), h("dd", {}, v)])
+          ),
+          h("div", { class: "gallery", "data-testid": "gallery" }, cards)
+        ])
+      );
+    }
+    // ---------------------------------------------------------------- commands
+    #renderCommands(layer) {
+      const n2 = layer.commands?.length ?? 0;
+      const scroller = h("div", {
+        class: "cmds",
+        "data-testid": "command-list",
+        onscroll: () => this.#renderRows()
+      });
+      const spacer = h("div", { class: "cmds-spacer", style: `height: ${n2 * ROW_PX}px` });
+      const rows = h("div", { class: "cmds-rows" });
+      spacer.append(rows);
+      scroller.append(spacer);
+      this.body.append(
+        h("div", { class: "dock-note muted" }, [
+          `${layer.name}: ${count(n2)} commands · click a command to select what it drew`,
+          this.s.playback.layer === layer.id && this.s.playback.step !== null ? " (or to play up to it)" : ""
+        ]),
+        scroller
+      );
+      this.cmdList = { layer, scroller, rows, first: -1, last: -1 };
+      const pb = this.s.playback;
+      const sel = this.host.selection();
+      let at2 = -1;
+      if (this.selectedCommand?.layerId === layer.id) at2 = this.selectedCommand.ci;
+      else if (pb.layer === layer.id && pb.step !== null) at2 = pb.step - 1;
+      else if (sel?.layerId === layer.id) at2 = objectCommand(layer.image, sel.index);
+      requestAnimationFrame(() => {
+        if (this.cmdList?.scroller !== scroller) return;
+        if (at2 >= 0) this.#scrollTo(at2, true);
+        this.#renderRows();
+      });
+    }
+    #scrollTo(ci2, centre = false) {
+      const list = this.cmdList;
+      if (!list) return;
+      const sc3 = list.scroller;
+      const y2 = ci2 * ROW_PX;
+      if (centre || y2 < sc3.scrollTop || y2 + ROW_PX > sc3.scrollTop + sc3.clientHeight) {
+        sc3.scrollTop = Math.max(0, y2 - (centre ? sc3.clientHeight / 2 : sc3.clientHeight / 3));
+      }
+    }
+    /** Render only the rows in view (files can have millions of commands). */
+    #renderRows() {
+      const list = this.cmdList;
+      if (!list) return;
+      const { layer, scroller, rows } = list;
+      const n2 = layer.commands.length;
+      const first = Math.max(0, Math.floor(scroller.scrollTop / ROW_PX) - 5);
+      const last = Math.min(n2, Math.ceil((scroller.scrollTop + scroller.clientHeight) / ROW_PX) + 5);
+      const an2 = this.#analysis(layer);
+      const pb = this.s.playback;
+      const playing = pb.layer === layer.id && pb.step !== null;
+      const sel = this.host.selection();
+      const selCi = sel?.layerId === layer.id ? objectCommand(layer.image, sel.index) : -1;
+      const chosen = this.selectedCommand?.layerId === layer.id ? this.selectedCommand.ci : -1;
+      clear(rows);
+      rows.style.transform = `translateY(${first * ROW_PX}px)`;
+      for (let ci2 = first; ci2 < last; ci2++) {
+        const c = layer.commands[ci2];
+        const d = describeCommand(layer, ci2, an2.ctx);
+        const cls = ["cmd-row"];
+        if (playing && ci2 === pb.step - 1) cls.push("cur");
+        if (playing && ci2 >= pb.step) cls.push("future");
+        if (ci2 === selCi || ci2 === chosen) cls.push("sel");
+        if (d.objects) cls.push("draws");
+        rows.append(
+          h(
+            "div",
+            {
+              class: cls.join(" "),
+              "data-testid": "command-row",
+              "data-index": ci2,
+              "data-line": c.line,
+              title: `Command ${ci2 + 1}, source line ${c.line}`,
+              onclick: () => this.#clickCommand(layer, ci2)
+            },
+            [
+              h("span", { class: "ci" }, String(ci2 + 1)),
+              h("span", { class: "ln" }, String(c.line)),
+              h("span", { class: "cmd-code" }, d.code),
+              h("span", { class: "text" }, d.text)
+            ]
+          )
+        );
+      }
+      list.first = first;
+      list.last = last;
+    }
+    #clickCommand(layer, ci2) {
+      const pb = this.s.playback;
+      this.selectedCommand = { layerId: layer.id, ci: ci2 };
+      if (pb.layer === layer.id && pb.step !== null) {
+        this.#setStep(ci2 + 1);
+        return;
+      }
+      const [a2, b3] = commandObjectRange(layer.image, ci2);
+      if (b3 > a2) this.host.select(layer.id, a2);
+      this.#renderRows();
+    }
+    // ---------------------------------------------------------------- playback
+    /** Start (or continue) playback on the selected layer. */
+    #ensurePlayback(atStart) {
+      const layer = this.host.layer();
+      if (!layer) return null;
+      const pb = this.s.playback;
+      if (pb.layer !== layer.id || pb.step === null) {
+        pb.layer = layer.id;
+        pb.step = atStart ? 0 : layer.commands.length;
+      }
+      return layer;
+    }
+    rewind() {
+      this.#pause();
+      if (this.#ensurePlayback(true)) this.#setStep(0);
+    }
+    step(dir) {
+      this.#pause();
+      const layer = this.#ensurePlayback(dir > 0);
+      if (!layer) return;
+      const pb = this.s.playback;
+      this.#setStep(nextStep(layer.image, pb.step, dir, pb.by));
+    }
+    stop() {
+      this.#pause();
+      Object.assign(this.s.playback, { layer: null, step: null });
+      this.#applyPlayback();
+      this.host.touch();
+      this.#afterStep();
+    }
+    togglePlay() {
+      if (this.playing) {
+        this.#pause();
+        this.host.touch();
+        this.#refreshPlaybackBar();
+        return;
+      }
+      const layer = this.#ensurePlayback(true);
+      if (!layer) return;
+      const pb = this.s.playback;
+      if (pb.step >= layer.commands.length) pb.step = 0;
+      this.playing = true;
+      let last = performance.now();
+      let carry = 0;
+      const tick = (now) => {
+        if (!this.playing) return;
+        carry += (now - last) / 1e3 * pb.speed;
+        last = now;
+        let k2 = Math.floor(carry);
+        carry -= k2;
+        let s = pb.step;
+        while (k2-- > 0 && s < layer.commands.length) s = nextStep(layer.image, s, 1, pb.by);
+        if (s !== pb.step) this.#setStep(s, { quiet: true });
+        if (s >= layer.commands.length) {
+          this.#pause();
+          this.host.touch();
+          this.#refreshPlaybackBar();
+          return;
+        }
+        this.raf = requestAnimationFrame(tick);
+      };
+      this.raf = requestAnimationFrame(tick);
+      this.#refreshPlaybackBar();
+    }
+    #pause() {
+      this.playing = false;
+      cancelAnimationFrame(this.raf);
+    }
+    /** Move playback to `step` (commands run). quiet: no autosave touch (while playing). */
+    #setStep(step, { quiet = false, start: start2 = false } = {}) {
+      if (start2) this.#ensurePlayback(true);
+      const pb = this.s.playback;
+      const layer = pb.layer && this.#layer(pb.layer);
+      if (!layer) return;
+      pb.step = clampStep(step, layer.commands.length);
+      this.#applyPlayback();
+      if (!quiet) this.host.touch();
+      this.#afterStep();
+    }
+    #afterStep() {
+      this.#refreshPlaybackBar();
+      const pb = this.s.playback;
+      if (this.cmdList) {
+        if (pb.layer === this.cmdList.layer.id && pb.step > 0) this.#scrollTo(pb.step - 1);
+        this.#renderRows();
+      }
+    }
+    /** Draw the playback layer up to the current step, and show the plotter head. */
+    #applyPlayback() {
+      const pb = this.s.playback;
+      let changed = false;
+      for (const l of this.host.layers()) {
+        const want = pb.layer === l.id && pb.step !== null ? visibleObjects(l.image, pb.step) : void 0;
+        if (l.limit !== want) {
+          l.limit = want;
+          changed = true;
+        }
+      }
+      const layer = pb.layer && this.#layer(pb.layer);
+      if (layer && pb.step !== null) {
+        const st2 = playbackState(layer.image, pb.step);
+        this.host.viewer.setPlayhead({ layerId: layer.id, current: st2.current, head: st2.head });
+      } else this.host.viewer.setPlayhead(null);
+      if (changed) this.host.viewer.layersChanged();
+    }
+    #refreshPlaybackBar() {
+      const pb = this.s.playback;
+      const layer = pb.layer && this.#layer(pb.layer);
+      const active = this.host.layer();
+      this.btnPlay.textContent = this.playing ? "⏸" : "▶";
+      this.btnPlay.classList.toggle("on", this.playing);
+      this.el.classList.toggle("playing", !!layer);
+      if (!layer) {
+        this.slider.max = String(active?.commands?.length ?? 0);
+        this.slider.value = this.slider.max;
+        this.pos.textContent = active ? "Playback off: whole layer shown" : "";
+        return;
+      }
+      const st2 = playbackState(layer.image, pb.step);
+      this.slider.max = String(st2.total);
+      this.slider.value = String(st2.step);
+      let text = `${layer.name} · step ${count(st2.step)} / ${count(st2.total)} · ${count(st2.objects)} object${st2.objects === 1 ? "" : "s"}`;
+      if (st2.command >= 0) {
+        const c = layer.commands[st2.command];
+        const d = describeCommand(layer, st2.command, this.#analysis(layer).ctx);
+        text += ` · line ${c.line}: ${d.text}`;
+      }
+      this.pos.textContent = text;
+      this.pos.title = text;
+    }
+  };
+  function count(n2) {
+    return n2.toLocaleString("en");
+  }
+  function thumbnail(image) {
+    const dpr = globalThis.devicePixelRatio || 1;
+    const size = Math.round(THUMB_PX * dpr);
+    const c = h("canvas", { class: "thumb", width: size, height: size });
+    const b3 = image.bounds;
+    if (!b3 || !(b3[2] > b3[0] || b3[3] > b3[1])) return c;
+    const w2 = Math.max(b3[2] - b3[0], 1e-6);
+    const hh2 = Math.max(b3[3] - b3[1], 1e-6);
+    const s = size * 0.8 / Math.max(w2, hh2);
+    const map = { s, mirror: false, ox: size / 2 - s * (b3[0] + b3[2]) / 2, oy: size / 2 + s * (b3[1] + b3[3]) / 2 };
+    const ctx = c.getContext("2d");
+    drawImage(image, new CanvasTarget(ctx, map));
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalCompositeOperation = "source-in";
+    ctx.fillStyle = rgba(MISC.thumbnail, 1);
+    ctx.fillRect(0, 0, size, size);
+    ctx.globalCompositeOperation = "source-over";
+    return c;
   }
 
   // src/ui/app.js
@@ -22006,8 +23398,21 @@ void main() {
         this.statusHover,
         this.projectInfo
       ]);
+      const app = this;
+      this.dock = new AnalyserDock({
+        settings: () => app.project.settings.analyze,
+        layer: () => app.layerById(app.activeLayerId) || null,
+        layers: () => app.layers,
+        selection: () => app.selection,
+        select: (layerId, index) => app.#selectObject(layerId, index),
+        get viewer() {
+          return app.viewer;
+        },
+        touch: () => app.#touch(),
+        message: (text) => app.#message(text)
+      });
       clear(this.root);
-      this.root.append(toolbar, left, this.main, right, status);
+      this.root.append(toolbar, left, this.main, this.dock.el, right, status);
       this.#bindDrop();
       window.addEventListener("keydown", (e) => {
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
@@ -22018,7 +23423,8 @@ void main() {
         if (e.key === "Escape") return this.viewer.select(null);
         if (e.ctrlKey || e.metaKey || e.altKey || isTyping(e.target)) return;
         const k2 = e.key.toLowerCase();
-        if (k2 === "f") this.#fit();
+        if (k2 === "," || k2 === ".") this.dock.step(k2 === "." ? 1 : -1);
+        else if (k2 === "f") this.#fit();
         else if (k2 === "s") this.#toggleSolo();
         else if (k2 === "b") this.#setView({ background: this.view.background === "light" ? "dark" : "light" });
         else if (k2 === "i" && this.activeLayerId && this.view.mode !== "realistic") {
@@ -22157,6 +23563,7 @@ void main() {
       this.viewer3d.setLayers(this.#renderLayers());
       this.#showDimension();
       this.selection = null;
+      this.dock.layersChanged();
       this.#refresh();
     }
     #renderLayers() {
@@ -22187,6 +23594,7 @@ void main() {
       this.view.activeLayer = id3;
       this.viewer.settings.activeLayerId = id3;
       const solo = this.view.solo;
+      this.dock.refresh();
       if (solo.length === 1 && solo[0] !== id3) return this.#setView({ solo: [id3] });
       this.#refreshLayers();
       this.#refreshDiagnostics();
@@ -22207,6 +23615,7 @@ void main() {
       this.view.activeLayer = id3;
       this.viewer.settings.activeLayerId = id3;
       this.#setView({ solo: [...solo, id3] });
+      this.dock.refresh();
       this.#refreshDiagnostics();
     }
     /** Show the 2D or the 3D view, as the project's view settings say. */
@@ -22344,6 +23753,7 @@ void main() {
       this.#refreshStack();
       this.#refreshInspector();
       this.#refreshDiagnostics();
+      this.dock.refresh();
     }
     #refreshToolbar() {
       const v = this.view;
@@ -22527,6 +23937,7 @@ void main() {
     }
     #onSelect(hit) {
       this.selection = hit;
+      const layerChanged = hit && hit.layerId !== this.activeLayerId;
       if (hit && this.view.solo.length !== 1) {
         this.activeLayerId = hit.layerId;
         this.view.activeLayer = hit.layerId;
@@ -22535,6 +23946,15 @@ void main() {
       this.#refreshInspector();
       this.#refreshLayers();
       this.#refreshDiagnostics();
+      if (layerChanged) this.dock.refresh();
+      this.dock.onSelection();
+    }
+    /** Select one object (from the analyser), as if it had been clicked on the board. */
+    #selectObject(layerId, index) {
+      const l = this.layerById(layerId);
+      const o2 = l?.image.objects[index];
+      if (!o2) return;
+      this.viewer.select({ layerId, index, object: o2, x: null, y: null });
     }
     #sourceLine(layer, line) {
       let lines = this.textCache.get(layer.id);
@@ -22566,8 +23986,7 @@ void main() {
       ];
       if (ap2) {
         const label = l.kind === "excellon" ? `T${ap2.code}` : `D${ap2.code}`;
-        const desc = ap2.kind === "macro" ? `macro ${ap2.template}(${ap2.params.join(", ")})` : ap2.kind === "C" ? `circle ⌀${fmt(ap2.dia)} mm` : ap2.kind === "R" || ap2.kind === "O" ? `${ap2.kind === "R" ? "rectangle" : "obround"} ${fmt(ap2.w)} × ${fmt(ap2.h)} mm` : `${ap2.template} ${ap2.params.join(" × ")}`;
-        rows.push([l.kind === "excellon" ? "Tool" : "Aperture", `${label} · ${desc}`]);
+        rows.push([l.kind === "excellon" ? "Tool" : "Aperture", `${label} · ${describeAperture(ap2)}`]);
         if (ap2.attributes?.[".AperFunction"]) rows.push(["Function", ap2.attributes[".AperFunction"].join(", ")]);
       }
       if (o2.k === "F") rows.push(["Position", `${fmt(o2.x)}, ${fmt(o2.y)} mm`]);
@@ -22590,6 +24009,9 @@ void main() {
       const attrs = l.image.objectAttributes?.[o2.at];
       if (attrs) for (const [k2, v] of Object.entries(attrs)) rows.push([k2, v.join(", ")]);
       rows.push(["Source line", String(o2.ln)]);
+      const ci2 = objectCommand(l.image, hit.index);
+      if (ci2 >= 0 && l.commands[ci2].line !== o2.ln)
+        rows.push(["Drawn by", `command ${ci2 + 1} on line ${l.commands[ci2].line}`]);
       this.inspector.append(
         h(
           "dl",
@@ -22598,7 +24020,27 @@ void main() {
         )
       );
       this.inspector.append(
-        h("div", { class: "code", "data-testid": "source-line" }, `${o2.ln}: ${this.#sourceLine(l, o2.ln)}`)
+        h("div", { class: "code", "data-testid": "source-line" }, `${o2.ln}: ${this.#sourceLine(l, o2.ln)}`),
+        h("div", { class: "inspector-actions" }, [
+          h(
+            "button",
+            {
+              "data-testid": "show-command",
+              title: "Open the command list at the command that drew this",
+              onclick: () => this.dock.showCommand(l.id, hit.index)
+            },
+            "Show command"
+          ),
+          h(
+            "button",
+            {
+              "data-testid": "show-uses",
+              title: ap2 ? "Highlight every object drawn with this aperture" : "Highlight every region",
+              onclick: () => this.dock.toggleHighlight(l, ap2 ? ap2.code : null)
+            },
+            ap2 ? `All ${l.kind === "excellon" ? "T" : "D"}${ap2.code}` : "All regions"
+          )
+        ])
       );
     }
     #refreshDiagnostics() {
@@ -22663,8 +24105,8 @@ void main() {
   }
   function describeShort(hit, layer) {
     const o2 = hit.object;
-    const ap2 = o2.ap ? `${layer.kind === "excellon" ? "T" : "D"}${o2.ap.code} ` : "";
-    return `${layer.name} · ${ap2}${KIND_LABEL[o2.k]} · line ${o2.ln}`;
+    const ap2 = o2.ap ? `${layer.kind === "excellon" ? "T" : "D"}${o2.ap.code} ${describeAperture(o2.ap)} · ` : "";
+    return `${layer.name} · ${ap2}${KIND_LABEL[o2.k]} · ${o2.dark ? "dark" : "clear"} · line ${o2.ln}`;
   }
   function fmt(v) {
     return Number.isFinite(v) ? Math.abs(v) >= 1e3 ? v.toFixed(2) : v.toFixed(4).replace(/\.?0+$/, "") : "—";

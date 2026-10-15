@@ -34,7 +34,7 @@ test('classic view: black background and the palette colour per file', async ({ 
   await mode(page, 'classic');
   const state = await page.evaluate(() => window.__pcam.state());
   const i = state.layers.findIndex((l) => l.name === 'synthetic-board-NPTH.drl');
-  expect(near(await pixelAt(page, 0.2, -5), CLASSIC_BACKGROUND.rgb, 0)).toBe(true);
+  expect(near(await pixelAt(page, -5, 20), CLASSIC_BACKGROUND.rgb, 0)).toBe(true);
   // mounting hole: only the NPTH drill layer covers it, drawn at 85 % over black
   const want = CLASSIC[i].rgb.map((c) => Math.round(c * 0.85));
   expect(near(await pixelAt(page, 4, 4), want)).toBe(true);
@@ -102,7 +102,7 @@ test('light background, and every view setting survives save and reopen', async 
   await mode(page, 'classic');
   await page.locator('[data-testid=background]').click();
   await waitRendered(page);
-  expect(near(await pixelAt(page, 0.2, -5), MISC.backgroundLight.rgb, 0)).toBe(true);
+  expect(near(await pixelAt(page, -5, 20), MISC.backgroundLight.rgb, 0)).toBe(true);
   await row(page, 'synthetic-board-F_Cu.gbr').locator('[data-testid=layer-colour]').fill('#00ff00');
   await row(page, 'synthetic-board-B_Mask.gbr').locator('[data-testid=invert]').check();
   const before = await page.evaluate(() => window.__pcam.state().project.settings);

@@ -1,4 +1,5 @@
-// Application shell: toolbar, layer list, inspector, file drop, .pcam open/save, autosave.
+// Application shell: toolbar, layer list, inspector, analyser dock, file drop, .pcam
+// open/save, autosave.
 
 import { Viewer } from '../render/viewer.js';
 import { Viewer3D } from '../render3d/viewer3d.js';
@@ -18,6 +19,9 @@ import { LAYER_TYPES, detectFileKind } from '../model/layers.js';
 import { SOLDER_MASK, SILKSCREEN, FINISH, SUBSTRATE, DEBUG, MISC, lookupMaterial } from '../model/materials.js';
 import { h, clear } from './dom.js';
 import { VIEW_MODES, VIEW_MODE_LABELS, layerColour, toHex, parseHex } from '../model/view-modes.js';
+import { AnalyserDock } from './analyser.js';
+import { describeAperture } from '../analyze/apertures.js';
+import { objectCommand } from '../analyze/commands.js';
 
 const SIDES = ['top', 'bottom', 'inner', 'all'];
 const KIND_LABEL = { F: 'Flash (D03)', L: 'Draw (D01, linear)', A: 'Arc (D01, G02/G03)', R: 'Region (G36/G37)' };
@@ -248,8 +252,22 @@ export class App {
       this.projectInfo,
     ]);
 
+    const app = this;
+    this.dock = new AnalyserDock({
+      settings: () => app.project.settings.analyze,
+      layer: () => app.layerById(app.activeLayerId) || null,
+      layers: () => app.layers,
+      selection: () => app.selection,
+      select: (layerId, index) => app.#selectObject(layerId, index),
+      get viewer() {
+        return app.viewer;
+      },
+      touch: () => app.#touch(),
+      message: (text) => app.#message(text),
+    });
+
     clear(this.root);
-    this.root.append(toolbar, left, this.main, right, status);
+    this.root.append(toolbar, left, this.main, this.dock.el, right, status);
     this.#bindDrop();
     window.addEventListener('keydown', (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
@@ -260,7 +278,8 @@ export class App {
       if (e.key === 'Escape') return this.viewer.select(null);
       if (e.ctrlKey || e.metaKey || e.altKey || isTyping(e.target)) return;
       const k = e.key.toLowerCase();
-      if (k === 'f') this.#fit();
+      if (k === ',' || k === '.') this.dock.step(k === '.' ? 1 : -1);
+      else if (k === 'f') this.#fit();
       else if (k === 's') this.#toggleSolo();
       else if (k === 'b') this.#setView({ background: this.view.background === 'light' ? 'dark' : 'light' });
       else if (k === 'i' && this.activeLayerId && this.view.mode !== 'realistic') {
@@ -407,6 +426,7 @@ export class App {
     this.viewer3d.setLayers(this.#renderLayers());
     this.#showDimension();
     this.selection = null;
+    this.dock.layersChanged();
     this.#refresh();
   }
 
@@ -441,6 +461,7 @@ export class App {
     this.view.activeLayer = id;
     this.viewer.settings.activeLayerId = id;
     const solo = this.view.solo;
+    this.dock.refresh();
     if (solo.length === 1 && solo[0] !== id) return this.#setView({ solo: [id] });
     this.#refreshLayers();
     this.#refreshDiagnostics();
@@ -463,6 +484,7 @@ export class App {
     this.view.activeLayer = id;
     this.viewer.settings.activeLayerId = id;
     this.#setView({ solo: [...solo, id] });
+    this.dock.refresh();
     this.#refreshDiagnostics();
   }
 
@@ -615,6 +637,7 @@ export class App {
     this.#refreshStack();
     this.#refreshInspector();
     this.#refreshDiagnostics();
+    this.dock.refresh();
   }
 
   #refreshToolbar() {
@@ -810,6 +833,7 @@ export class App {
 
   #onSelect(hit) {
     this.selection = hit;
+    const layerChanged = hit && hit.layerId !== this.activeLayerId;
     if (hit && this.view.solo.length !== 1) {
       this.activeLayerId = hit.layerId;
       this.view.activeLayer = hit.layerId;
@@ -818,6 +842,16 @@ export class App {
     this.#refreshInspector();
     this.#refreshLayers();
     this.#refreshDiagnostics();
+    if (layerChanged) this.dock.refresh();
+    this.dock.onSelection();
+  }
+
+  /** Select one object (from the analyser), as if it had been clicked on the board. */
+  #selectObject(layerId, index) {
+    const l = this.layerById(layerId);
+    const o = l?.image.objects[index];
+    if (!o) return;
+    this.viewer.select({ layerId, index, object: o, x: null, y: null });
   }
 
   #sourceLine(layer, line) {
@@ -851,15 +885,7 @@ export class App {
     ];
     if (ap) {
       const label = l.kind === 'excellon' ? `T${ap.code}` : `D${ap.code}`;
-      const desc =
-        ap.kind === 'macro'
-          ? `macro ${ap.template}(${ap.params.join(', ')})`
-          : ap.kind === 'C'
-            ? `circle ⌀${fmt(ap.dia)} mm`
-            : ap.kind === 'R' || ap.kind === 'O'
-              ? `${ap.kind === 'R' ? 'rectangle' : 'obround'} ${fmt(ap.w)} × ${fmt(ap.h)} mm`
-              : `${ap.template} ${ap.params.join(' × ')}`;
-      rows.push([l.kind === 'excellon' ? 'Tool' : 'Aperture', `${label} · ${desc}`]);
+      rows.push([l.kind === 'excellon' ? 'Tool' : 'Aperture', `${label} · ${describeAperture(ap)}`]);
       if (ap.attributes?.['.AperFunction']) rows.push(['Function', ap.attributes['.AperFunction'].join(', ')]);
     }
     if (o.k === 'F') rows.push(['Position', `${fmt(o.x)}, ${fmt(o.y)} mm`]);
@@ -882,6 +908,9 @@ export class App {
     const attrs = l.image.objectAttributes?.[o.at];
     if (attrs) for (const [k, v] of Object.entries(attrs)) rows.push([k, v.join(', ')]);
     rows.push(['Source line', String(o.ln)]);
+    const ci = objectCommand(l.image, hit.index);
+    if (ci >= 0 && l.commands[ci].line !== o.ln)
+      rows.push(['Drawn by', `command ${ci + 1} on line ${l.commands[ci].line}`]);
     this.inspector.append(
       h(
         'dl',
@@ -891,6 +920,26 @@ export class App {
     );
     this.inspector.append(
       h('div', { class: 'code', 'data-testid': 'source-line' }, `${o.ln}: ${this.#sourceLine(l, o.ln)}`),
+      h('div', { class: 'inspector-actions' }, [
+        h(
+          'button',
+          {
+            'data-testid': 'show-command',
+            title: 'Open the command list at the command that drew this',
+            onclick: () => this.dock.showCommand(l.id, hit.index),
+          },
+          'Show command',
+        ),
+        h(
+          'button',
+          {
+            'data-testid': 'show-uses',
+            title: ap ? 'Highlight every object drawn with this aperture' : 'Highlight every region',
+            onclick: () => this.dock.toggleHighlight(l, ap ? ap.code : null),
+          },
+          ap ? `All ${l.kind === 'excellon' ? 'T' : 'D'}${ap.code}` : 'All regions',
+        ),
+      ]),
     );
   }
 
@@ -960,8 +1009,8 @@ function swatchColour(l, project) {
 
 function describeShort(hit, layer) {
   const o = hit.object;
-  const ap = o.ap ? `${layer.kind === 'excellon' ? 'T' : 'D'}${o.ap.code} ` : '';
-  return `${layer.name} · ${ap}${KIND_LABEL[o.k]} · line ${o.ln}`;
+  const ap = o.ap ? `${layer.kind === 'excellon' ? 'T' : 'D'}${o.ap.code} ${describeAperture(o.ap)} · ` : '';
+  return `${layer.name} · ${ap}${KIND_LABEL[o.k]} · ${o.dark ? 'dark' : 'clear'} · line ${o.ln}`;
 }
 
 function fmt(v) {

@@ -31,9 +31,9 @@ body {
 }
 #app {
   display: grid;
-  grid-template-rows: auto 1fr auto;
+  grid-template-rows: auto 1fr auto auto;
   grid-template-columns: 300px 1fr 320px;
-  grid-template-areas: 'top top top' 'left main right' 'status status status';
+  grid-template-areas: 'top top top' 'left main right' 'left dock right' 'status status status';
   height: 100vh;
 }
 .toolbar {
@@ -407,4 +407,232 @@ button.attention {
 }
 .main canvas.view3d:active {
   cursor: grabbing;
+}
+
+/* ---------------------------------------------------------------- analyser dock */
+.analyser {
+  grid-area: dock;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: min(270px, 38vh);
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+}
+.analyser.closed {
+  height: auto;
+}
+.analyser.closed .dock-body {
+  display: none;
+}
+.dock-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--line);
+  min-width: 0;
+}
+.dock-head .playback {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.dock-head .playback button {
+  padding: 2px 6px;
+  min-width: 26px;
+}
+.dock-head .playback select {
+  padding: 2px 4px;
+}
+.pb-slider {
+  width: 140px;
+}
+.pb-pos {
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1 1 220px;
+  font-variant-numeric: tabular-nums;
+}
+.analyser.playing .pb-pos {
+  color: rgb(255, 170, 60);
+}
+.dock-toggle {
+  padding: 1px 8px;
+}
+.dock-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+.dock-body > p {
+  margin: 10px;
+}
+.dock-note {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+table.apt {
+  border-collapse: collapse;
+  margin: 0 6px 6px;
+  font-variant-numeric: tabular-nums;
+}
+table.apt th {
+  position: sticky;
+  top: 0;
+  background: var(--panel-2);
+  color: var(--muted);
+  font-weight: 500;
+  text-align: left;
+  padding: 3px 8px;
+  white-space: nowrap;
+}
+table.apt th.sortable {
+  cursor: pointer;
+}
+table.apt td {
+  padding: 2px 8px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+table.apt td.c-flashes,
+table.apt td.c-draws,
+table.apt td.c-arcs,
+table.apt td.c-length,
+table.apt td.c-area,
+table.apt td.c-line {
+  text-align: right;
+}
+table.apt tbody tr {
+  cursor: pointer;
+}
+table.apt tbody tr:hover {
+  background: var(--panel-2);
+}
+table.apt tr.unused td {
+  color: var(--muted);
+}
+table.apt tr.sel td {
+  box-shadow:
+    inset 0 1px 0 rgba(0, 200, 255, 0.6),
+    inset 0 -1px 0 rgba(0, 200, 255, 0.6);
+}
+table.apt tr.on td {
+  background: rgba(255, 0, 200, 0.22);
+}
+.shapes {
+  display: flex;
+  gap: 12px;
+  padding: 6px 4px;
+  min-height: 0;
+}
+.shape-stats {
+  flex: none;
+  align-content: start;
+}
+.gallery {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-content: flex-start;
+}
+.shape-card {
+  display: grid;
+  grid-template-columns: 64px;
+  justify-items: center;
+  gap: 1px;
+  padding: 4px;
+  width: 92px;
+  font-size: 11px;
+}
+.shape-card .thumb {
+  width: 64px;
+  height: 64px;
+  background: #15171a;
+  border-radius: 3px;
+}
+.shape-card .shape-title {
+  font-weight: 600;
+}
+.shape-card .shape-sub {
+  color: var(--muted);
+  width: 84px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.shape-card.unused {
+  opacity: 0.55;
+}
+.shape-card.hl {
+  border-color: rgb(255, 0, 200);
+  box-shadow: inset 0 0 0 1px rgb(255, 0, 200);
+}
+.cmds {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+.cmds-spacer {
+  position: relative;
+}
+.cmds-rows {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+}
+.cmd-row {
+  /* height: ROW_PX in src/ui/analyser.js */
+  height: 20px;
+  line-height: 20px;
+  display: grid;
+  grid-template-columns: 64px 56px minmax(120px, 280px) 1fr;
+  gap: 8px;
+  padding: 0 8px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.cmd-row > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cmd-row .ci,
+.cmd-row .ln {
+  color: var(--muted);
+  text-align: right;
+}
+.cmd-row .cmd-code {
+  color: #c9d1d9;
+}
+.cmd-row .text {
+  color: var(--muted);
+}
+.cmd-row.draws .text {
+  color: var(--text);
+}
+.cmd-row:hover {
+  background: var(--panel-2);
+}
+.cmd-row.future {
+  opacity: 0.45;
+}
+.cmd-row.sel {
+  background: rgba(0, 200, 255, 0.18);
+}
+.cmd-row.cur {
+  background: rgba(255, 140, 0, 0.3);
+}
+.inspector-actions {
+  display: flex;
+  gap: 6px;
+  margin: 0 10px;
 }
