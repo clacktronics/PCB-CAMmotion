@@ -6,7 +6,7 @@ See `PROJECT_PLAN.md` for goals and milestones.
 ## What this is
 
 A local-only, in-browser PCB CAM tool: Gerber + Excellon in; analysis, editing,
-machine-specific toolpaths (LPKF E44, Makera Carvera, generic G-code) and UV film negatives out.
+machine-specific toolpaths (LPKF E44, Makera Carvera, generic G-code), manufacturability DRC and UV film negatives out.
 
 ## Hard rules
 
@@ -24,12 +24,14 @@ machine-specific toolpaths (LPKF E44, Makera Carvera, generic G-code) and UV fil
 
 ```
 src/parse  src/model  src/render  src/analyze  src/edit
-src/cam    src/post   src/export  src/ui
+src/cam    src/drc    src/post   src/export  src/ui
 test/      samples/
 ```
 
 - Parsers produce a command list that keeps source line numbers.
 - `edit/` operates on the command model, not on rendered pixels.
+- `drc/` checks use the same tool library and toolpaths as `cam/` — don't duplicate
+  offsetting logic. Every finding should carry a location and source line ref.
 - Each machine post-processor lives in its own file in `src/post/` and implements the
   same interface (header, tool change, moves, drill cycle, footer).
 

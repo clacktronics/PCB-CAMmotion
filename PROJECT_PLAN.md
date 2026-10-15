@@ -15,6 +15,8 @@ them, and output either CNC toolpaths (machine-specific) or UV-exposure negative
      **Makera Carvera** (confirm exact model).
    - Generic G-code (GRBL / Marlin / LinuxCNC) as a baseline.
    - Film/negative output (SVG / PNG / PDF at true scale, mirror + invert options) for UV exposure.
+5. **Manufacturability DRC**: check the design against the real tools and machine
+   (can this actually be milled/drilled/exposed?), not just abstract design rules.
 
 ## Constraints
 
@@ -32,6 +34,7 @@ src/
   analyze/    Aperture/shape stats, command inspector, step-through playback
   edit/       Editing tools + undo/redo; serialise back to Gerber/Excellon
   cam/        Offsetting (isolation), drill grouping, outline, tool library
+  drc/        Manufacturability checks against tools, machine and process limits
   post/       Post-processors: generic, lpkf-e44, makera-carvera
   export/     G-code / machine files, film negatives (SVG/PNG/PDF)
   ui/         App shell, panels, settings
@@ -53,9 +56,24 @@ so edits round-trip to valid files and analysis can point back to source lines.
 | 4 | Editor | Select/move/delete/add pads, traces, regions, drills; undo/redo; export round-trips |
 | 5 | Film output | Scaled, mirrored, inverted negatives print at exact size |
 | 6 | CAM core | Isolation paths (multi-pass), drilling, outline with tabs; tool library |
-| 7 | Generic post | G-code preview + simulation, export |
-| 8 | Machine posts | LPKF E44 and Makera Carvera output tested on real machines |
-| 9 | Polish | Project save/load (local file), presets, docs |
+| 7 | DRC | Milling-aware checks report issues on the board, linked to source lines (see below) |
+| 8 | Generic post | G-code preview + simulation, export |
+| 9 | Machine posts | LPKF E44 and Makera Carvera output tested on real machines |
+| 10 | Polish | Project save/load (local file), presets, docs |
+
+### DRC (milestone 7)
+
+Comes after the CAM core because the useful checks depend on the actual tools and toolpaths:
+
+- Gaps narrower than the isolation tool can cut → copper left un-isolated / shorts.
+- Copper narrower than the tool leaves after offsetting → traces or pads that get eaten away.
+- Areas the toolpaths could not reach (compare intended vs. achievable copper).
+- Drill sizes with no matching tool in the library; drills too close to each other or to copper.
+- Annular ring too small after drilling; features too close to the board outline.
+- Minimum feature / spacing limits for UV exposure and etching.
+- Classic geometric checks (clearance, min width, overlaps) as a baseline.
+
+Results appear as markers in the viewer and as a list that links to the editor and source lines.
 
 ## Open questions / research
 
@@ -67,4 +85,4 @@ so edits round-trip to valid files and analysis can point back to source lines.
 
 ## Out of scope (for now)
 
-- PCB design/routing, schematic, DRC beyond simple checks, cloud features.
+- PCB design/routing, schematic, netlist-based (electrical) DRC, cloud features.
