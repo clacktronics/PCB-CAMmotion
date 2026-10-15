@@ -1,0 +1,8 @@
+# Test fixtures must be stored byte-for-byte (CRLF, BOM, NUL and UTF-16 files are deliberate).
+test/fixtures/** -text
+# Don't try to diff the huge / hostile generated files.
+test/fixtures/synthetic/gerber-large/** -diff
+test/fixtures/synthetic/gerber-hostile/** -diff
+test/fixtures/synthetic/drill-large/** -diff
+test/fixtures/synthetic/gerber-broken/binary-garbage.bin.gbr -diff
+test/fixtures/synthetic/gerber-broken/utf16-encoded.gbr -diff
