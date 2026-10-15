@@ -8,6 +8,7 @@ import {
   DEBUG,
   COPPER,
   MISC,
+  SURFACE,
   lookupMaterial,
   rgba,
 } from '../../../src/model/materials.js';
@@ -39,4 +40,13 @@ test('KiCad colour, finish and material names resolve; unknown ones fall back', 
 test('rgba formatting', () => {
   assert.equal(rgba({ rgb: [1, 2, 3], opacity: 0.5 }), 'rgba(1,2,3,0.5)');
   assert.equal(rgba({ rgb: [1, 2, 3] }), 'rgba(1,2,3,1)');
+});
+
+test('3D surfaces: copper is a polished metal, the rest are dielectrics; values in range', () => {
+  assert.equal(SURFACE.copper.metalness, 1);
+  assert.ok(SURFACE.copper.roughness < 0.3);
+  assert.ok(SURFACE.copper.envMapIntensity > SURFACE.soldermask.envMapIntensity);
+  for (const k of ['soldermask', 'legend', 'substrate', 'holeWall', 'other']) assert.equal(SURFACE[k].metalness, 0, k);
+  for (const [k, v] of Object.entries(SURFACE))
+    for (const p of ['metalness', 'roughness']) assert.ok(v[p] >= 0 && v[p] <= 1, `${k}.${p}`);
 });

@@ -2,7 +2,7 @@
 
 import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
-import { openApp, loadBoard, boardFiles, ROOT } from './viewer-helpers.js';
+import { openApp, loadBoard, boardFiles, waitRendered, pixelAt, ROOT } from './viewer-helpers.js';
 import { loadProject } from '../../src/project/pcam.js';
 import { MISC } from '../../src/model/materials.js';
 
@@ -58,6 +58,12 @@ test('3D: shows the stackup in physical order with plated and non-plated holes',
     'copper:bottom',
     'soldermask:bottom',
   ]);
+  // copper (and the plated barrels) is shaded as polished metal; mask, silk and FR4 are not
+  for (const i of s.items) {
+    if (i.type === 'copper') expect([i.metalness, i.roughness < 0.3]).toEqual([1, true]);
+    else expect(i.metalness).toBe(0);
+  }
+  expect(s.holes.platedMetalness).toBe(1);
   expect(s.holes.plated).toBeGreaterThan(0);
   expect(s.holes.npth).toBeGreaterThan(0);
 
@@ -67,6 +73,15 @@ test('3D: shows the stackup in physical order with plated and non-plated holes',
   const corner = await pixel3d(page, 0.02, 0.02);
   expect(corner.every((v, i) => Math.abs(v - bg[i]) <= 3)).toBe(true);
   expect(centre.some((v, i) => Math.abs(v - bg[i]) > 20)).toBe(true);
+  // reflections must not wash out the mask: the board middle (mask over FR4) stays close to
+  // the mask colour of the 2D realistic view
+  await page.locator('[data-testid=view-2d]').click();
+  await waitRendered(page);
+  const flat = await pixelAt(page, 40, 30);
+  await page.locator('[data-testid=view-3d]').click();
+  await page.waitForTimeout(200);
+  const masked = await pixel3d(page, 0.5, 0.5);
+  expect(Math.max(...masked.map((v, i) => Math.abs(v - flat[i])))).toBeLessThan(30);
   expect(external).toEqual([]);
   expect(errors).toEqual([]);
 });

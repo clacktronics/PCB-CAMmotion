@@ -13,7 +13,8 @@ import {
   CylinderGeometry,
   BufferGeometry,
   BufferAttribute,
-  MeshPhongMaterial,
+  MeshStandardMaterial,
+  PMREMGenerator,
   CanvasTexture,
   AmbientLight,
   DirectionalLight,
@@ -25,11 +26,12 @@ import {
   LinearMipmapLinearFilter,
 } from '../../vendor/three/three.module.js';
 import { OrbitControls } from '../../vendor/three/OrbitControls.js';
+import { RoomEnvironment } from '../../vendor/three/RoomEnvironment.js';
 import { buildStack3d, explodeOffsets, explodeGapMm, drillHoles, edgeWalls } from '../model/stack3d.js';
 import { boardArea } from '../render/board-render.js';
 import { LayerPictures, pictureFrame, loopsBounds } from './layer-pictures.js';
 import { backgroundColour } from '../model/view-modes.js';
-import { SUBSTRATE, MISC, lookupMaterial } from '../model/materials.js';
+import { SUBSTRATE, MISC, SURFACE, lookupMaterial } from '../model/materials.js';
 
 const FOV_DEG = 35;
 const MAX_INSTANCES = 50000;
@@ -71,7 +73,13 @@ export class Viewer3D {
     this.scene = new Scene();
     this.camera = new PerspectiveCamera(FOV_DEG, 1, 0.1, 10000);
     this.camera.up.set(0, 0, 1); // board in the XY plane, +Z towards the top side
-    this.scene.add(new AmbientLight(0xffffff, 1.1));
+    // a soft studio room (generated, nothing loaded) for metals to reflect
+    const pmrem = new PMREMGenerator(this.gl);
+    // given to each material (not scene.environment, which would override every material's
+    // envMapIntensity: metals should reflect the room strongly, lacquer and FR4 hardly)
+    this.envMap = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    pmrem.dispose();
+    this.scene.add(new AmbientLight(0xffffff, 0.4));
     const key = new DirectionalLight(0xffffff, 1.8);
     key.position.set(0.4, -0.6, 1);
     const under = new DirectionalLight(0xffffff, 1.0);
@@ -193,15 +201,15 @@ export class Viewer3D {
       tex.anisotropy = anisotropy;
       tex.minFilter = LinearMipmapLinearFilter;
       const transparent = pic.opacity < 1;
-      const mat = new MeshPhongMaterial({
+      const mat = new MeshStandardMaterial({
         map: tex,
         side: DoubleSide,
         transparent,
         opacity: pic.opacity,
         alphaTest: transparent ? 0.02 : 0.5,
         depthWrite: !transparent,
-        shininess: pic.shininess,
-        specular: new Color(0.15, 0.15, 0.15),
+        envMap: this.envMap,
+        ...pic.surface,
       });
       // thin layers are drawn as one face: the outer face of the layer
       const faces = item.type === 'dielectric' ? ['z0', 'z1'] : [item.side === 'bottom' ? 'z0' : 'z1'];
@@ -217,7 +225,15 @@ export class Viewer3D {
         const g = new BufferGeometry();
         g.setAttribute('position', new BufferAttribute(walls.positions, 3));
         g.setAttribute('normal', new BufferAttribute(walls.normals, 3));
-        const edge = new Mesh(g, new MeshPhongMaterial({ color: srgb(sub.rgb, 0.8), side: DoubleSide, shininess: 5 }));
+        const edge = new Mesh(
+          g,
+          new MeshStandardMaterial({
+            color: srgb(sub.rgb, 0.8),
+            side: DoubleSide,
+            envMap: this.envMap,
+            ...SURFACE.substrate,
+          }),
+        );
         edge.name = `${item.id}:edge`;
         this.board.add(edge);
         this.parts.push({ item, mesh: edge, face: 'walls' });
@@ -240,11 +256,11 @@ export class Viewer3D {
     const geo = new CylinderGeometry(0.5, 0.5, 1, 24, 1, true);
     geo.rotateX(Math.PI / 2); // axis along Z
     const finish = lookupMaterial('finish', this.settings.stackup?.finish).value;
-    const make = (list, rgb, shininess) => {
+    const make = (list, rgb, surface) => {
       if (!list.length) return null;
       const mesh = new InstancedMesh(
         geo,
-        new MeshPhongMaterial({ color: srgb(rgb), side: DoubleSide, shininess }),
+        new MeshStandardMaterial({ color: srgb(rgb), side: DoubleSide, envMap: this.envMap, ...surface }),
         list.length,
       );
       mesh.userData.holes = list;
@@ -255,12 +271,12 @@ export class Viewer3D {
       plated: make(
         holes.filter((h) => h.plated),
         finish.rgb,
-        80,
+        SURFACE.copper,
       ),
       npth: make(
         holes.filter((h) => !h.plated),
         MISC.holeWall.rgb ?? sub.rgb,
-        5,
+        SURFACE.holeWall,
       ),
     };
   }
@@ -367,10 +383,18 @@ export class Viewer3D {
       explode: this.settings.explode,
       items: this.parts
         .filter((p) => p.face !== 'walls')
-        .map((p) => ({ id: p.item.id, type: p.item.type, side: p.item.side, z: p.mesh.position.z })),
+        .map((p) => ({
+          id: p.item.id,
+          type: p.item.type,
+          side: p.item.side,
+          z: p.mesh.position.z,
+          metalness: p.mesh.material.metalness,
+          roughness: p.mesh.material.roughness,
+        })),
       holes: {
         plated: this.holes?.plated?.count ?? 0,
         npth: this.holes?.npth?.count ?? 0,
+        platedMetalness: this.holes?.plated?.material.metalness ?? null,
       },
       camera: this.getCamera(),
     };

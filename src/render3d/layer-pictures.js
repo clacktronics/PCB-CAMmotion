@@ -4,7 +4,7 @@
 
 import { BoardRenderer, boardArea } from '../render/board-render.js';
 import { CanvasTarget, makeCanvas } from '../render/canvas-target.js';
-import { SOLDER_MASK, SILKSCREEN, SUBSTRATE, COPPER, MISC, lookupMaterial, rgba } from '../model/materials.js';
+import { SOLDER_MASK, SILKSCREEN, SUBSTRATE, COPPER, MISC, SURFACE, lookupMaterial, rgba } from '../model/materials.js';
 import { roleColour } from '../model/view-modes.js';
 
 /**
@@ -97,7 +97,7 @@ export class LayerPictures {
   /**
    * Picture for one stack item.
    * @param {{type:string, side:string, layerId:string|null}} item
-   * @returns {{canvas: HTMLCanvasElement|OffscreenCanvas, opacity:number, shininess:number}}
+   * @returns {{canvas: HTMLCanvasElement|OffscreenCanvas, opacity:number, surface:{metalness:number, roughness:number}}}
    */
   picture(item) {
     const { w, h } = this.frame;
@@ -127,7 +127,7 @@ export class LayerPictures {
     if (item.type === 'dielectric') {
       const sub = lookupMaterial('substrate', st.substrate).value || SUBSTRATE.fr4;
       paint(this.base, rgba(sub, 1));
-      return { canvas: c, opacity: 1, shininess: 8 };
+      return { canvas: c, opacity: 1, surface: SURFACE.substrate };
     }
     if (item.type === 'copper') {
       paint(this.#mask(layer), rgba(COPPER, 1));
@@ -143,7 +143,7 @@ export class LayerPictures {
         paint(ex, rgba(finish, 1));
       }
       clipTo(this.base, 'destination-in');
-      return { canvas: c, opacity, shininess: 80 };
+      return { canvas: c, opacity, surface: SURFACE.copper };
     }
     if (item.type === 'soldermask') {
       const mat = lookupMaterial('mask', st.mask?.[side] ?? st.mask).value || SOLDER_MASK.green;
@@ -154,7 +154,7 @@ export class LayerPictures {
         paint(this.#mask(layer), rgba(mat, 1));
         clipTo(this.base, 'destination-in');
       }
-      return { canvas: c, opacity: (mat.opacity ?? 0.85) * opacity, shininess: 50 };
+      return { canvas: c, opacity: (mat.opacity ?? 0.85) * opacity, surface: SURFACE.soldermask };
     }
     if (item.type === 'legend') {
       const mat = lookupMaterial('silk', st.silk?.[side] ?? st.silk).value || SILKSCREEN.white;
@@ -162,15 +162,15 @@ export class LayerPictures {
       const open = this.#openings(side);
       if (open) clipTo(open, 'destination-out'); // fabs clip silkscreen off exposed pads
       clipTo(this.base, 'destination-in');
-      return { canvas: c, opacity, shininess: 10 };
+      return { canvas: c, opacity, surface: SURFACE.legend };
     }
     if (item.type === 'paste') {
       paint(this.#mask(layer), rgba(MISC.paste, 1));
       clipTo(this.base, 'destination-in');
-      return { canvas: c, opacity: (MISC.paste.opacity ?? 1) * opacity, shininess: 30 };
+      return { canvas: c, opacity: (MISC.paste.opacity ?? 1) * opacity, surface: SURFACE.paste };
     }
     paint(this.#mask(layer), rgba({ rgb: roleColour(layer.role) }, 1));
     clipTo(this.base, 'destination-in');
-    return { canvas: c, opacity, shininess: 10 };
+    return { canvas: c, opacity, surface: SURFACE.other };
   }
 }

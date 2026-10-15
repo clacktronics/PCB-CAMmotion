@@ -63,6 +63,22 @@ export const SUBSTRATE = {
   ceramic: { rgb: [236, 236, 230], opacity: 1, label: 'Ceramic' },
 };
 
+/**
+ * How each surface reflects light in the 3D view (physically based shading): metalness 0
+ * (dielectric) … 1 (metal), roughness 0 (mirror) … 1 (matte), envMapIntensity how strongly
+ * it reflects the surroundings. Copper, finishes and plated
+ * barrels are metal and mirror the surroundings; mask is glossy lacquer; silkscreen is ink.
+ */
+export const SURFACE = {
+  copper: { metalness: 1, roughness: 0.14, envMapIntensity: 1.8 },
+  soldermask: { metalness: 0, roughness: 0.3, envMapIntensity: 0.2 },
+  legend: { metalness: 0, roughness: 0.85, envMapIntensity: 0.3 },
+  paste: { metalness: 0.8, roughness: 0.55, envMapIntensity: 1 },
+  substrate: { metalness: 0, roughness: 0.7, envMapIntensity: 0.35 },
+  holeWall: { metalness: 0, roughness: 0.9, envMapIntensity: 0.3 },
+  other: { metalness: 0, roughness: 0.7, envMapIntensity: 0.35 },
+};
+
 /** Paste (shown only when enabled), drill hole wall, board edge and viewer background. */
 export const MISC = {
   paste: { rgb: [170, 170, 176], opacity: 0.85 },
