@@ -4,12 +4,15 @@
 //   settings.layers: { [sourceName]: { opacity, role, colour, invert } }
 //                    role = user override or null; colour = '#rrggbb' for the analysis views
 //                    or null; invert = draw the layer's complement (e.g. mask material)
-//   settings.view:   { side, mode, background, solo, activeLayer, showPaste, cx, cy, scale }
+//   settings.view:   { side, mode, background, solo, activeLayer, showPaste, cx, cy, scale,
+//                      view3d, explode, camera3d }
 //                    solo: names of the soloed layers (none = every layer shown). Files from
 //                    before multi-solo stored solo: true|false (with activeLayer) and a
 //                    per-layer `visible`; ensureSettings converts the first, the second is
 //                    ignored (soloing is the only way to choose what is shown).
 //                    mode: realistic | debug | classic | xor | outline (model/view-modes.js)
+//                    view3d: show the 3D view; explode: 0..1 how far the 3D layers are spread;
+//                    camera3d: null | { position: [x, y, z], target: [x, y, z] } in mm
 // `stackup` is null until set; it is filled from a .gbrjob (source: 'gbrjob') unless the user
 // edited it (source: 'user'). Everything derived (parsed images, layers) is rebuilt on load.
 // Pure data + functions (no DOM).
@@ -33,6 +36,9 @@ export const DEFAULT_VIEW = {
   cx: null,
   cy: null,
   scale: null,
+  view3d: false,
+  explode: 0,
+  camera3d: null,
 };
 
 export function createProject(name = 'untitled', now = new Date()) {
@@ -47,6 +53,9 @@ export function ensureSettings(project) {
   s.layers ??= {};
   s.view = { ...DEFAULT_VIEW, ...(s.view || {}) };
   s.view.solo = normaliseSolo(s.view.solo, s.view.activeLayer);
+  const explode = Number(s.view.explode);
+  s.view.explode = Number.isFinite(explode) ? Math.min(1, Math.max(0, explode)) : 0;
+  s.view.view3d = s.view.view3d === true;
   for (const src of project.sources) s.layers[src.name] ??= defaultLayerSettings();
   return project;
 }

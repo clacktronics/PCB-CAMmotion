@@ -81,6 +81,9 @@ written, passing in CI, and the previous milestones' tests still pass.
 
 **Status (2026-10):** milestones 0 (skeleton + harness), 1 (parsers) and 2 (viewer) are
 implemented with their tests; the machine-run part of the test board QA is still to do.
+A first part of milestone 8 was brought forward: the 3D view (stackup in real colours from
+the `.gbrjob` thicknesses, plated barrels, orbit/pan/zoom, exploded-view slider, saved in the
+`.pcam`). Cross-section, X-ray and the as-milled preview are still to come.
 Decisions made on the way:
 - No framework: plain ES modules, bundled by esbuild (dev dependency) into the committed
   `dist/app.js` classic script, because browsers block ES module imports on `file://`.

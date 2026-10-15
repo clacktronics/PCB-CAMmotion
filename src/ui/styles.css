@@ -393,3 +393,18 @@ button.attention {
 .layer.soloed {
   box-shadow: inset 0 0 0 2px var(--warn);
 }
+.toolbar .explode {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+}
+.toolbar .explode input {
+  width: 110px;
+}
+.main canvas.view3d {
+  cursor: grab;
+}
+.main canvas.view3d:active {
+  cursor: grabbing;
+}

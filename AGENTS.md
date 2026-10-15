@@ -43,7 +43,8 @@ test/      samples/   tools/     vendor/     dist/
   is **committed**; after changing anything under `src/` run `npm run build` and commit
   `dist/app.js` too (`npm run lint` fails if it is stale). Never edit `dist/` by hand.
 - Third-party code used at runtime is copied into `vendor/<name>/` with its LICENSE
-  (currently fflate for the `.pcam` ZIP container).
+  (currently fflate for the `.pcam` ZIP container and three.js for the 3D view;
+  the build minifies three.js into the bundle and aliases its `three` import).
 
 - Parsers produce a command list that keeps source line numbers.
 - Stackup and layer roles come from the KiCad `.gbrjob` first, then Gerber X2 attributes,

@@ -1,6 +1,7 @@
 // Application shell: toolbar, layer list, inspector, file drop, .pcam open/save, autosave.
 
 import { Viewer } from '../render/viewer.js';
+import { Viewer3D } from '../render3d/viewer3d.js';
 import {
   createProject,
   addSourceFile,
@@ -38,6 +39,10 @@ export class App {
       onSelect: (hit) => this.#onSelect(hit),
       onHover: (hit) => (this.statusHover.textContent = hit ? describeShort(hit, this.layerById(hit.layerId)) : ''),
       onView: (v) => this.#onView(v),
+    });
+    this.viewer3d = new Viewer3D(this.canvas3d, {
+      onCamera: (c) => this.#onCamera(c),
+      onError: (m) => this.#message(m, true),
     });
     this.#offerAutosave();
     this.#refresh();
@@ -93,6 +98,36 @@ export class App {
           VIEW_MODE_LABELS[m],
         ),
       ]),
+    );
+    this.btnDim = {
+      '2d': h(
+        'button',
+        { onclick: () => this.#setView({ view3d: false }), 'data-testid': 'view-2d', title: 'Flat board view' },
+        '2D',
+      ),
+      '3d': h(
+        'button',
+        {
+          onclick: () => this.#setView({ view3d: true }),
+          'data-testid': 'view-3d',
+          title: '3D stackup: drag to orbit, right-drag or shift+drag to pan, wheel to zoom',
+        },
+        '3D',
+      ),
+    };
+    this.explodeInput = h('input', {
+      type: 'range',
+      min: 0,
+      max: 1,
+      step: 0.01,
+      value: 0,
+      'data-testid': 'explode',
+      oninput: (e) => this.#setView({ explode: Number(e.target.value) }),
+    });
+    this.explodeBox = h(
+      'label',
+      { class: 'explode hidden', title: 'Explode: spread the layers apart to see each one' },
+      ['Explode', this.explodeInput],
     );
     this.btnBg = h(
       'button',
@@ -152,7 +187,9 @@ export class App {
       fileInput,
       pcamInput,
       h('span', { class: 'sep' }),
-      h('button', { onclick: () => this.viewer.fit(), 'data-testid': 'fit', title: 'Fit board (F)' }, 'Fit'),
+      h('button', { onclick: () => this.#fit(), 'data-testid': 'fit', title: 'Fit board (F)' }, 'Fit'),
+      h('span', { class: 'seg' }, Object.values(this.btnDim)),
+      this.explodeBox,
       h('span', { class: 'seg' }, [this.btnSide.top, this.btnSide.bottom]),
       h('span', { class: 'seg' }, Object.values(this.btnMode)),
       this.btnBg,
@@ -180,6 +217,7 @@ export class App {
     ]);
 
     this.canvas = h('canvas', { 'data-testid': 'board' });
+    this.canvas3d = h('canvas', { class: 'view3d hidden', 'data-testid': 'board-3d' });
     this.overlay = h('canvas', { class: 'overlay' });
     this.empty = h('div', { class: 'empty', id: 'empty' }, [
       h('div', {}, [
@@ -191,6 +229,7 @@ export class App {
     this.main = h('main', { class: 'main' }, [
       this.canvas,
       this.overlay,
+      this.canvas3d,
       this.empty,
       h('div', { class: 'drop' }, 'Drop to load'),
       this.banner,
@@ -221,7 +260,7 @@ export class App {
       if (e.key === 'Escape') return this.viewer.select(null);
       if (e.ctrlKey || e.metaKey || e.altKey || isTyping(e.target)) return;
       const k = e.key.toLowerCase();
-      if (k === 'f') this.viewer.fit();
+      if (k === 'f') this.#fit();
       else if (k === 's') this.#toggleSolo();
       else if (k === 'b') this.#setView({ background: this.view.background === 'light' ? 'dark' : 'light' });
       else if (k === 'i' && this.activeLayerId && this.view.mode !== 'realistic') {
@@ -356,6 +395,17 @@ export class App {
     const v = this.view;
     if (keepView && Number.isFinite(v.scale) && v.scale > 0) this.viewer.setView(v);
     else if (fit || keepView) this.viewer.fit();
+    if (fit || keepView) this.viewer3d.resetCamera(keepView ? v.camera3d : null);
+    Object.assign(this.viewer3d.settings, {
+      stackup: this.viewer.settings.stackup,
+      solo: v.solo,
+      side: v.side,
+      showPaste: !!v.showPaste,
+      background: v.background,
+      explode: v.explode,
+    });
+    this.viewer3d.setLayers(this.#renderLayers());
+    this.#showDimension();
     this.selection = null;
     this.#refresh();
   }
@@ -368,7 +418,15 @@ export class App {
 
   #setView(patch) {
     Object.assign(this.view, patch);
-    this.viewer.setSettings(patch);
+    const flat = { ...patch };
+    delete flat.view3d;
+    delete flat.explode;
+    if (Object.keys(flat).length) this.viewer.setSettings(flat);
+    const p3 = { ...flat };
+    delete p3.mode;
+    if ('explode' in patch) p3.explode = patch.explode;
+    if (Object.keys(p3).length) this.viewer3d.setSettings(p3);
+    if ('view3d' in patch) this.#showDimension();
     this.#refreshToolbar();
     if ('mode' in patch || 'solo' in patch) this.#refreshLayers();
     this.#touch();
@@ -408,6 +466,25 @@ export class App {
     this.#refreshDiagnostics();
   }
 
+  /** Show the 2D or the 3D view, as the project's view settings say. */
+  #showDimension() {
+    const on = !!this.view.view3d;
+    this.canvas.classList.toggle('hidden', on);
+    this.overlay.classList.toggle('hidden', on);
+    this.viewer3d.show(on);
+  }
+
+  #fit() {
+    if (this.view.view3d) this.viewer3d.fit();
+    else this.viewer.fit();
+  }
+
+  #onCamera(c) {
+    const old = JSON.stringify(this.view.camera3d);
+    this.view.camera3d = c;
+    if (old !== JSON.stringify(c) && this.project.sources.length) this.#touch();
+  }
+
   #onView(v) {
     const changed = this.view.cx !== v.cx || this.view.cy !== v.cy || this.view.scale !== v.scale;
     this.view.cx = v.cx;
@@ -428,6 +505,7 @@ export class App {
     }
     if ('role' in patch) return this.#rebuild({ keepView: true });
     this.viewer.layersChanged();
+    this.viewer3d.layersChanged();
     this.#touch();
   }
 
@@ -435,6 +513,7 @@ export class App {
     this.project.stackup = { ...effectiveStackup(this.project), ...patch, source: 'user' };
     this.viewer.settings.stackup = this.project.stackup;
     this.viewer.layersChanged();
+    this.viewer3d.setSettings({ stackup: this.project.stackup });
     this.#refreshStack();
     this.#touch();
   }
@@ -541,7 +620,14 @@ export class App {
   #refreshToolbar() {
     const v = this.view;
     for (const [k, b] of Object.entries(this.btnSide)) b.classList.toggle('on', v.side === k);
-    for (const [k, b] of Object.entries(this.btnMode)) b.classList.toggle('on', v.mode === k);
+    for (const [k, b] of Object.entries(this.btnDim)) b.classList.toggle('on', !!v.view3d === (k === '3d'));
+    this.explodeBox.classList.toggle('hidden', !v.view3d);
+    this.explodeInput.value = String(v.explode ?? 0);
+    for (const [k, b] of Object.entries(this.btnMode)) {
+      b.classList.toggle('on', v.mode === k);
+      // the 3D view always shows the real materials
+      b.disabled = !!v.view3d;
+    }
     this.btnBg.classList.toggle('on', v.background === 'light');
     this.btnPaste.classList.toggle('on', !!v.showPaste);
   }

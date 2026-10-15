@@ -35,7 +35,7 @@ test('two-layer board: physical order top to bottom, centred on z = 0, board thi
   const s = byId(items);
   assert.ok(near(s.F_Cu.z1Mm - s.B_Cu.z0Mm, 1.6, 1e-9), 'copper to copper = board thickness');
   assert.ok(near(boardThicknessMm, 1.6, 1e-9));
-  assert.ok(near(s.F_Silk.z1Mm, -s.B_Mask.z0Mm, 1e-9), 'centred');
+  assert.ok(near(s.F_Cu.z1Mm, -s.B_Cu.z0Mm, 1e-9), 'board centred');
   assert.ok(near(s.F_Cu.z1Mm - s.F_Cu.z0Mm, DEFAULT_THICKNESS_MM.copper, 1e-12));
   assert.equal(
     items.find((i) => i.type === 'profile' || i.type === 'drill'),
@@ -99,18 +99,19 @@ test('.gbrjob thicknesses are used when the copper count matches, ignored otherw
   assert.ok(near(s.F_Mask.z1Mm - s.F_Mask.z0Mm, 0.03, 1e-12));
 });
 
-test('explode: levels spread symmetrically from the middle; 0 keeps the board assembled', () => {
+test('explode: levels count out from the core, which stays put; 0 keeps the board assembled', () => {
   const { items } = buildStack3d(twoLayer);
   assert.deepEqual(
     items.map((i) => i.level),
-    [2.5, 1.5, 0.5, -0.5, -1.5, -2.5].map((v) => v + 0),
+    [3, 2, 1, 0, -1, -2],
   );
   const none = explodeOffsets(items, 0, 10);
   assert.ok([...none.values()].every((v) => v === 0));
   const full = explodeOffsets(items, 1, 10);
-  assert.equal(full.get('F_Silk'), 25);
-  assert.equal(full.get('B_Mask'), -25);
-  assert.equal(explodeOffsets(items, 7, 10).get('F_Silk'), 25, 'clamped to 1');
+  assert.equal(full.get('F_Silk'), 30);
+  assert.equal(full.get('dielectric-1'), 0);
+  assert.equal(full.get('B_Mask'), -20);
+  assert.equal(explodeOffsets(items, 7, 10).get('F_Silk'), 30, 'clamped to 1');
   // order is kept for any amount
   const half = explodeOffsets(items, 0.5, 4);
   const zs = items.map((i) => i.z1Mm + half.get(i.id));

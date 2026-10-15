@@ -85,6 +85,9 @@ test('viewer settings and layer overrides survive save → load (in settings/pro
     cx: 12.5,
     cy: -3,
     scale: 42,
+    view3d: true,
+    explode: 0.35,
+    camera3d: { position: [10, -60, 80], target: [40, 30, 0] },
   });
   p.settings.layers[first].colour = '#123456';
   p.settings.layers[first].invert = true;
@@ -101,6 +104,20 @@ test('viewer settings and layer overrides survive save → load (in settings/pro
   assert.deepEqual([l.role.type, l.role.side, l.role.source], ['copper', 'bottom', 'user']);
   const f = layers.find((x) => x.id === first);
   assert.deepEqual([f.visible, f.colour, f.invert], [true, '#123456', true]);
+});
+
+test('3D view settings: defaults for older files, explode kept within 0..1', () => {
+  const p = ensureSettings(loadProject(bytes(join(FIXTURES, 'pcam', 'v1-with-source.pcam'))));
+  assert.deepEqual([p.settings.view.view3d, p.settings.view.explode, p.settings.view.camera3d], [false, 0, null]);
+  for (const [given, want] of [
+    [2, 1],
+    [-1, 0],
+    ['x', 0],
+    [0.5, 0.5],
+  ]) {
+    p.settings.view.explode = given;
+    assert.equal(ensureSettings(p).settings.view.explode, want, String(given));
+  }
 });
 
 test('schema-1 projects from milestone 0 (no viewer settings) load into the viewer', () => {

@@ -15,10 +15,14 @@ const shipped = [
     .map((f) => `src/ui/${f}`),
 ];
 
+// Text that looks like a URL but is never fetched, in the vendored three.js (dist/app.js):
+// the XHTML namespace name passed to createElementNS, and a paper cited in a GLSL comment.
+const NOT_FETCHED = new Set(['http://www.w3.org/1999/xhtml', 'https://jcgt.org/published/0007/04/01/']);
+
 test('shipped files contain no network URLs', () => {
   for (const file of shipped) {
     const text = readFileSync(join(root, file), 'utf8');
-    const urls = text.match(/\b(?:https?|wss?|ftp):\/\/[^\s'"`)<>]+/gi) ?? [];
+    const urls = (text.match(/\b(?:https?|wss?|ftp):\/\/[^\s'"`)<>]+/gi) ?? []).filter((u) => !NOT_FETCHED.has(u));
     assert.deepEqual(urls, [], `${file} references the network`);
     assert.doesNotMatch(text, /@import\s+url\(|src=["']\/\//, `${file} loads a remote resource`);
   }

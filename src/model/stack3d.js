@@ -1,6 +1,6 @@
 // Physical stackup for the 3D view: where each layer sits in Z, how the exploded view spreads
 // the layers apart, and the drill holes as barrels. Pure data + functions (no DOM, no three.js).
-// All lengths in mm; z = 0 is the middle of the board, +z towards the top side.
+// All lengths in mm; z = 0 is the middle of the board (copper to copper), +z towards the top.
 
 /** Typical thicknesses (mm) when the .gbrjob does not give them. */
 export const DEFAULT_THICKNESS_MM = {
@@ -66,17 +66,18 @@ export function buildStack3d(layers, stackup = {}, opts = {}) {
   outerItems(of, 'top', job?.outer.top, opts)
     .reverse()
     .forEach((o) => push(o.id, o.id, o.type, 'top', o.t));
+  const boardTop = z;
   for (const [i, p] of planes.entries()) {
     const t = copperMm[i];
     if (p.files.length) for (const f of p.files) items.push(copperItem(f, p.side, z, t));
     z -= t;
     if (i < planes.length - 1) push(`dielectric-${i + 1}`, null, 'dielectric', 'inner', dielectricMm[i]);
   }
+  const boardBottom = z;
   for (const o of outerItems(of, 'bottom', job?.outer.bottom, opts)) push(o.id, o.id, o.type, 'bottom', o.t);
 
-  const top = items.length ? Math.max(...items.map((i) => i.z1Mm)) : 0;
-  const bottom = items.length ? Math.min(...items.map((i) => i.z0Mm)) : 0;
-  const shift = -(top + bottom) / 2;
+  // centre the board itself (copper to copper) on z = 0
+  const shift = -(boardTop + boardBottom) / 2;
   for (const it of items) {
     it.z0Mm += shift;
     it.z1Mm += shift;
@@ -101,15 +102,17 @@ function outerItems(of, side, jobOuter, opts) {
 }
 
 /**
- * Levels count outwards from the middle of the stack: items that share a Z range (several
- * files with the same role) share a level, so they stay together when exploded.
+ * Levels count outwards from the middle of the board's dielectric (so the core stays put and
+ * the top and bottom sides move apart evenly): items that share a Z range (several files
+ * with the same role) share a level, so they stay together when exploded.
  */
 function assignLevels(items) {
-  const slots = [...new Set(items.map((i) => `${i.z0Mm.toFixed(6)}:${i.z1Mm.toFixed(6)}`))];
-  // slots are in top-to-bottom order already
-  const mid = (slots.length - 1) / 2;
+  const slotOf = (i) => `${i.z0Mm.toFixed(6)}:${i.z1Mm.toFixed(6)}`;
+  const slots = [...new Set(items.map(slotOf))]; // top-to-bottom order
+  const cores = items.filter((i) => i.type === 'dielectric').map((i) => slots.indexOf(slotOf(i)));
+  const mid = cores.length ? (Math.min(...cores) + Math.max(...cores)) / 2 : (slots.length - 1) / 2;
   for (const it of items) {
-    const k = slots.indexOf(`${it.z0Mm.toFixed(6)}:${it.z1Mm.toFixed(6)}`);
+    const k = slots.indexOf(slotOf(it));
     it.level = mid - k;
   }
 }
