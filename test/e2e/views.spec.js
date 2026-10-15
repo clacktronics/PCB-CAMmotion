@@ -76,10 +76,10 @@ test('invert + solo shows the solder mask material; arrows flip through the laye
   await mode(page, 'debug');
   await row(page, 'synthetic-board-F_Mask.gbr').locator('.name').click();
   await row(page, 'synthetic-board-F_Mask.gbr').locator('[data-testid=invert]').check();
-  await page.keyboard.press('s'); // focus is on the checkbox: shortcuts must still work
+  await page.keyboard.press('s'); // focus is on the invert checkbox: shortcuts must still work
   await waitRendered(page);
   let state = await page.evaluate(() => window.__pcam.state());
-  expect(state.project.settings.view.solo).toBe(true);
+  expect(state.project.settings.view.solo).toEqual(['synthetic-board-F_Mask.gbr']);
   expect(state.project.settings.view.mode).toBe('debug');
   const roles = state.layers.find((l) => l.name === 'synthetic-board-F_Mask.gbr').role;
   expect([roles.type, roles.side]).toEqual(['soldermask', 'top']);
@@ -140,7 +140,7 @@ test('realistic + solo shows any layer as a slice: inner copper on substrate', a
   await page.keyboard.press('s');
   await waitRendered(page);
   const state = await page.evaluate(() => window.__pcam.state());
-  expect(state.project.settings.view).toMatchObject({ mode: 'realistic', solo: true });
+  expect(state.project.settings.view).toMatchObject({ mode: 'realistic', solo: ['inner-copper-In1_Cu.gbr'] });
   const copper = await pixelAt(page, 30, 60); // inner 1 mm trace
   expect(copper[0]).toBeGreaterThan(copper[2] + 60); // copper: red well above blue
   const fr4 = await pixelAt(page, 30, 70); // substrate between features
@@ -190,38 +190,72 @@ test('each layer row takes its layer colour, and follows the colour picker', asy
   await expect.poll(() => bar('synthetic-board-F_Cu.gbr')).toBe('rgb(0, 255, 0)');
 });
 
-test('per-layer S button solos like a mixer: press again and every layer comes back', async ({ page }) => {
+test('S buttons solo like a mixer: several at once, single solo follows the selection, none = all', async ({
+  page,
+}) => {
   await openApp(page);
   await loadBoard(page);
   await mode(page, 'debug');
+  await expect(page.locator('[data-testid=layer] input[type=checkbox]')).toHaveCount(10); // invert only
+  await expect(page.locator('[data-testid=layer] input[type=checkbox]:not([data-testid=invert])')).toHaveCount(0);
   const solo = (name) => row(page, name).locator('[data-testid=solo]');
   const settings = () => page.evaluate(() => window.__pcam.state().project.settings);
-  const visibleBefore = (await settings()).layers;
+  const layersBefore = (await settings()).layers;
+  const top = () => pixelAt(page, 80, 35); // top copper pour
+  const bottom = () => pixelAt(page, 30, 8); // bottom copper pour
+  const shown = async (px) => !near(await px(), MISC.background.rgb, 10);
 
   await solo('synthetic-board-F_Cu.gbr').click();
   await waitRendered(page);
-  expect((await settings()).view).toMatchObject({ solo: true, activeLayer: 'synthetic-board-F_Cu.gbr' });
+  expect((await settings()).view.solo).toEqual(['synthetic-board-F_Cu.gbr']);
   await expect(solo('synthetic-board-F_Cu.gbr')).toHaveAttribute('aria-pressed', 'true');
   await expect(row(page, 'synthetic-board-B_Cu.gbr')).toHaveClass(/hidden-layer/);
-  expect(near(await pixelAt(page, 80, 35), MISC.background.rgb, 10)).toBe(false); // top pour shown
-  expect(near(await pixelAt(page, 30, 8), MISC.background.rgb, 10)).toBe(true); // bottom pour hidden
+  expect([await shown(top), await shown(bottom)]).toEqual([true, false]);
 
-  // soloing another layer moves the solo there
+  // a second S adds to the solo: both shown
   await solo('synthetic-board-B_Cu.gbr').click();
   await waitRendered(page);
-  expect((await settings()).view.activeLayer).toBe('synthetic-board-B_Cu.gbr');
-  await expect(solo('synthetic-board-F_Cu.gbr')).toHaveAttribute('aria-pressed', 'false');
-  expect(near(await pixelAt(page, 80, 35), MISC.background.rgb, 10)).toBe(true);
-  expect(near(await pixelAt(page, 30, 8), MISC.background.rgb, 10)).toBe(false);
+  expect((await settings()).view.solo).toEqual(['synthetic-board-F_Cu.gbr', 'synthetic-board-B_Cu.gbr']);
+  expect([await shown(top), await shown(bottom)]).toEqual([true, true]);
+  await expect(row(page, 'synthetic-board-F_Mask.gbr')).toHaveClass(/hidden-layer/);
+  // with several soloed, selecting another layer changes nothing shown
+  await row(page, 'synthetic-board-F_Mask.gbr').locator('.name').click();
+  expect((await settings()).view.solo).toHaveLength(2);
 
-  // pressing it again turns every layer back on, visibility settings untouched
-  await solo('synthetic-board-B_Cu.gbr').click();
+  // pressing S again takes that layer out
+  await solo('synthetic-board-F_Cu.gbr').click();
   await waitRendered(page);
-  expect((await settings()).view.solo).toBe(false);
-  expect((await settings()).layers).toEqual(visibleBefore);
-  expect(near(await pixelAt(page, 80, 35), MISC.background.rgb, 10)).toBe(false);
-  expect(near(await pixelAt(page, 30, 8), MISC.background.rgb, 10)).toBe(false);
+  expect((await settings()).view.solo).toEqual(['synthetic-board-B_Cu.gbr']);
+  expect([await shown(top), await shown(bottom)]).toEqual([false, true]);
+
+  // one layer soloed: clicking another layer moves the solo there
+  await row(page, 'synthetic-board-F_Cu.gbr').locator('.name').click();
+  await waitRendered(page);
+  expect((await settings()).view.solo).toEqual(['synthetic-board-F_Cu.gbr']);
+  expect([await shown(top), await shown(bottom)]).toEqual([true, false]);
+
+  // nothing soloed: every layer is back
+  await solo('synthetic-board-F_Cu.gbr').click();
+  await waitRendered(page);
+  expect((await settings()).view.solo).toEqual([]);
+  expect((await settings()).layers).toEqual(layersBefore);
+  expect([await shown(top), await shown(bottom)]).toEqual([true, true]);
   await expect(page.locator('.layer.hidden-layer')).toHaveCount(0);
+});
+
+test('realistic view with several layers soloed stacks their slices', async ({ page }) => {
+  await openApp(page);
+  await loadBoard(page);
+  await row(page, 'synthetic-board-F_Cu.gbr').locator('[data-testid=solo]').click();
+  await row(page, 'synthetic-board-F_Silkscreen.gbr').locator('[data-testid=solo]').click();
+  await waitRendered(page);
+  expect((await pixelAt(page, 80, 35))[0]).toBeGreaterThan(150); // copper pour
+  expect(near(await pixelAt(page, 60, 10), SUBSTRATE.fr4.rgb, 12)).toBe(true); // no mask in the stack
+  // silkscreen box edge around the SMD row is a 0.15 mm line: zoom in to sample it
+  await page.evaluate(() => window.__pcam.app.viewer.setView({ cx: 9.5, cy: 50, scale: 80 }));
+  await waitRendered(page);
+  const silk = await maxAround(page, 9.5, 50, 0.1);
+  expect(Math.min(...silk)).toBeGreaterThan(215); // white
 });
 
 test('invert is offered in the analysis views only, and kept while in realistic', async ({ page }) => {

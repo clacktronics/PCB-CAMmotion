@@ -123,7 +123,7 @@ test('save a .pcam, reopen it in a fresh page: same layers, settings and view', 
   await loadBoard(page);
   await page.locator('[data-testid=mode-debug]').click();
   await page.locator('[data-testid=view-bottom]').click();
-  await page.locator('[data-testid=layer] input[type=checkbox]').first().uncheck();
+  await page.locator('[data-testid=layer] [data-testid=solo]').first().click();
   await page.locator('[data-testid=stack-mask-top-]').selectOption('red');
   const before = await page.evaluate(() => window.__pcam.state());
   const [download] = await Promise.all([page.waitForEvent('download'), page.locator('[data-testid=save]').click()]);
@@ -141,7 +141,8 @@ test('save a .pcam, reopen it in a fresh page: same layers, settings and view', 
   expect(after.project.stackup.mask.top).toBe('red');
   expect(after.layers.map((l) => [l.name, l.role])).toEqual(before.layers.map((l) => [l.name, l.role]));
   expect(after.project.settings.layers).toEqual(before.project.settings.layers);
-  await expect(page2.locator('[data-testid=layer] input[type=checkbox]').first()).not.toBeChecked();
+  await expect(page2.locator('[data-testid=layer] [data-testid=solo]').first()).toHaveAttribute('aria-pressed', 'true');
+  expect(after.project.settings.view.solo).toEqual(before.project.settings.view.solo);
   await page2.close();
 });
 

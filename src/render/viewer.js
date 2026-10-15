@@ -30,7 +30,7 @@ export class Viewer {
       stackup: {},
       showPaste: false,
       background: 'dark',
-      solo: false,
+      solo: [],
       activeLayerId: null,
     };
     this.view = { cx: 0, cy: 0, scale: 10 }; // centre (mm) and CSS px per mm

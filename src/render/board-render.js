@@ -12,7 +12,8 @@ import { layerColour, backgroundColour, xorLayer, roleColour } from '../model/vi
  *   image:object, visible:boolean, opacity:number, outline?:{loops:number[][]}}} RenderLayer
  * @typedef {{mode:'realistic'|'debug'|'classic'|'xor'|'outline', side:'top'|'bottom',
  *   stackup:{mask?:string, silk?:string, finish?:string, substrate?:string}, showPaste?:boolean,
- *   background?:'dark'|'light', solo?:boolean, activeLayerId?:string|null}} RenderSettings
+ *   background?:'dark'|'light', solo?:string[], activeLayerId?:string|null}} RenderSettings
+ * solo: ids of the soloed layers; when any are soloed only those are drawn.
  * Layers may also carry colour ('#rrggbb', analysis views) and invert (draw the layer's
  * complement inside the board area: e.g. solder mask material instead of mask openings).
  */
@@ -107,15 +108,33 @@ export class BoardRenderer {
   }
 
   /**
-   * One layer as a slice through the board, in real materials: substrate plus the layer's
-   * material (bare copper for any copper layer, inner ones included; mask, silkscreen or paste
-   * otherwise), plated hole barrels through copper, and the holes cut out. Per-layer invert
-   * (an analysis-view setting) is ignored here.
+   * Soloed layers as slices through the board, in real materials, far side first: substrate,
+   * then each layer's material (bare copper for any copper layer, inner ones included; mask,
+   * silkscreen or paste otherwise), plated hole barrels through copper, and the holes cut
+   * out. Per-layer invert (an analysis-view setting) is ignored here.
    */
-  renderSlice(ctx, l, { layers, profile, drills, board, substrate, st, map, w, h }) {
+  renderSlices(ctx, list, { layers, profile, drills, board, substrate, st, map, w, h }) {
     const out = this.workCanvas(2, w, h);
     const o = out.getContext('2d');
     tintInto(o, board, rgba(substrate, 1), 1, this.workCanvas(3, w, h));
+    for (const l of list) this.#sliceLayer(o, l, { layers, profile, st, map, w, h });
+    const copper = list.some((l) => l.role.type === 'copper');
+    for (const d of drills) {
+      if (copper && d.role.plated !== false) {
+        // plated barrel: copper ring around every plated hole through a copper layer
+        tintInto(o, this.mask(d, map, w, h, { inflateMm: 0.04 }), rgba(COPPER, 1), 1, this.workCanvas(3, w, h));
+      }
+      o.globalCompositeOperation = 'destination-out';
+      o.drawImage(this.mask(d, map, w, h), 0, 0);
+      o.globalCompositeOperation = 'source-over';
+    }
+    o.globalCompositeOperation = 'destination-in';
+    o.drawImage(board, 0, 0);
+    o.globalCompositeOperation = 'source-over';
+    ctx.drawImage(out, 0, 0);
+  }
+
+  #sliceLayer(o, l, { layers, profile, st, map, w, h }) {
     const type = l.role.type;
     let m = this.mask(l, map, w, h);
     if (type === 'soldermask') {
@@ -144,19 +163,6 @@ export class BoardRenderer {
       o.drawImage(c, 0, 0);
       o.globalAlpha = 1;
     }
-    for (const d of drills) {
-      if (type === 'copper' && d.role.plated !== false) {
-        // plated barrel: copper ring around every plated hole through a copper layer
-        tintInto(o, this.mask(d, map, w, h, { inflateMm: 0.04 }), rgba(COPPER, 1), 1, this.workCanvas(3, w, h));
-      }
-      o.globalCompositeOperation = 'destination-out';
-      o.drawImage(this.mask(d, map, w, h), 0, 0);
-      o.globalCompositeOperation = 'source-over';
-    }
-    o.globalCompositeOperation = 'destination-in';
-    o.drawImage(board, 0, 0);
-    o.globalCompositeOperation = 'source-over';
-    ctx.drawImage(out, 0, 0);
   }
 
   /** The layer's complement inside the board area (board outline, or all layers' extent). */
@@ -183,7 +189,7 @@ export class BoardRenderer {
 
   renderRealistic(ctx, layers, settings, map, w, h) {
     const side = settings.side;
-    const vis = (l) => l.visible && l.image;
+    const vis = (l) => l.image;
     const pick = (type) => layers.find((l) => vis(l) && l.role.type === type && l.role.side === side);
     const copper = pick('copper');
     const mask = pick('soldermask');
@@ -213,9 +219,21 @@ export class BoardRenderer {
     }
     bctx.setTransform(1, 0, 0, 1, 0, 0);
 
-    // Solo: the selected layer alone as a slice of the board (inner layers included)
-    const solo = settings.solo ? layers.find((l) => l.id === settings.activeLayerId && l.image) : null;
-    if (solo) return this.renderSlice(ctx, solo, { layers, profile, drills, board, substrate, st, map, w, h });
+    // Solo: the soloed layers as slices of the board (inner layers included)
+    const soloed = soloedLayers(layers, settings);
+    if (soloed.length) {
+      return this.renderSlices(ctx, debugOrder(soloed, side), {
+        layers,
+        profile,
+        drills,
+        board,
+        substrate,
+        st,
+        map,
+        w,
+        h,
+      });
+    }
 
     // compose on an out canvas: substrate, copper, mask, exposed finish, silk, holes
     const out = this.workCanvas(2, w, h);
@@ -362,13 +380,16 @@ export function boardArea(layers, profile) {
   return [[b[0], b[1], b[2], b[1], b[2], b[3], b[0], b[3]]];
 }
 
-/** Layers drawn in an analysis view: visible ones, or only the active layer when solo. */
+/** The soloed layers (empty when nothing is soloed). */
+export function soloedLayers(layers, settings) {
+  const solo = Array.isArray(settings.solo) ? settings.solo : [];
+  return solo.length ? layers.filter((l) => l.image && solo.includes(l.id)) : [];
+}
+
+/** Layers drawn in an analysis view: the soloed ones, or every layer when none is soloed. */
 export function analysisLayers(layers, settings) {
-  if (settings.solo && settings.activeLayerId) {
-    const l = layers.find((x) => x.id === settings.activeLayerId && x.image);
-    if (l) return [l];
-  }
-  return layers.filter((l) => l.visible && l.image);
+  const soloed = soloedLayers(layers, settings);
+  return soloed.length ? soloed : layers.filter((l) => l.image);
 }
 
 export { roleColour };

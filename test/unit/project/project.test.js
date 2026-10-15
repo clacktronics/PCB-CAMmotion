@@ -9,6 +9,7 @@ import {
   buildLayers,
   removeSource,
   ensureSettings,
+  normaliseSolo,
 } from '../../../src/project/project.js';
 import { saveProject, loadProject } from '../../../src/project/pcam.js';
 import { zipSync, unzipSync, strToU8, strFromU8 } from '../../../vendor/fflate/fflate.js';
@@ -72,14 +73,13 @@ test('removing a source removes its settings', () => {
 test('viewer settings and layer overrides survive save → load (in settings/project.json)', () => {
   const { p } = load(join(SYNTH, 'board'));
   const first = p.sources[0].name;
-  p.settings.layers[first].visible = false;
   p.settings.layers[first].opacity = 0.4;
   p.settings.layers[p.sources[1].name].role = { type: 'copper', side: 'bottom' };
   Object.assign(p.settings.view, {
     side: 'bottom',
     mode: 'xor',
     background: 'light',
-    solo: true,
+    solo: [first],
     activeLayer: first,
     showPaste: true,
     cx: 12.5,
@@ -100,7 +100,7 @@ test('viewer settings and layer overrides survive save → load (in settings/pro
   const l = layers.find((x) => x.id === p.sources[1].name);
   assert.deepEqual([l.role.type, l.role.side, l.role.source], ['copper', 'bottom', 'user']);
   const f = layers.find((x) => x.id === first);
-  assert.deepEqual([f.visible, f.colour, f.invert], [false, '#123456', true]);
+  assert.deepEqual([f.visible, f.colour, f.invert], [true, '#123456', true]);
 });
 
 test('schema-1 projects from milestone 0 (no viewer settings) load into the viewer', () => {
@@ -137,4 +137,18 @@ test('the CAMmotion test board loads cleanly and every layer is identified from 
     assert.equal(l.role.source, 'gbrjob', l.name);
     assert.notEqual(l.role.type, 'other', l.name);
   }
+});
+
+test('solo: the old single-solo boolean converts to a list; removed sources leave the solo', () => {
+  assert.deepEqual(normaliseSolo(true, 'a.gbr'), ['a.gbr']);
+  assert.deepEqual(normaliseSolo(false, 'a.gbr'), []);
+  assert.deepEqual(normaliseSolo(undefined), []);
+  assert.deepEqual(normaliseSolo(['a', 'a', 3, 'b']), ['a', 'b']);
+  const { p } = load(join(SYNTH, 'board'));
+  p.settings.view.solo = true;
+  p.settings.view.activeLayer = p.sources[0].name;
+  ensureSettings(p);
+  assert.deepEqual(p.settings.view.solo, [p.sources[0].name]);
+  removeSource(p, p.sources[0].name);
+  assert.deepEqual(p.settings.view.solo, []);
 });

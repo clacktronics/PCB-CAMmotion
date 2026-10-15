@@ -228,7 +228,7 @@ export class App {
         this.#setLayer(this.activeLayerId, { invert: !this.layerById(this.activeLayerId)?.invert });
         this.#refreshLayers();
       } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-        // flip through the layers (with Solo: one at a time)
+        // flip through the layers (with one layer soloed, the solo moves too)
         e.preventDefault();
         const i = this.layers.findIndex((l) => l.id === this.activeLayerId);
         const n = this.layers.length;
@@ -347,7 +347,7 @@ export class App {
     }
     this.viewer.settings.activeLayerId = this.activeLayerId;
     this.viewer.settings.background = this.view.background;
-    this.viewer.settings.solo = !!this.view.solo;
+    this.viewer.settings.solo = this.view.solo;
     this.viewer.settings.side = this.view.side;
     this.viewer.settings.mode = this.view.mode;
     this.viewer.settings.showPaste = !!this.view.showPaste;
@@ -374,29 +374,38 @@ export class App {
     this.#touch();
   }
 
+  /**
+   * Select a layer. With exactly one layer soloed, the solo follows the selection (clicking
+   * another layer or ↑/↓ moves it); with several soloed, the selection changes nothing shown.
+   */
   #setActive(id) {
     this.activeLayerId = id;
     this.view.activeLayer = id;
     this.viewer.settings.activeLayerId = id;
-    if (this.view.solo) this.viewer.layersChanged();
+    const solo = this.view.solo;
+    if (solo.length === 1 && solo[0] !== id) return this.#setView({ solo: [id] });
     this.#refreshLayers();
     this.#refreshDiagnostics();
   }
 
+  /** S key: solo button of the selected layer. */
   #toggleSolo() {
-    // in the realistic view, solo shows the selected layer as a slice of the board
-    this.#setView({ solo: !this.view.solo });
+    if (this.activeLayerId) this.#soloLayer(this.activeLayerId);
   }
 
   /**
-   * Mixer-style solo button on a layer: solo this layer; pressed again, everything comes back.
-   * Soloing another layer moves the solo there. Visibility checkboxes are never changed, so
-   * un-soloing restores exactly the layers that were on.
+   * Mixer-style solo button: adds the layer to the soloed set, or takes it out. Several layers
+   * can be soloed at once; with none soloed every layer is shown. In the realistic view the
+   * soloed layers show as slices of the board.
    */
   #soloLayer(id) {
-    if (this.view.solo && this.activeLayerId === id) return this.#setView({ solo: false });
-    this.#setActive(id);
-    if (!this.view.solo) this.#setView({ solo: true });
+    const solo = this.view.solo;
+    if (solo.includes(id)) return this.#setView({ solo: solo.filter((n) => n !== id) });
+    this.activeLayerId = id;
+    this.view.activeLayer = id;
+    this.viewer.settings.activeLayerId = id;
+    this.#setView({ solo: [...solo, id] });
+    this.#refreshDiagnostics();
   }
 
   #onView(v) {
@@ -413,7 +422,6 @@ export class App {
     Object.assign(s, patch);
     const l = this.layerById(id);
     if (l) {
-      if ('visible' in patch) l.visible = patch.visible;
       if ('colour' in patch) l.colour = patch.colour;
       if ('invert' in patch) l.invert = patch.invert;
       if ('opacity' in patch) l.opacity = patch.opacity;
@@ -567,8 +575,8 @@ export class App {
           );
         }
       }
-      const soloed = !!this.view.solo && l.id === this.activeLayerId;
-      const muted = !l.visible || (this.view.solo && !soloed);
+      const soloed = this.view.solo.includes(l.id);
+      const muted = this.view.solo.length > 0 && !soloed;
       // the whole row takes the layer's colour in the current view
       const rgb =
         this.view.mode === 'realistic' ? swatchColour(l, this.project).rgb : layerColour(l, this.view.mode, index);
@@ -583,13 +591,6 @@ export class App {
           onclick: () => this.#setActive(l.id),
         },
         [
-          h('input', {
-            type: 'checkbox',
-            checked: l.visible,
-            title: 'Show layer',
-            onclick: (e) => e.stopPropagation(),
-            onchange: (e) => this.#setLayer(l.id, { visible: e.target.checked }),
-          }),
           // the colour bar on the left edge; in the analysis views it is the colour picker
           this.view.mode === 'realistic'
             ? h('span', { class: 'colour-bar', title: 'Material colour (see Board materials)' })
@@ -612,7 +613,9 @@ export class App {
               {
                 class: `solo-btn${soloed ? ' on' : ''}`,
                 'data-testid': 'solo',
-                title: soloed ? 'Solo: press again to show all layers (S)' : 'Solo: show only this layer (S)',
+                title: soloed
+                  ? 'Soloed: press again to take it out of the solo (S)'
+                  : 'Solo: show only the soloed layers; press S on several to combine them (S)',
                 'aria-pressed': soloed ? 'true' : 'false',
                 onclick: (e) => {
                   e.stopPropagation();
@@ -678,7 +681,6 @@ export class App {
     for (const s of others)
       this.layerList.append(
         h('li', { class: 'layer source-row muted', 'data-name': s.name }, [
-          h('span'),
           h('span', { class: 'name' }, `${s.name} (${detectFileKind(s.name, s.bytes)})`),
         ]),
       );
@@ -722,7 +724,7 @@ export class App {
 
   #onSelect(hit) {
     this.selection = hit;
-    if (hit && !this.view.solo) {
+    if (hit && this.view.solo.length !== 1) {
       this.activeLayerId = hit.layerId;
       this.view.activeLayer = hit.layerId;
       this.viewer.settings.activeLayerId = hit.layerId;

@@ -2141,15 +2141,31 @@
       ctx.globalAlpha = 1;
     }
     /**
-     * One layer as a slice through the board, in real materials: substrate plus the layer's
-     * material (bare copper for any copper layer, inner ones included; mask, silkscreen or paste
-     * otherwise), plated hole barrels through copper, and the holes cut out. Per-layer invert
-     * (an analysis-view setting) is ignored here.
+     * Soloed layers as slices through the board, in real materials, far side first: substrate,
+     * then each layer's material (bare copper for any copper layer, inner ones included; mask,
+     * silkscreen or paste otherwise), plated hole barrels through copper, and the holes cut
+     * out. Per-layer invert (an analysis-view setting) is ignored here.
      */
-    renderSlice(ctx, l, { layers, profile, drills, board, substrate, st, map, w, h: h2 }) {
+    renderSlices(ctx, list, { layers, profile, drills, board, substrate, st, map, w, h: h2 }) {
       const out = this.workCanvas(2, w, h2);
       const o = out.getContext("2d");
       tintInto(o, board, rgba(substrate, 1), 1, this.workCanvas(3, w, h2));
+      for (const l of list) this.#sliceLayer(o, l, { layers, profile, st, map, w, h: h2 });
+      const copper = list.some((l) => l.role.type === "copper");
+      for (const d of drills) {
+        if (copper && d.role.plated !== false) {
+          tintInto(o, this.mask(d, map, w, h2, { inflateMm: 0.04 }), rgba(COPPER, 1), 1, this.workCanvas(3, w, h2));
+        }
+        o.globalCompositeOperation = "destination-out";
+        o.drawImage(this.mask(d, map, w, h2), 0, 0);
+        o.globalCompositeOperation = "source-over";
+      }
+      o.globalCompositeOperation = "destination-in";
+      o.drawImage(board, 0, 0);
+      o.globalCompositeOperation = "source-over";
+      ctx.drawImage(out, 0, 0);
+    }
+    #sliceLayer(o, l, { layers, profile, st, map, w, h: h2 }) {
       const type = l.role.type;
       let m = this.mask(l, map, w, h2);
       if (type === "soldermask") {
@@ -2165,18 +2181,6 @@
         o.drawImage(c, 0, 0);
         o.globalAlpha = 1;
       }
-      for (const d of drills) {
-        if (type === "copper" && d.role.plated !== false) {
-          tintInto(o, this.mask(d, map, w, h2, { inflateMm: 0.04 }), rgba(COPPER, 1), 1, this.workCanvas(3, w, h2));
-        }
-        o.globalCompositeOperation = "destination-out";
-        o.drawImage(this.mask(d, map, w, h2), 0, 0);
-        o.globalCompositeOperation = "source-over";
-      }
-      o.globalCompositeOperation = "destination-in";
-      o.drawImage(board, 0, 0);
-      o.globalCompositeOperation = "source-over";
-      ctx.drawImage(out, 0, 0);
     }
     /** The layer's complement inside the board area (board outline, or all layers' extent). */
     inverted(mask, layers, profile, map, w, h2) {
@@ -2201,7 +2205,7 @@
     }
     renderRealistic(ctx, layers, settings, map, w, h2) {
       const side = settings.side;
-      const vis = (l) => l.visible && l.image;
+      const vis = (l) => l.image;
       const pick = (type) => layers.find((l) => vis(l) && l.role.type === type && l.role.side === side);
       const copper = pick("copper");
       const mask = pick("soldermask");
@@ -2228,8 +2232,20 @@
         bctx.fill("evenodd");
       }
       bctx.setTransform(1, 0, 0, 1, 0, 0);
-      const solo = settings.solo ? layers.find((l) => l.id === settings.activeLayerId && l.image) : null;
-      if (solo) return this.renderSlice(ctx, solo, { layers, profile, drills, board, substrate, st, map, w, h: h2 });
+      const soloed = soloedLayers(layers, settings);
+      if (soloed.length) {
+        return this.renderSlices(ctx, debugOrder(soloed, side), {
+          layers,
+          profile,
+          drills,
+          board,
+          substrate,
+          st,
+          map,
+          w,
+          h: h2
+        });
+      }
       const out = this.workCanvas(2, w, h2);
       const o = out.getContext("2d");
       tintInto(o, board, rgba(substrate, 1), 1, this.workCanvas(3, w, h2));
@@ -2362,12 +2378,13 @@
     if (!(b[0] <= b[2])) return null;
     return [[b[0], b[1], b[2], b[1], b[2], b[3], b[0], b[3]]];
   }
+  function soloedLayers(layers, settings) {
+    const solo = Array.isArray(settings.solo) ? settings.solo : [];
+    return solo.length ? layers.filter((l) => l.image && solo.includes(l.id)) : [];
+  }
   function analysisLayers(layers, settings) {
-    if (settings.solo && settings.activeLayerId) {
-      const l = layers.find((x) => x.id === settings.activeLayerId && x.image);
-      if (l) return [l];
-    }
-    return layers.filter((l) => l.visible && l.image);
+    const soloed = soloedLayers(layers, settings);
+    return soloed.length ? soloed : layers.filter((l) => l.image);
   }
   function sheen(canvas, strength) {
     const c = canvas.getContext("2d");
@@ -2547,7 +2564,7 @@
         stackup: {},
         showPaste: false,
         background: "dark",
-        solo: false,
+        solo: [],
         activeLayerId: null
       };
       this.view = { cx: 0, cy: 0, scale: 10 };
@@ -5405,7 +5422,7 @@
     side: "top",
     mode: "realistic",
     background: "dark",
-    solo: false,
+    solo: [],
     activeLayer: null,
     showPaste: false,
     cx: null,
@@ -5421,11 +5438,16 @@
     const s = project.settings ??= {};
     s.layers ??= {};
     s.view = { ...DEFAULT_VIEW, ...s.view || {} };
+    s.view.solo = normaliseSolo(s.view.solo, s.view.activeLayer);
     for (const src of project.sources) s.layers[src.name] ??= defaultLayerSettings();
     return project;
   }
   function defaultLayerSettings() {
-    return { visible: true, opacity: 1, role: null, colour: null, invert: false };
+    return { opacity: 1, role: null, colour: null, invert: false };
+  }
+  function normaliseSolo(solo, activeLayer) {
+    if (Array.isArray(solo)) return [...new Set(solo.filter((n) => typeof n === "string"))];
+    return solo === true && typeof activeLayer === "string" ? [activeLayer] : [];
   }
   function effectiveStackup(project) {
     return project.stackup ?? {
@@ -5475,6 +5497,7 @@
   function removeSource(project, name, now = /* @__PURE__ */ new Date()) {
     project.sources = project.sources.filter((s) => s.name !== name);
     delete project.settings?.layers?.[name];
+    if (project.settings?.view?.solo) project.settings.view.solo = project.settings.view.solo.filter((n) => n !== name);
     touch(project, now);
   }
   function buildLayers(project, opts = {}) {
@@ -5512,7 +5535,8 @@
         image: file.image,
         commands: file.commands,
         diagnostics: file.diagnostics,
-        visible: settings.visible !== false,
+        visible: true,
+        // what is shown is chosen by soloing (settings.view.solo)
         opacity: settings.opacity ?? 1,
         colour: settings.colour ?? null,
         invert: !!settings.invert
@@ -5910,7 +5934,7 @@
       }
       this.viewer.settings.activeLayerId = this.activeLayerId;
       this.viewer.settings.background = this.view.background;
-      this.viewer.settings.solo = !!this.view.solo;
+      this.viewer.settings.solo = this.view.solo;
       this.viewer.settings.side = this.view.side;
       this.viewer.settings.mode = this.view.mode;
       this.viewer.settings.showPaste = !!this.view.showPaste;
@@ -5933,26 +5957,36 @@
       if ("mode" in patch || "solo" in patch) this.#refreshLayers();
       this.#touch();
     }
+    /**
+     * Select a layer. With exactly one layer soloed, the solo follows the selection (clicking
+     * another layer or ↑/↓ moves it); with several soloed, the selection changes nothing shown.
+     */
     #setActive(id) {
       this.activeLayerId = id;
       this.view.activeLayer = id;
       this.viewer.settings.activeLayerId = id;
-      if (this.view.solo) this.viewer.layersChanged();
+      const solo = this.view.solo;
+      if (solo.length === 1 && solo[0] !== id) return this.#setView({ solo: [id] });
       this.#refreshLayers();
       this.#refreshDiagnostics();
     }
+    /** S key: solo button of the selected layer. */
     #toggleSolo() {
-      this.#setView({ solo: !this.view.solo });
+      if (this.activeLayerId) this.#soloLayer(this.activeLayerId);
     }
     /**
-     * Mixer-style solo button on a layer: solo this layer; pressed again, everything comes back.
-     * Soloing another layer moves the solo there. Visibility checkboxes are never changed, so
-     * un-soloing restores exactly the layers that were on.
+     * Mixer-style solo button: adds the layer to the soloed set, or takes it out. Several layers
+     * can be soloed at once; with none soloed every layer is shown. In the realistic view the
+     * soloed layers show as slices of the board.
      */
     #soloLayer(id) {
-      if (this.view.solo && this.activeLayerId === id) return this.#setView({ solo: false });
-      this.#setActive(id);
-      if (!this.view.solo) this.#setView({ solo: true });
+      const solo = this.view.solo;
+      if (solo.includes(id)) return this.#setView({ solo: solo.filter((n) => n !== id) });
+      this.activeLayerId = id;
+      this.view.activeLayer = id;
+      this.viewer.settings.activeLayerId = id;
+      this.#setView({ solo: [...solo, id] });
+      this.#refreshDiagnostics();
     }
     #onView(v) {
       const changed = this.view.cx !== v.cx || this.view.cy !== v.cy || this.view.scale !== v.scale;
@@ -5967,7 +6001,6 @@
       Object.assign(s, patch);
       const l = this.layerById(id);
       if (l) {
-        if ("visible" in patch) l.visible = patch.visible;
         if ("colour" in patch) l.colour = patch.colour;
         if ("invert" in patch) l.invert = patch.invert;
         if ("opacity" in patch) l.opacity = patch.opacity;
@@ -6107,8 +6140,8 @@
             );
           }
         }
-        const soloed = !!this.view.solo && l.id === this.activeLayerId;
-        const muted = !l.visible || this.view.solo && !soloed;
+        const soloed = this.view.solo.includes(l.id);
+        const muted = this.view.solo.length > 0 && !soloed;
         const rgb = this.view.mode === "realistic" ? swatchColour(l, this.project).rgb : layerColour(l, this.view.mode, index);
         const row = h(
           "li",
@@ -6121,13 +6154,6 @@
             onclick: () => this.#setActive(l.id)
           },
           [
-            h("input", {
-              type: "checkbox",
-              checked: l.visible,
-              title: "Show layer",
-              onclick: (e) => e.stopPropagation(),
-              onchange: (e) => this.#setLayer(l.id, { visible: e.target.checked })
-            }),
             // the colour bar on the left edge; in the analysis views it is the colour picker
             this.view.mode === "realistic" ? h("span", { class: "colour-bar", title: "Material colour (see Board materials)" }) : h("input", {
               type: "color",
@@ -6148,7 +6174,7 @@
                 {
                   class: `solo-btn${soloed ? " on" : ""}`,
                   "data-testid": "solo",
-                  title: soloed ? "Solo: press again to show all layers (S)" : "Solo: show only this layer (S)",
+                  title: soloed ? "Soloed: press again to take it out of the solo (S)" : "Solo: show only the soloed layers; press S on several to combine them (S)",
                   "aria-pressed": soloed ? "true" : "false",
                   onclick: (e) => {
                     e.stopPropagation();
@@ -6212,7 +6238,6 @@
       for (const s of others)
         this.layerList.append(
           h("li", { class: "layer source-row muted", "data-name": s.name }, [
-            h("span"),
             h("span", { class: "name" }, `${s.name} (${detectFileKind(s.name, s.bytes)})`)
           ])
         );
@@ -6257,7 +6282,7 @@
     }
     #onSelect(hit) {
       this.selection = hit;
-      if (hit && !this.view.solo) {
+      if (hit && this.view.solo.length !== 1) {
         this.activeLayerId = hit.layerId;
         this.view.activeLayer = hit.layerId;
         this.viewer.settings.activeLayerId = hit.layerId;

@@ -22,11 +22,13 @@ continue where you left off.
   XORed: give two layers the same colour and identical parts cancel, so misregistration or
   revision differences stand out); *Outline* (wireframe, clear polarity dashed). Top or
   bottom (mirrored) view, dark or light background. Wheel to zoom, drag to pan, **F** to fit.
-- **Hidden layers:** per-layer colour and **inv**ert (e.g. show the solder mask material
-  instead of its openings, or the paste as stencil), an **S** (solo) button on every layer, mixer-style:
-  press it to see only that layer, press again for all of them (**S** key: the selected layer) and **↑/↓** to flip through them (in *Realistic*, solo shows the layer as a
-  slice of the board in its real material: inner copper as bare copper on substrate), **I** to invert the selected layer,
-  **B** for the background. All of it is saved in the `.pcam`.
+- **Layers like a mixer:** every layer has an **S** (solo) button. Solo one or several layers
+  to see only those; with none soloed, every layer is shown. With one layer soloed, clicking
+  another layer (or **↑/↓**) moves the solo. In *Realistic*, soloed layers show as slices of
+  the board in their real materials (inner copper as bare copper on substrate). In the
+  analysis views each layer also has a colour (click the bar on its left) and **inv**ert
+  (e.g. the solder mask material instead of its openings). **S** key: solo the selected layer,
+  **I**: invert it, **B**: background. All of it is saved in the `.pcam`.
 - **Inspector:** click any pad, track, region or hole to see its aperture/tool, polarity,
   coordinates, X2 attributes and the source line it came from. Parser messages per file are
   listed with line numbers.

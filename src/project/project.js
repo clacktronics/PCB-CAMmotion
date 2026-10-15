@@ -1,10 +1,14 @@
 // Project operations on top of the schema-1 project shape (src/project/schema.js):
 //   manifest, sources [{ name, bytes }], settings, stackup, tools, extra
 // The viewer keeps its per-layer and view settings in `settings` (settings/project.json):
-//   settings.layers: { [sourceName]: { visible, opacity, role, colour, invert } }
+//   settings.layers: { [sourceName]: { opacity, role, colour, invert } }
 //                    role = user override or null; colour = '#rrggbb' for the analysis views
 //                    or null; invert = draw the layer's complement (e.g. mask material)
 //   settings.view:   { side, mode, background, solo, activeLayer, showPaste, cx, cy, scale }
+//                    solo: names of the soloed layers (none = every layer shown). Files from
+//                    before multi-solo stored solo: true|false (with activeLayer) and a
+//                    per-layer `visible`; ensureSettings converts the first, the second is
+//                    ignored (soloing is the only way to choose what is shown).
 //                    mode: realistic | debug | classic | xor | outline (model/view-modes.js)
 // `stackup` is null until set; it is filled from a .gbrjob (source: 'gbrjob') unless the user
 // edited it (source: 'user'). Everything derived (parsed images, layers) is rebuilt on load.
@@ -23,7 +27,7 @@ export const DEFAULT_VIEW = {
   side: 'top',
   mode: 'realistic',
   background: 'dark',
-  solo: false,
+  solo: [],
   activeLayer: null,
   showPaste: false,
   cx: null,
@@ -42,12 +46,19 @@ export function ensureSettings(project) {
   const s = (project.settings ??= {});
   s.layers ??= {};
   s.view = { ...DEFAULT_VIEW, ...(s.view || {}) };
+  s.view.solo = normaliseSolo(s.view.solo, s.view.activeLayer);
   for (const src of project.sources) s.layers[src.name] ??= defaultLayerSettings();
   return project;
 }
 
 export function defaultLayerSettings() {
-  return { visible: true, opacity: 1, role: null, colour: null, invert: false };
+  return { opacity: 1, role: null, colour: null, invert: false };
+}
+
+/** Soloed layer names; converts the old single-solo boolean. */
+export function normaliseSolo(solo, activeLayer) {
+  if (Array.isArray(solo)) return [...new Set(solo.filter((n) => typeof n === 'string'))];
+  return solo === true && typeof activeLayer === 'string' ? [activeLayer] : [];
 }
 
 /** The stackup to draw with: the project's, or the defaults. */
@@ -109,6 +120,7 @@ export function addSourceFile(project, name, bytes, now = new Date()) {
 export function removeSource(project, name, now = new Date()) {
   project.sources = project.sources.filter((s) => s.name !== name);
   delete project.settings?.layers?.[name];
+  if (project.settings?.view?.solo) project.settings.view.solo = project.settings.view.solo.filter((n) => n !== name);
   touch(project, now);
 }
 
@@ -152,7 +164,7 @@ export function buildLayers(project, opts = {}) {
       image: file.image,
       commands: file.commands,
       diagnostics: file.diagnostics,
-      visible: settings.visible !== false,
+      visible: true, // what is shown is chosen by soloing (settings.view.solo)
       opacity: settings.opacity ?? 1,
       colour: settings.colour ?? null,
       invert: !!settings.invert,
