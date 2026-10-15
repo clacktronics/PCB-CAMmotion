@@ -8,6 +8,7 @@ import {
   imageStats,
   objectsWithAperture,
   describeAperture,
+  apertureLines,
 } from '../../../src/analyze/apertures.js';
 
 const fx = (name) => gerber(bytes(join(FIXTURES, 'gerber', name)));
@@ -126,4 +127,17 @@ test('empty and drawing-only images give sensible statistics', () => {
   assert.equal(s.minDrawWidthMm, null);
   assert.equal(s.minFlashMm, null);
   assert.equal(apertureTable(image)[0].uses, 0);
+});
+
+test('short gallery labels: what it is, then its size, each line short', () => {
+  const { image } = fx('analyser-apertures.gbr');
+  const lines = (code) => apertureLines(image.apertures.get(code));
+  assert.deepEqual(lines(10), ['circle', '⌀0.5 mm']);
+  assert.deepEqual(lines(11), ['rectangle', '1 × 2 mm']);
+  assert.deepEqual(lines(12), ['obround', '1 × 2 mm']);
+  assert.deepEqual(lines(13), ['6-gon', '⌀2 mm']);
+  assert.deepEqual(lines(14), ['circle', '⌀1 mm', 'hole ⌀0.4']);
+  assert.deepEqual(lines(15), ['SQUARE2', '2 × 2 mm']);
+  const { image: blk } = fx('block-clear-polarity.gbr');
+  assert.deepEqual(apertureLines(blk.apertures.get(100)), ['block', '2 objects']);
 });

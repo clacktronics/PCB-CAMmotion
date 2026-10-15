@@ -68,6 +68,20 @@ test('shape gallery: a card per aperture with statistics', async ({ page }) => {
       return n;
     });
   expect(inked).toBeGreaterThan(100);
+  // card text fits its card: nothing clipped or running off the side
+  const d14 = page.locator('[data-testid=shape-card][data-code="14"]');
+  await expect(d14).toContainText('circle');
+  await expect(d14).toContainText('⌀0.3 mm');
+  const overflowing = await page.locator('[data-testid=shape-card] span').evaluateAll((els) =>
+    els
+      .filter((e) => {
+        const card = e.closest('[data-testid=shape-card]').getBoundingClientRect();
+        const r = e.getBoundingClientRect();
+        return e.scrollWidth > e.clientWidth + 1 || r.left < card.left - 0.5 || r.right > card.right + 0.5;
+      })
+      .map((e) => e.textContent),
+  );
+  expect(overflowing).toEqual([]);
   await page.locator('[data-testid=shape-card][data-code="regions"]').click();
   expect(await settings(page)).toMatchObject({ highlight: { layer: FCU, code: null } });
   expect(errors).toEqual([]);

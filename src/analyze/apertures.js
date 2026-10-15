@@ -34,6 +34,31 @@ export function describeAperture(ap) {
 }
 
 /**
+ * A short description in lines for small spaces (the shape gallery): what it is, then its size.
+ * ["obround", "2.3 × 1.4 mm"], ["circle", "⌀1 mm", "hole ⌀0.4"], ["RoundRect", "1.2 × 0.6 mm"].
+ */
+export function apertureLines(ap) {
+  const mm = ap.mm || [];
+  const hole = (i) => (mm[i] > 0 ? [`hole ⌀${fmtMm(mm[i])}`] : []);
+  switch (ap.kind) {
+    case 'C':
+      return ['circle', `⌀${fmtMm(ap.dia)} mm`, ...hole(1)];
+    case 'R':
+    case 'O':
+      return [SHAPE_NAME[ap.kind], `${fmtMm(ap.w)} × ${fmtMm(ap.h)} mm`, ...hole(2)];
+    case 'P':
+      return [`${mm[1]}-gon${mm[2] ? ` ${mm[2]}°` : ''}`, `⌀${fmtMm(mm[0])} mm`, ...hole(3)];
+    case 'macro': {
+      const b = ap.shape.bbox;
+      return [ap.template, `${fmtMm(b[2] - b[0])} × ${fmtMm(b[3] - b[1])} mm`];
+    }
+    case 'block':
+      return ['block', `${ap.objects.length} object${ap.objects.length === 1 ? '' : 's'}`];
+  }
+  return [ap.template];
+}
+
+/**
  * Dark area of an aperture in mm². Standard apertures are exact (spec 4.4); macros and blocks
  * are measured on a fine raster (exact: false).
  * @returns {{areaMm2: number, exact: boolean}}

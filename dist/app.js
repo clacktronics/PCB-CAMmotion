@@ -22138,6 +22138,26 @@ void main() {
     }
     return `${ap2.template} ${ap2.params.join(" × ")}`;
   }
+  function apertureLines(ap2) {
+    const mm2 = ap2.mm || [];
+    const hole = (i) => mm2[i] > 0 ? [`hole ⌀${fmtMm(mm2[i])}`] : [];
+    switch (ap2.kind) {
+      case "C":
+        return ["circle", `⌀${fmtMm(ap2.dia)} mm`, ...hole(1)];
+      case "R":
+      case "O":
+        return [SHAPE_NAME[ap2.kind], `${fmtMm(ap2.w)} × ${fmtMm(ap2.h)} mm`, ...hole(2)];
+      case "P":
+        return [`${mm2[1]}-gon${mm2[2] ? ` ${mm2[2]}°` : ""}`, `⌀${fmtMm(mm2[0])} mm`, ...hole(3)];
+      case "macro": {
+        const b3 = ap2.shape.bbox;
+        return [ap2.template, `${fmtMm(b3[2] - b3[0])} × ${fmtMm(b3[3] - b3[1])} mm`];
+      }
+      case "block":
+        return ["block", `${ap2.objects.length} object${ap2.objects.length === 1 ? "" : "s"}`];
+    }
+    return [ap2.template];
+  }
   function apertureArea(ap2) {
     if (ap2._area) return ap2._area;
     let r2 = null;
@@ -22906,25 +22926,26 @@ void main() {
         ["Extent", b3 ? `${fmtMm(b3[2] - b3[0])} × ${fmtMm(b3[3] - b3[1])} mm` : "—"]
       ].filter(Boolean);
       const hl3 = this.s.highlight;
-      const card = (key2, title, sub, uses, image, code) => h(
+      const card = (key2, title, lines, full, uses, image, code) => h(
         "button",
         {
           class: `shape-card${uses ? "" : " unused"}${hl3 && hl3.layer === layer.id && hl3.code === code ? " hl" : ""}`,
           "data-testid": "shape-card",
           "data-code": key2,
-          title: `${title}: ${sub}${uses ? " · click to highlight every use" : " · not used"}`,
+          title: `${title}: ${full}${uses ? " · click to highlight every use" : " · not used"}`,
           onclick: () => this.toggleHighlight(layer, code)
         },
         [
           thumbnail(image),
           h("span", { class: "shape-title" }, title),
-          h("span", { class: "shape-sub" }, sub),
+          ...lines.map((t) => h("span", { class: "shape-sub" }, t)),
           h("span", { class: "shape-uses" }, `×${count(uses)}`)
         ]
       );
-      const cards = table.map(
-        (r2) => card(r2.code, r2.label, r2.description, r2.uses, apertureImage(layer.image.apertures.get(r2.code)), r2.code)
-      );
+      const cards = table.map((r2) => {
+        const ap2 = layer.image.apertures.get(r2.code);
+        return card(r2.code, r2.label, apertureLines(ap2), r2.description, r2.uses, apertureImage(ap2), r2.code);
+      });
       if (stats.regions) {
         const first = layer.image.objects.find((o2) => o2.k === "R");
         const bb = [Infinity, Infinity, -Infinity, -Infinity];
@@ -22936,7 +22957,15 @@ void main() {
             bb[3] = Math.max(bb[3], c[i + 1]);
           }
         cards.push(
-          card("regions", "Regions", "G36/G37 filled contours", stats.regions, { objects: [first], bounds: bb }, null)
+          card(
+            "regions",
+            "Regions",
+            ["G36/G37", `${count(stats.regionVertices)} vertices`],
+            "G36/G37 filled contours",
+            stats.regions,
+            { objects: [first], bounds: bb },
+            null
+          )
         );
       }
       this.body.append(

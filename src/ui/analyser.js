@@ -3,7 +3,14 @@
 // is DOM only. Its state is project data: settings.analyze (src/project/project.js).
 
 import { h, clear } from './dom.js';
-import { apertureTable, imageStats, objectsWithAperture, apertureImage, fmtMm } from '../analyze/apertures.js';
+import {
+  apertureTable,
+  imageStats,
+  objectsWithAperture,
+  apertureImage,
+  apertureLines,
+  fmtMm,
+} from '../analyze/apertures.js';
 import { describeCommand, coordinateContext, objectCommand, commandObjectRange } from '../analyze/commands.js';
 import { playbackState, nextStep, visibleObjects, clampStep } from '../analyze/playback.js';
 import { PLAYBACK_SPEEDS } from '../project/project.js';
@@ -376,26 +383,28 @@ export class AnalyserDock {
       ['Extent', b ? `${fmtMm(b[2] - b[0])} × ${fmtMm(b[3] - b[1])} mm` : '—'],
     ].filter(Boolean);
     const hl = this.s.highlight;
-    const card = (key, title, sub, uses, image, code) =>
+    // lines: short description (what, size); full: the whole description for the tooltip
+    const card = (key, title, lines, full, uses, image, code) =>
       h(
         'button',
         {
           class: `shape-card${uses ? '' : ' unused'}${hl && hl.layer === layer.id && hl.code === code ? ' hl' : ''}`,
           'data-testid': 'shape-card',
           'data-code': key,
-          title: `${title}: ${sub}${uses ? ' · click to highlight every use' : ' · not used'}`,
+          title: `${title}: ${full}${uses ? ' · click to highlight every use' : ' · not used'}`,
           onclick: () => this.toggleHighlight(layer, code),
         },
         [
           thumbnail(image),
           h('span', { class: 'shape-title' }, title),
-          h('span', { class: 'shape-sub' }, sub),
+          ...lines.map((t) => h('span', { class: 'shape-sub' }, t)),
           h('span', { class: 'shape-uses' }, `×${count(uses)}`),
         ],
       );
-    const cards = table.map((r) =>
-      card(r.code, r.label, r.description, r.uses, apertureImage(layer.image.apertures.get(r.code)), r.code),
-    );
+    const cards = table.map((r) => {
+      const ap = layer.image.apertures.get(r.code);
+      return card(r.code, r.label, apertureLines(ap), r.description, r.uses, apertureImage(ap), r.code);
+    });
     if (stats.regions) {
       const first = layer.image.objects.find((o) => o.k === 'R');
       const bb = [Infinity, Infinity, -Infinity, -Infinity];
@@ -407,7 +416,15 @@ export class AnalyserDock {
           bb[3] = Math.max(bb[3], c[i + 1]);
         }
       cards.push(
-        card('regions', 'Regions', 'G36/G37 filled contours', stats.regions, { objects: [first], bounds: bb }, null),
+        card(
+          'regions',
+          'Regions',
+          ['G36/G37', `${count(stats.regionVertices)} vertices`],
+          'G36/G37 filled contours',
+          stats.regions,
+          { objects: [first], bounds: bb },
+          null,
+        ),
       );
     }
     this.body.append(

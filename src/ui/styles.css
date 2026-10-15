@@ -540,13 +540,14 @@ table.apt tr.on td {
   align-content: flex-start;
 }
 .shape-card {
-  display: grid;
-  grid-template-columns: 64px;
-  justify-items: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   gap: 1px;
   padding: 4px;
-  width: 92px;
+  width: 100px;
   font-size: 11px;
+  line-height: 1.25;
 }
 .shape-card .thumb {
   width: 64px;
@@ -558,11 +559,11 @@ table.apt tr.on td {
   font-weight: 600;
 }
 .shape-card .shape-sub {
+  /* short lines (src/analyze/apertures.js apertureLines); long macro names wrap */
   color: var(--muted);
-  width: 84px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  max-width: 100%;
+  text-align: center;
+  overflow-wrap: anywhere;
 }
 .shape-card.unused {
   opacity: 0.55;
