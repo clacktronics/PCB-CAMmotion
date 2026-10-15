@@ -14,9 +14,9 @@ import { SCHEMA_VERSION } from '../project/schema.js';
 import { APP_VERSION } from '../version.js';
 import { saveAutosave, loadAutosave, clearAutosave } from './autosave.js';
 import { LAYER_TYPES, detectFileKind } from '../model/layers.js';
-import { SOLDER_MASK, SILKSCREEN, FINISH, SUBSTRATE, DEBUG, lookupMaterial, rgba } from '../model/materials.js';
+import { SOLDER_MASK, SILKSCREEN, FINISH, SUBSTRATE, DEBUG, MISC, lookupMaterial } from '../model/materials.js';
 import { h, clear } from './dom.js';
-import { VIEW_MODES, VIEW_MODE_LABELS, layerColour, toHex } from '../model/view-modes.js';
+import { VIEW_MODES, VIEW_MODE_LABELS, layerColour, toHex, parseHex } from '../model/view-modes.js';
 
 const SIDES = ['top', 'bottom', 'inner', 'all'];
 const KIND_LABEL = { F: 'Flash (D03)', L: 'Draw (D01, linear)', A: 'Arc (D01, G02/G03)', R: 'Region (G36/G37)' };
@@ -567,10 +567,14 @@ export class App {
           );
         }
       }
+      // the whole row takes the layer's colour in the current view
+      const rgb =
+        this.view.mode === 'realistic' ? swatchColour(l, this.project).rgb : layerColour(l, this.view.mode, index);
       const row = h(
         'li',
         {
-          class: `layer source-row${l.id === this.activeLayerId ? ' active' : ''}`,
+          class: `layer source-row${l.id === this.activeLayerId ? ' active' : ''}${l.visible ? '' : ' hidden-layer'}`,
+          style: `--layer: ${rgb.join(', ')}`,
           'data-testid': 'layer',
           'data-name': l.name,
           'data-role': `${l.role.type}:${l.role.side}`,
@@ -584,16 +588,20 @@ export class App {
             onclick: (e) => e.stopPropagation(),
             onchange: (e) => this.#setLayer(l.id, { visible: e.target.checked }),
           }),
+          // the colour bar on the left edge; in the analysis views it is the colour picker
           this.view.mode === 'realistic'
-            ? h('span', { class: 'swatch', style: `background:${rgba(swatchColour(l, this.project), 1)}` })
+            ? h('span', { class: 'colour-bar', title: 'Material colour (see Board materials)' })
             : h('input', {
                 type: 'color',
-                class: 'swatch',
+                class: 'colour-bar',
                 'data-testid': 'layer-colour',
-                title: 'Layer colour in this view',
-                value: toHex(layerColour(l, this.view.mode, index)),
+                title: 'Layer colour in this view: click to change',
+                value: toHex(rgb),
                 onclick: (e) => e.stopPropagation(),
-                oninput: (e) => this.#setLayer(l.id, { colour: e.target.value }),
+                oninput: (e) => {
+                  e.target.closest('.layer').style.setProperty('--layer', parseHex(e.target.value).join(', '));
+                  this.#setLayer(l.id, { colour: e.target.value });
+                },
               }),
           h('span', { class: 'name', title: l.name }, l.name),
           h('span', { class: 'badges' }, [
@@ -651,7 +659,6 @@ export class App {
     for (const s of others)
       this.layerList.append(
         h('li', { class: 'layer source-row muted', 'data-name': s.name }, [
-          h('span'),
           h('span'),
           h('span', { class: 'name' }, `${s.name} (${detectFileKind(s.name, s.bytes)})`),
         ]),
@@ -840,6 +847,7 @@ function swatchColour(l, project) {
   if (l.role.type === 'legend') return lookupMaterial('silk', st.silk?.[l.role.side] ?? st.silk).value;
   if (l.role.type === 'copper') return lookupMaterial('finish', st.finish).value;
   if (l.role.type === 'substrate') return lookupMaterial('substrate', st.substrate).value;
+  if (l.role.type === 'paste') return MISC.paste;
   return DEBUG[l.role.type] || DEBUG.other;
 }
 

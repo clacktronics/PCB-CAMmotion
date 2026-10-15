@@ -3,7 +3,7 @@
 import { test, expect } from '@playwright/test';
 import { join } from 'node:path';
 import { openApp, loadBoard, pixelAt, waitRendered, boardFiles, ROOT } from './viewer-helpers.js';
-import { CLASSIC, CLASSIC_BACKGROUND, MISC, SUBSTRATE } from '../../src/model/materials.js';
+import { CLASSIC, CLASSIC_BACKGROUND, MISC, SUBSTRATE, FINISH } from '../../src/model/materials.js';
 
 test.use({ viewport: { width: 1400, height: 850 } });
 
@@ -164,4 +164,28 @@ test('realistic + solo shows any layer as a slice: inner copper on substrate', a
   const maskPx = await pixelAt(page, 60, 10);
   expect(maskPx[1]).toBeGreaterThan(maskPx[0] + 20); // green mask
   expect(near(await pixelAt(page, 30, 40.3), SUBSTRATE.fr4.rgb, 12)).toBe(true); // opening shows substrate
+});
+
+test('each layer row takes its layer colour, and follows the colour picker', async ({ page }) => {
+  await openApp(page);
+  await loadBoard(page);
+  const bar = (name) =>
+    row(page, name)
+      .locator('.colour-bar')
+      .evaluate((el) => getComputedStyle(el).backgroundColor);
+  const finish = (await page.evaluate(() => window.__pcam.state().project.stackup.finish)).toLowerCase();
+  expect(finish).toBe('enig');
+  // realistic: material colours (copper shows its ENIG finish, paste grey)
+  expect(await bar('synthetic-board-F_Cu.gbr')).toBe(`rgb(${FINISH.enig.rgb.join(', ')})`);
+  expect(await bar('synthetic-board-F_Paste.gbr')).toBe(`rgb(${MISC.paste.rgb.join(', ')})`);
+  // classic: the palette colour for the row, also as a tint of the whole row
+  await mode(page, 'classic');
+  const state = await page.evaluate(() => window.__pcam.state());
+  const i = state.layers.findIndex((l) => l.name === 'synthetic-board-F_Cu.gbr');
+  const rgb = CLASSIC[i].rgb.join(', ');
+  const style = await row(page, 'synthetic-board-F_Cu.gbr').evaluate((el) => getComputedStyle(el).backgroundColor);
+  expect(style).toBe(`rgba(${rgb}, 0.26)`);
+  // picking a colour recolours the row and the board
+  await row(page, 'synthetic-board-F_Cu.gbr').locator('[data-testid=layer-colour]').fill('#00ff00');
+  await expect.poll(() => bar('synthetic-board-F_Cu.gbr')).toBe('rgb(0, 255, 0)');
 });
