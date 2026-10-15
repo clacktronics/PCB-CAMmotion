@@ -24,7 +24,8 @@ continue where you left off.
   bottom (mirrored) view, dark or light background. Wheel to zoom, drag to pan, **F** to fit.
 - **Hidden layers:** per-layer colour and **inv**ert (e.g. show the solder mask material
   instead of its openings, or the paste as stencil), **Solo** (**S**) to show only the
-  selected layer and **↑/↓** to flip through them, **I** to invert the selected layer,
+  selected layer and **↑/↓** to flip through them (in *Realistic*, solo shows the layer as a
+  slice of the board in its real material: inner copper as bare copper on substrate), **I** to invert the selected layer,
   **B** for the background. All of it is saved in the `.pcam`.
 - **Inspector:** click any pad, track, region or hole to see its aperture/tool, polarity,
   coordinates, X2 attributes and the source line it came from. Parser messages per file are

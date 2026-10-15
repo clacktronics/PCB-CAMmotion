@@ -3,7 +3,7 @@
 import { test, expect } from '@playwright/test';
 import { join } from 'node:path';
 import { openApp, loadBoard, pixelAt, waitRendered, boardFiles, ROOT } from './viewer-helpers.js';
-import { CLASSIC, CLASSIC_BACKGROUND, MISC } from '../../src/model/materials.js';
+import { CLASSIC, CLASSIC_BACKGROUND, MISC, SUBSTRATE } from '../../src/model/materials.js';
 
 test.use({ viewport: { width: 1400, height: 850 } });
 
@@ -73,6 +73,7 @@ test('outline view draws edges, not fills', async ({ page }) => {
 test('invert + solo shows the solder mask material; arrows flip through the layers', async ({ page }) => {
   await openApp(page);
   await loadBoard(page);
+  await mode(page, 'debug');
   await row(page, 'synthetic-board-F_Mask.gbr').locator('.name').click();
   await row(page, 'synthetic-board-F_Mask.gbr').locator('[data-testid=invert]').check();
   await page.keyboard.press('s'); // focus is on the checkbox: shortcuts must still work
@@ -128,4 +129,39 @@ test('all views render the sample boards without errors', async ({ page }) => {
   await loadBoard(page, boardFiles(join(ROOT, 'samples/clockblock')));
   for (const m of ['debug', 'classic', 'xor', 'outline', 'realistic']) await mode(page, m);
   expect(errors).toEqual([]);
+});
+
+test('realistic + solo shows any layer as a slice: inner copper on substrate', async ({ page }) => {
+  const inner = join(ROOT, 'test/fixtures/gerber/inner-copper-In1_Cu.gbr');
+  await openApp(page);
+  await loadBoard(page, [...boardFiles(join(SYN, 'board')), inner]);
+  await expect(row(page, 'inner-copper-In1_Cu.gbr')).toHaveAttribute('data-role', 'copper:inner');
+  await row(page, 'inner-copper-In1_Cu.gbr').locator('.name').click();
+  await page.keyboard.press('s');
+  await waitRendered(page);
+  const state = await page.evaluate(() => window.__pcam.state());
+  expect(state.project.settings.view).toMatchObject({ mode: 'realistic', solo: true });
+  const copper = await pixelAt(page, 30, 60); // inner 1 mm trace
+  expect(copper[0]).toBeGreaterThan(copper[2] + 60); // copper: red well above blue
+  const fr4 = await pixelAt(page, 30, 70); // substrate between features
+  expect(near(fr4, SUBSTRATE.fr4.rgb, 12)).toBe(true);
+  // the top copper pour (66..96 × 30..60) is not part of this slice
+  expect(near(await pixelAt(page, 80, 40), SUBSTRATE.fr4.rgb, 12)).toBe(true);
+  // the inner plane is copper, the mounting hole is cut through
+  expect((await pixelAt(page, 70, 10))[0]).toBeGreaterThan(150);
+  expect(near(await pixelAt(page, 4, 4), MISC.background.rgb, 6)).toBe(true);
+
+  // flip up to the top copper: its pour now shows as copper
+  await page.keyboard.press('ArrowUp');
+  await waitRendered(page);
+  expect((await page.evaluate(() => window.__pcam.state())).project.settings.view.activeLayer).toBe(
+    'synthetic-board-F_Cu.gbr',
+  );
+  expect((await pixelAt(page, 80, 40))[0]).toBeGreaterThan(150);
+  // and the top mask slice shows mask material with the pad openings
+  await row(page, 'synthetic-board-F_Mask.gbr').locator('.name').click();
+  await waitRendered(page);
+  const maskPx = await pixelAt(page, 60, 10);
+  expect(maskPx[1]).toBeGreaterThan(maskPx[0] + 20); // green mask
+  expect(near(await pixelAt(page, 30, 40.3), SUBSTRATE.fr4.rgb, 12)).toBe(true); // opening shows substrate
 });

@@ -2140,6 +2140,43 @@
       if (xor) ctx.putImageData(xor, 0, 0);
       ctx.globalAlpha = 1;
     }
+    /**
+     * One layer as a slice through the board, in real materials: substrate plus the layer's
+     * material (bare copper for any copper layer, inner ones included; mask, silkscreen or paste
+     * otherwise), plated hole barrels through copper, and the holes cut out.
+     */
+    renderSlice(ctx, l, { layers, profile, drills, board, substrate, st, map, w, h: h2 }) {
+      const out = this.workCanvas(2, w, h2);
+      const o = out.getContext("2d");
+      tintInto(o, board, rgba(substrate, 1), 1, this.workCanvas(3, w, h2));
+      const type = l.role.type;
+      let m = this.mask(l, map, w, h2);
+      if (type === "soldermask") {
+        const openings = (l.role.polarity || "negative") !== "positive";
+        if (openings !== !!l.invert) m = this.inverted(m, layers, profile, map, w, h2);
+      } else if (l.invert) m = this.inverted(m, layers, profile, map, w, h2);
+      const side = l.role.side === "bottom" ? "bottom" : "top";
+      const colour = type === "copper" ? COPPER : type === "soldermask" ? lookupMaterial("mask", st.mask?.[side] ?? st.mask).value : type === "legend" ? lookupMaterial("silk", st.silk?.[side] ?? st.silk).value : type === "paste" ? MISC.paste : type === "drill" || type === "profile" ? null : { rgb: roleColour(l.role) };
+      if (colour) {
+        const c = tint(this.workCanvas(4, w, h2), m, rgba(colour, 1));
+        if (type === "copper") sheen(c, 0.2);
+        o.globalAlpha = (type === "soldermask" ? colour.opacity ?? 0.85 : 1) * (l.opacity ?? 1);
+        o.drawImage(c, 0, 0);
+        o.globalAlpha = 1;
+      }
+      for (const d of drills) {
+        if (type === "copper" && d.role.plated !== false) {
+          tintInto(o, this.mask(d, map, w, h2, { inflateMm: 0.04 }), rgba(COPPER, 1), 1, this.workCanvas(3, w, h2));
+        }
+        o.globalCompositeOperation = "destination-out";
+        o.drawImage(this.mask(d, map, w, h2), 0, 0);
+        o.globalCompositeOperation = "source-over";
+      }
+      o.globalCompositeOperation = "destination-in";
+      o.drawImage(board, 0, 0);
+      o.globalCompositeOperation = "source-over";
+      ctx.drawImage(out, 0, 0);
+    }
     /** The layer's complement inside the board area (board outline, or all layers' extent). */
     inverted(mask, layers, profile, map, w, h2) {
       const c = this.workCanvas(5, w, h2);
@@ -2190,6 +2227,8 @@
         bctx.fill("evenodd");
       }
       bctx.setTransform(1, 0, 0, 1, 0, 0);
+      const solo = settings.solo ? layers.find((l) => l.id === settings.activeLayerId && l.image) : null;
+      if (solo) return this.renderSlice(ctx, solo, { layers, profile, drills, board, substrate, st, map, w, h: h2 });
       const out = this.workCanvas(2, w, h2);
       const o = out.getContext("2d");
       tintInto(o, board, rgba(substrate, 1), 1, this.workCanvas(3, w, h2));
@@ -2328,6 +2367,17 @@
       if (l) return [l];
     }
     return layers.filter((l) => l.visible && l.image);
+  }
+  function sheen(canvas, strength) {
+    const c = canvas.getContext("2d");
+    c.globalCompositeOperation = "source-atop";
+    const g = c.createLinearGradient(0, 0, canvas.width, canvas.height);
+    g.addColorStop(0, `rgba(255,255,255,${strength})`);
+    g.addColorStop(0.45, "rgba(255,255,255,0)");
+    g.addColorStop(1, `rgba(0,0,0,${strength * 0.5})`);
+    c.fillStyle = g;
+    c.fillRect(0, 0, canvas.width, canvas.height);
+    c.globalCompositeOperation = "source-over";
   }
 
   // src/model/hit-test.js
@@ -2688,7 +2738,7 @@
         if (r.side === "inner") return 3;
         return 4;
       };
-      const shown = this.settings.mode === "realistic" ? this.layers.filter((l) => l.visible && l.image) : analysisLayers(this.layers, this.settings);
+      const shown = analysisLayers(this.layers, this.settings);
       return shown.sort((a, b) => rank(a) - rank(b));
     }
     select(hit) {
@@ -5901,8 +5951,7 @@
       this.#refreshDiagnostics();
     }
     #toggleSolo() {
-      const solo = !this.view.solo;
-      this.#setView(solo && this.view.mode === "realistic" ? { solo, mode: "debug" } : { solo });
+      this.#setView({ solo: !this.view.solo });
     }
     #onView(v) {
       const changed = this.view.cx !== v.cx || this.view.cy !== v.cy || this.view.scale !== v.scale;

@@ -242,10 +242,7 @@ export class Viewer {
       if (r.side === 'inner') return 3;
       return 4;
     };
-    const shown =
-      this.settings.mode === 'realistic'
-        ? this.layers.filter((l) => l.visible && l.image)
-        : analysisLayers(this.layers, this.settings);
+    const shown = analysisLayers(this.layers, this.settings);
     return shown.sort((a, b) => rank(a) - rank(b));
   }
 

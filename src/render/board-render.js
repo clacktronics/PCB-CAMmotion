@@ -106,6 +106,57 @@ export class BoardRenderer {
     ctx.globalAlpha = 1;
   }
 
+  /**
+   * One layer as a slice through the board, in real materials: substrate plus the layer's
+   * material (bare copper for any copper layer, inner ones included; mask, silkscreen or paste
+   * otherwise), plated hole barrels through copper, and the holes cut out.
+   */
+  renderSlice(ctx, l, { layers, profile, drills, board, substrate, st, map, w, h }) {
+    const out = this.workCanvas(2, w, h);
+    const o = out.getContext('2d');
+    tintInto(o, board, rgba(substrate, 1), 1, this.workCanvas(3, w, h));
+    const type = l.role.type;
+    let m = this.mask(l, map, w, h);
+    if (type === 'soldermask') {
+      // the mask image shows openings (negative polarity): the material is the rest
+      const openings = (l.role.polarity || 'negative') !== 'positive';
+      if (openings !== !!l.invert) m = this.inverted(m, layers, profile, map, w, h);
+    } else if (l.invert) m = this.inverted(m, layers, profile, map, w, h);
+    const side = l.role.side === 'bottom' ? 'bottom' : 'top';
+    const colour =
+      type === 'copper'
+        ? COPPER
+        : type === 'soldermask'
+          ? lookupMaterial('mask', st.mask?.[side] ?? st.mask).value
+          : type === 'legend'
+            ? lookupMaterial('silk', st.silk?.[side] ?? st.silk).value
+            : type === 'paste'
+              ? MISC.paste
+              : type === 'drill' || type === 'profile'
+                ? null
+                : { rgb: roleColour(l.role) };
+    if (colour) {
+      const c = tint(this.workCanvas(4, w, h), m, rgba(colour, 1));
+      if (type === 'copper') sheen(c, 0.2);
+      o.globalAlpha = (type === 'soldermask' ? (colour.opacity ?? 0.85) : 1) * (l.opacity ?? 1);
+      o.drawImage(c, 0, 0);
+      o.globalAlpha = 1;
+    }
+    for (const d of drills) {
+      if (type === 'copper' && d.role.plated !== false) {
+        // plated barrel: copper ring around every plated hole through a copper layer
+        tintInto(o, this.mask(d, map, w, h, { inflateMm: 0.04 }), rgba(COPPER, 1), 1, this.workCanvas(3, w, h));
+      }
+      o.globalCompositeOperation = 'destination-out';
+      o.drawImage(this.mask(d, map, w, h), 0, 0);
+      o.globalCompositeOperation = 'source-over';
+    }
+    o.globalCompositeOperation = 'destination-in';
+    o.drawImage(board, 0, 0);
+    o.globalCompositeOperation = 'source-over';
+    ctx.drawImage(out, 0, 0);
+  }
+
   /** The layer's complement inside the board area (board outline, or all layers' extent). */
   inverted(mask, layers, profile, map, w, h) {
     const c = this.workCanvas(5, w, h);
@@ -159,6 +210,10 @@ export class BoardRenderer {
       bctx.fill('evenodd');
     }
     bctx.setTransform(1, 0, 0, 1, 0, 0);
+
+    // Solo: the selected layer alone as a slice of the board (inner layers included)
+    const solo = settings.solo ? layers.find((l) => l.id === settings.activeLayerId && l.image) : null;
+    if (solo) return this.renderSlice(ctx, solo, { layers, profile, drills, board, substrate, st, map, w, h });
 
     // compose on an out canvas: substrate, copper, mask, exposed finish, silk, holes
     const out = this.workCanvas(2, w, h);
@@ -315,3 +370,16 @@ export function analysisLayers(layers, settings) {
 }
 
 export { roleColour };
+
+/** Light sheen over metal (a gradient over what is already drawn). */
+function sheen(canvas, strength) {
+  const c = canvas.getContext('2d');
+  c.globalCompositeOperation = 'source-atop';
+  const g = c.createLinearGradient(0, 0, canvas.width, canvas.height);
+  g.addColorStop(0, `rgba(255,255,255,${strength})`);
+  g.addColorStop(0.45, 'rgba(255,255,255,0)');
+  g.addColorStop(1, `rgba(0,0,0,${strength * 0.5})`);
+  c.fillStyle = g;
+  c.fillRect(0, 0, canvas.width, canvas.height);
+  c.globalCompositeOperation = 'source-over';
+}

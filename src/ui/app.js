@@ -394,9 +394,8 @@ export class App {
   }
 
   #toggleSolo() {
-    const solo = !this.view.solo;
-    // solo is an analysis tool: from the realistic view, switch to per-layer colours
-    this.#setView(solo && this.view.mode === 'realistic' ? { solo, mode: 'debug' } : { solo });
+    // in the realistic view, solo shows the selected layer as a slice of the board
+    this.#setView({ solo: !this.view.solo });
   }
 
   #onView(v) {
