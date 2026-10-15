@@ -16,7 +16,9 @@ them, and output either CNC toolpaths (machine-specific) or UV-exposure negative
      **Makera Carvera** (confirm exact model).
    - Generic G-code (GRBL / Marlin / LinuxCNC) as a baseline.
    - Film/negative output (SVG / PNG / PDF at true scale, mirror + invert options) for UV exposure.
-5. **Manufacturability DRC**: check the design against the real tools and machine
+5. **Project file (`.pcam`)**: everything — source files, edits, settings, stackup,
+   tools, toolpaths, DRC results — saved in one downloadable project file.
+6. **Manufacturability DRC**: check the design against the real tools and machine
    (can this actually be milled/drilled/exposed?), not just abstract design rules.
 
 ## Constraints
@@ -24,6 +26,7 @@ them, and output either CNC toolpaths (machine-specific) or UV-exposure negative
 - Runs entirely in the browser. No server, no uploads, no telemetry.
 - Opens from a static `index.html` (works from `file://` or any static host).
 - Works offline once loaded.
+- All state lives in the `.pcam` project file; nothing important exists only in the browser.
 
 ## Architecture (simple)
 
@@ -39,6 +42,7 @@ src/
   drc/        Manufacturability checks against tools, machine and process limits
   post/       Post-processors: generic, lpkf-e44, makera-carvera
   export/     G-code / machine files, film negatives (SVG/PNG/PDF)
+  project/    .pcam save/load, schema versions + migrations, autosave
   ui/         App shell, panels, settings
 test/         Parser/edit round-trip tests and sample files
 samples/      Small reference Gerber/drill sets
@@ -51,8 +55,8 @@ so edits round-trip to valid files and analysis can point back to source lines.
 
 | # | Milestone | Done when |
 |---|-----------|-----------|
-| 0 | Skeleton | Static app loads, file drop works, tests run |
-| 1 | Parsers | Gerber + Excellon + `.gbrjob` parse into the command model; layers auto-identified; sample files pass |
+| 0 | Skeleton | Static app loads, file drop works, tests run, empty `.pcam` saves and reloads |
+| 1 | Parsers | Gerber + Excellon + `.gbrjob` parse into the command model; layers auto-identified; sample files pass; imported files stored in `.pcam` |
 | 2 | Viewer | Layers render correctly (polarity, regions, macros), zoom/pan/select, realistic board colours (see below) |
 | 3 | Analyser | Aperture table, shape gallery, command inspector, step-through playback |
 | 4 | Editor | Select/move/delete/add pads, traces, regions, drills; undo/redo; export round-trips |
@@ -62,7 +66,37 @@ so edits round-trip to valid files and analysis can point back to source lines.
 | 8 | 3D view | Stackup in 3D with real colours, exploded view, cross-section, as-milled preview (see below) |
 | 9 | Generic post | G-code preview + simulation, export |
 | 10 | Machine posts | LPKF E44 and Makera Carvera output tested on real machines |
-| 11 | Polish | Project save/load (local file), presets, docs |
+| 11 | Polish | Presets, templates, docs |
+
+### Project file — `.pcam` (from milestone 0, extended by every milestone)
+
+One file holds the whole project, so it can be downloaded, backed up, emailed or
+reopened on another computer and come back exactly as it was.
+
+- **Format:** a ZIP container (vendored zip library, e.g. fflate) with the extension
+  `.pcam` (opening accepts any case, e.g. `.PCAM`):
+  ```
+  project.json        manifest: schema version, app version, created/modified, units
+  sources/            original Gerber, drill and .gbrjob files, byte-for-byte untouched
+  model/              edited command model per layer + undo history
+  settings/           app + project settings, layer colours/visibility, view state
+  stackup.json        stackup and materials (from .gbrjob or user-edited)
+  tools.json          tool library, feeds/speeds, machine profile choices
+  cam/                toolpath jobs and their parameters (+ cached results)
+  drc/                DRC rules, results, waived findings
+  exports/            optional: last generated G-code / machine files / film negatives
+  ```
+- **Originals are never overwritten:** edits are stored separately, so the original files
+  can always be re-exported or diffed against the edited version.
+- **Save = download:** the browser downloads `name.pcam`. Where the browser supports the
+  File System Access API (Chrome/Edge), "Save" writes back to the same file.
+- **Open:** file picker or drag-and-drop of a `.pcam` file.
+- **Autosave:** a crash-recovery copy in IndexedDB, offered on next launch. Only a safety net —
+  the `.pcam` file is the real copy.
+- **Versioned schema:** `project.json` carries a schema version; older files are migrated
+  forward on load, never rejected. Unknown fields are kept, not dropped.
+- **Settings scope:** app-wide preferences (UI, default machine) can be exported/imported
+  separately, but everything that affects the output lives in the project file.
 
 ### Stackup & real colours (milestones 1, 2, 8)
 
@@ -120,6 +154,7 @@ Results appear as markers in the viewer and as a list that links to the editor a
 - Makera: confirm model (Carvera / Carvera Air), ATC tool numbering, probing/auto-level commands.
 - Geometry library for polygon offset/boolean (e.g. Clipper2 JS) vs writing our own.
 - Exact KiCad `.gbrjob` colour names → RGB/opacity values; collect real board photos to tune them.
+- Should `.pcam` also embed rendered previews (thumbnail PNG) for file browsers?
 - Framework or vanilla JS? Default: vanilla ES modules + a small bundler only if needed.
 
 ## Out of scope (for now)

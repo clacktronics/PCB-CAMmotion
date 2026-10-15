@@ -7,6 +7,7 @@ See `PROJECT_PLAN.md` for goals and milestones.
 
 A local-only, in-browser PCB CAM tool: Gerber + Excellon in; analysis, editing,
 machine-specific toolpaths (LPKF E44, Makera Carvera, generic G-code), manufacturability DRC and UV film negatives out.
+The whole project is saved as one downloadable `.pcam` file.
 
 ## Hard rules
 
@@ -17,6 +18,11 @@ machine-specific toolpaths (LPKF E44, Makera Carvera, generic G-code), manufactu
   equivalent geometry. Add a round-trip test for any parser/serialiser change.
 - **Units are explicit.** Store internally in one unit (mm) and convert at the edges.
   Never mix units inside a function without naming them (`xMm`, `feedMmMin`).
+- **Everything lives in the `.pcam` project file.** Any new setting, edit, tool or result must
+  be saved to and restored from `.pcam`. Add it to the schema, bump the schema version with
+  a migration if the shape changes, and extend the save/load round-trip test.
+  `localStorage`/IndexedDB is only for autosave recovery, never the only copy.
+- **Keep original files untouched** inside `.pcam` (`sources/`); store edits separately.
 - **Machine output is safety-critical.** Post-processor changes need a test with expected
   output, and must keep safe-Z moves, spindle on/off, and feed limits intact.
 
@@ -24,7 +30,7 @@ machine-specific toolpaths (LPKF E44, Makera Carvera, generic G-code), manufactu
 
 ```
 src/parse  src/model  src/render  src/render3d  src/analyze  src/edit
-src/cam    src/drc    src/post   src/export  src/ui
+src/cam    src/drc    src/post   src/export  src/project  src/ui
 test/      samples/
 ```
 
