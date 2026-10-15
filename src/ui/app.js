@@ -1,10 +1,19 @@
 // Application shell: toolbar, layer list, inspector, file drop, .pcam open/save, autosave.
 
 import { Viewer } from '../render/viewer.js';
-import { createProject, addSourceFile, buildLayers, removeSource } from '../project/project.js';
-import { savePcam, loadPcam, isPcamName, PcamError } from '../project/pcam.js';
+import {
+  createProject,
+  addSourceFile,
+  buildLayers,
+  removeSource,
+  ensureSettings,
+  effectiveStackup,
+} from '../project/project.js';
+import { saveProject, loadProject, isPcamFileName, pcamFileName } from '../project/pcam.js';
+import { SCHEMA_VERSION } from '../project/schema.js';
+import { APP_VERSION } from '../version.js';
 import { saveAutosave, loadAutosave, clearAutosave } from './autosave.js';
-import { LAYER_TYPES } from '../model/layers.js';
+import { LAYER_TYPES, detectFileKind } from '../model/layers.js';
 import { SOLDER_MASK, SILKSCREEN, FINISH, SUBSTRATE, DEBUG, lookupMaterial, rgba } from '../model/materials.js';
 import { h, clear } from './dom.js';
 
@@ -15,7 +24,7 @@ export class App {
   constructor(root) {
     this.root = root;
     this.project = createProject();
-    this.sources = new Map();
+    this.dirty = false;
     this.layers = [];
     this.job = null;
     this.activeLayerId = null;
@@ -31,6 +40,13 @@ export class App {
     });
     this.#offerAutosave();
     this.#refresh();
+    this.#message(`Ready — drop Gerber, drill, .gbrjob or .pcam files (project schema ${SCHEMA_VERSION})`);
+    document.body.dataset.ready = 'true';
+  }
+
+  /** The viewer settings stored in the project (settings/project.json). */
+  get view() {
+    return this.project.settings.view;
   }
 
   layerById(id) {
@@ -43,6 +59,7 @@ export class App {
     const fileInput = h('input', {
       type: 'file',
       multiple: true,
+      id: 'add-input',
       class: 'hidden',
       'data-testid': 'file-input',
       onchange: (e) => this.#onFiles(e.target.files, e.target),
@@ -50,6 +67,7 @@ export class App {
     const pcamInput = h('input', {
       type: 'file',
       accept: '.pcam,.PCAM',
+      id: 'open-input',
       class: 'hidden',
       'data-testid': 'pcam-input',
       onchange: (e) => this.#onFiles(e.target.files, e.target),
@@ -77,15 +95,20 @@ export class App {
     this.btnPaste = h(
       'button',
       {
-        onclick: () => this.#setView({ showPaste: !this.project.view.showPaste }),
+        onclick: () => this.#setView({ showPaste: !this.view.showPaste }),
         title: 'Show solder paste in the realistic view',
       },
       'Paste',
     );
     this.btnSave = h(
       'button',
-      { onclick: () => this.save(), 'data-testid': 'save', title: 'Save the project as a .pcam file (Ctrl+S)' },
-      'Save project',
+      {
+        onclick: () => this.save(),
+        id: 'save',
+        'data-testid': 'save',
+        title: 'Save the project as a .pcam file (Ctrl+S)',
+      },
+      'Save',
     );
     this.btnSaveAs = h(
       'button',
@@ -94,22 +117,25 @@ export class App {
     );
     this.nameInput = h('input', {
       type: 'text',
-      value: this.project.name,
+      id: 'project-name',
+      value: this.project.manifest.name,
       title: 'Project name',
+      spellcheck: 'false',
       size: 16,
-      onchange: (e) => {
-        this.project.name = e.target.value.trim() || 'Untitled';
+      oninput: (e) => {
+        this.project.manifest.name = e.target.value;
         this.#touch();
       },
     });
     const toolbar = h('header', { class: 'toolbar' }, [
       h('span', { class: 'title' }, 'PCB-CAMmotion'),
+      h('button', { id: 'new', onclick: () => this.newProject(), title: 'Start an empty project' }, 'New'),
+      h('button', { id: 'open', onclick: () => pcamInput.click(), title: 'Open a .pcam project' }, 'Open…'),
       h(
         'button',
-        { onclick: () => fileInput.click(), title: 'Gerber, Excellon, .gbrjob or a .zip of them' },
-        'Open files…',
+        { id: 'add', onclick: () => fileInput.click(), title: 'Add Gerber, Excellon, .gbrjob files or a .zip of them' },
+        'Add files…',
       ),
-      h('button', { onclick: () => pcamInput.click() }, 'Open project…'),
       this.btnSave,
       this.btnSaveAs,
       fileInput,
@@ -143,7 +169,7 @@ export class App {
 
     this.canvas = h('canvas', { 'data-testid': 'board' });
     this.overlay = h('canvas', { class: 'overlay' });
-    this.empty = h('div', { class: 'empty' }, [
+    this.empty = h('div', { class: 'empty', id: 'empty' }, [
       h('div', {}, [
         h('div', {}, 'Drop Gerber, Excellon, .gbrjob or .zip files here'),
         h('div', { class: 'muted' }, 'or a .pcam project · everything stays on this computer'),
@@ -160,13 +186,15 @@ export class App {
 
     this.statusPos = h('span', {}, '');
     this.statusZoom = h('span', {}, '');
-    this.statusMsg = h('span', { 'data-testid': 'status' }, '');
+    this.statusMsg = h('span', { id: 'status', 'data-testid': 'status', role: 'status' }, '');
+    this.projectInfo = h('span', { id: 'project-info' }, '');
     this.statusHover = h('span', {}, '');
     const status = h('footer', { class: 'status' }, [
       this.statusPos,
       this.statusZoom,
       this.statusMsg,
       this.statusHover,
+      this.projectInfo,
     ]);
 
     clear(this.root);
@@ -179,26 +207,50 @@ export class App {
       } else if (e.target === document.body && e.key.toLowerCase() === 'f') this.viewer.fit();
       else if (e.key === 'Escape') this.viewer.select(null);
     });
+    window.addEventListener('beforeunload', (e) => {
+      if (this.dirty) e.preventDefault();
+    });
   }
 
   #bindDrop() {
     let depth = 0;
     const m = this.main;
-    m.addEventListener('dragenter', (e) => {
+    const hasFiles = (e) => [...(e.dataTransfer?.types ?? [])].includes('Files');
+    window.addEventListener('dragenter', (e) => {
+      if (!hasFiles(e)) return;
       e.preventDefault();
       depth++;
       m.classList.add('dragging');
     });
-    m.addEventListener('dragover', (e) => e.preventDefault());
-    m.addEventListener('dragleave', () => {
-      if (--depth <= 0) m.classList.remove('dragging');
+    window.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
     });
-    m.addEventListener('drop', (e) => {
+    window.addEventListener('dragleave', () => {
+      depth = Math.max(0, depth - 1);
+      if (depth === 0) m.classList.remove('dragging');
+    });
+    window.addEventListener('drop', (e) => {
       e.preventDefault();
       depth = 0;
       m.classList.remove('dragging');
-      this.#onFiles(e.dataTransfer.files);
+      if (e.dataTransfer?.files) this.#onFiles(e.dataTransfer.files);
     });
+  }
+
+  #confirmDiscard() {
+    return !this.dirty || window.confirm('Discard unsaved changes to this project?');
+  }
+
+  newProject() {
+    if (!this.#confirmDiscard()) return;
+    this.project = createProject();
+    this.fileHandle = null;
+    this.nameInput.value = this.project.manifest.name;
+    this.#rebuild({});
+    this.dirty = false;
+    this.#refreshTitle();
+    this.#message('New project');
   }
 
   // ---------------------------------------------------------------- files
@@ -214,33 +266,40 @@ export class App {
 
   /** Load files given as {name, bytes}. A .pcam replaces the project; others are added to it. */
   async loadFiles(files) {
-    const pcam = files.find((f) => isPcamName(f.name));
+    if (!files.length) return;
+    const pcam = files.find((f) => isPcamFileName(f.name));
     if (pcam) {
+      if (files.length > 1)
+        return this.#message('Open a .pcam project on its own, not together with other files', true);
+      if (!this.#confirmDiscard()) return;
       try {
-        const { project, sources, migratedFrom } = loadPcam(pcam.bytes);
+        const project = ensureSettings(loadProject(pcam.bytes));
         this.project = project;
-        this.sources = sources;
         this.fileHandle = null;
-        this.nameInput.value = project.name;
+        this.nameInput.value = project.manifest.name;
         this.#rebuild({ keepView: true });
-        this.#message(`Opened ${pcam.name}${migratedFrom !== null ? ` (migrated from schema ${migratedFrom})` : ''}`);
+        this.dirty = false;
+        this.#refreshTitle();
+        const n = project.sources.length;
+        this.#message(`Opened ${pcam.name} (${n} source file${n === 1 ? '' : 's'})`);
       } catch (e) {
-        this.#message(e instanceof PcamError ? e.message : `Could not open ${pcam.name}: ${e.message}`, true);
+        this.#message(`Could not open ${pcam.name}: ${e.message}`, true);
       }
       return;
     }
     const skipped = [];
     let added = 0;
     for (const f of files) {
-      const r = addSourceFile(this.project, this.sources, f.name, f.bytes);
+      const r = addSourceFile(this.project, f.name, f.bytes);
       added += r.added.length;
       skipped.push(...r.skipped);
     }
-    if (this.project.name === 'Untitled' && added) {
+    if (this.project.manifest.name === 'untitled' && added) {
       const guess = guessProjectName(this.project.sources.map((s) => s.name));
-      if (guess) this.nameInput.value = this.project.name = guess;
+      if (guess) this.nameInput.value = this.project.manifest.name = guess;
     }
     this.#rebuild({ fit: true });
+    if (added) this.#touch();
     this.#message(
       `Loaded ${added} file${added === 1 ? '' : 's'}${skipped.length ? ` · skipped: ${skipped.join('; ')}` : ''}`,
       !!skipped.length && !added,
@@ -249,23 +308,22 @@ export class App {
 
   #rebuild({ fit = false, keepView = false } = {}) {
     const t0 = performance.now();
-    const { layers, job } = buildLayers(this.project, this.sources);
+    const { layers, job } = buildLayers(this.project);
     this.layers = layers;
     this.job = job;
     this.textCache.clear();
     this.parseMs = performance.now() - t0;
     if (!this.layers.find((l) => l.id === this.activeLayerId)) this.activeLayerId = this.layers[0]?.id ?? null;
-    this.viewer.settings.side = this.project.view.side;
-    this.viewer.settings.mode = this.project.view.mode;
-    this.viewer.settings.showPaste = !!this.project.view.showPaste;
-    this.viewer.settings.stackup = this.project.stackup;
+    this.viewer.settings.side = this.view.side;
+    this.viewer.settings.mode = this.view.mode;
+    this.viewer.settings.showPaste = !!this.view.showPaste;
+    this.viewer.settings.stackup = effectiveStackup(this.project);
     this.viewer.setLayers(this.#renderLayers());
-    const v = this.project.view;
+    const v = this.view;
     if (keepView && Number.isFinite(v.scale) && v.scale > 0) this.viewer.setView(v);
     else if (fit || keepView) this.viewer.fit();
     this.selection = null;
     this.#refresh();
-    this.#touch(false);
   }
 
   #renderLayers() {
@@ -275,22 +333,23 @@ export class App {
   // ---------------------------------------------------------------- state changes
 
   #setView(patch) {
-    Object.assign(this.project.view, patch);
+    Object.assign(this.view, patch);
     this.viewer.setSettings(patch);
     this.#refreshToolbar();
     this.#touch();
   }
 
   #onView(v) {
-    this.project.view.cx = v.cx;
-    this.project.view.cy = v.cy;
-    this.project.view.scale = v.scale;
+    const changed = this.view.cx !== v.cx || this.view.cy !== v.cy || this.view.scale !== v.scale;
+    this.view.cx = v.cx;
+    this.view.cy = v.cy;
+    this.view.scale = v.scale;
     this.statusZoom.textContent = `${v.scale >= 10 ? v.scale.toFixed(0) : v.scale.toPrecision(3)} px/mm`;
-    this.#touch();
+    if (changed && this.project.sources.length) this.#touch();
   }
 
   #setLayer(id, patch) {
-    const s = this.project.layers[id];
+    const s = this.project.settings.layers[id];
     Object.assign(s, patch);
     const l = this.layerById(id);
     if (l) {
@@ -303,20 +362,22 @@ export class App {
   }
 
   #setStackup(patch) {
-    Object.assign(this.project.stackup, patch, { source: 'user' });
+    this.project.stackup = { ...effectiveStackup(this.project), ...patch, source: 'user' };
     this.viewer.settings.stackup = this.project.stackup;
     this.viewer.layersChanged();
     this.#refreshStack();
     this.#touch();
   }
 
-  #touch(modified = true) {
-    if (modified) this.project.modified = new Date().toISOString();
+  #touch() {
+    this.project.manifest.modified = new Date().toISOString();
+    this.dirty = true;
+    this.#refreshTitle();
     clearTimeout(this.autosaveTimer);
     if (!this.project.sources.length) return;
     this.autosaveTimer = setTimeout(() => {
       try {
-        saveAutosave(savePcam(this.project, this.sources)).catch(() => {});
+        saveAutosave(saveProject(this.project)).catch(() => {});
       } catch {
         // autosave is only a safety net
       }
@@ -331,9 +392,9 @@ export class App {
    * @param {{as?: boolean}} [opts] as: ask where to save (picker where supported)
    */
   async save(opts = {}) {
-    if (!this.project.sources.length) return this.#message('Nothing to save yet: load some files first', true);
-    const bytes = savePcam(this.project, this.sources);
-    const name = `${safeFileName(this.project.name)}.pcam`;
+    this.project.manifest.modified = new Date().toISOString();
+    const bytes = saveProject(this.project);
+    const name = pcamFileName(this.project);
     try {
       if (opts.as && window.showSaveFilePicker) {
         this.fileHandle = await window.showSaveFilePicker({
@@ -346,6 +407,8 @@ export class App {
         await w.write(bytes);
         await w.close();
       } else downloadBytes(bytes, name);
+      this.dirty = false;
+      this.#refreshTitle();
       this.#message(`Saved ${this.fileHandle?.name || name} (${(bytes.length / 1024).toFixed(1)} KB)`);
       clearAutosave().catch(() => {});
     } catch (e) {
@@ -368,7 +431,8 @@ export class App {
         'button',
         {
           onclick: () => (
-            this.banner.classList.add('hidden'), this.loadFiles([{ name: 'recovered.pcam', bytes: rec.bytes }])
+            this.banner.classList.add('hidden'),
+            this.loadFiles([{ name: 'recovered.pcam', bytes: rec.bytes }])
           ),
         },
         'Recover',
@@ -380,14 +444,23 @@ export class App {
 
   #message(text, isError = false) {
     this.statusMsg.textContent = text;
-    this.statusMsg.style.color = isError ? 'var(--err)' : '';
+    this.statusMsg.dataset.kind = isError ? 'error' : 'info';
+    this.statusMsg.setAttribute('role', isError ? 'alert' : 'status');
+  }
+
+  #refreshTitle() {
+    const m = this.project.manifest;
+    document.title = `${this.dirty ? '• ' : ''}${m.name} — PCB-CAMmotion`;
+    this.btnSave.classList.toggle('attention', this.dirty);
+    this.projectInfo.textContent = `schema ${m.schemaVersion} · ${m.units} · app ${APP_VERSION}`;
   }
 
   // ---------------------------------------------------------------- panels
 
   #refresh() {
     this.empty.classList.toggle('hidden', this.layers.length > 0);
-    this.btnSave.disabled = this.btnSaveAs.disabled = !this.project.sources.length;
+    this.btnSaveAs.disabled = !this.project.sources.length;
+    this.#refreshTitle();
     this.#refreshToolbar();
     this.#refreshLayers();
     this.#refreshStack();
@@ -396,7 +469,7 @@ export class App {
   }
 
   #refreshToolbar() {
-    const v = this.project.view;
+    const v = this.view;
     for (const [k, b] of Object.entries(this.btnSide)) b.classList.toggle('on', v.side === k);
     for (const [k, b] of Object.entries(this.btnMode)) b.classList.toggle('on', v.mode === k);
     this.btnPaste.classList.toggle('on', !!v.showPaste);
@@ -434,7 +507,7 @@ export class App {
       const row = h(
         'li',
         {
-          class: `layer${l.id === this.activeLayerId ? ' active' : ''}`,
+          class: `layer source-row${l.id === this.activeLayerId ? ' active' : ''}`,
           'data-testid': 'layer',
           'data-name': l.name,
           'data-role': `${l.role.type}:${l.role.side}`,
@@ -477,8 +550,9 @@ export class App {
                 title: 'Remove from project',
                 onclick: (e) => {
                   e.stopPropagation();
-                  removeSource(this.project, this.sources, l.id);
+                  removeSource(this.project, l.id);
                   this.#rebuild({ keepView: true });
+                  this.#touch();
                 },
               },
               '×',
@@ -488,19 +562,19 @@ export class App {
       );
       this.layerList.append(row);
     }
-    const others = this.project.sources.filter((s) => !this.layers.find((l) => l.id === s.id));
+    const others = this.project.sources.filter((s) => !this.layers.find((l) => l.id === s.name));
     for (const s of others)
       this.layerList.append(
-        h('li', { class: 'layer muted' }, [
+        h('li', { class: 'layer source-row muted', 'data-name': s.name }, [
           h('span'),
           h('span'),
-          h('span', { class: 'name' }, `${s.name} (${s.kind})`),
+          h('span', { class: 'name' }, `${s.name} (${detectFileKind(s.name, s.bytes)})`),
         ]),
       );
   }
 
   #refreshStack() {
-    const st = this.project.stackup;
+    const st = effectiveStackup(this.project);
     clear(this.stackPanel);
     const sel = (label, table, value, onchange) => {
       const s = h('select', {
@@ -546,7 +620,7 @@ export class App {
   #sourceLine(layer, line) {
     let lines = this.textCache.get(layer.id);
     if (!lines) {
-      const bytes = this.sources.get(layer.id);
+      const bytes = this.project.sources.find((s) => s.name === layer.id).bytes;
       lines = new TextDecoder().decode(bytes.subarray(0, 64 * 1024 * 1024)).split('\n');
       this.textCache.set(layer.id, lines);
     }
@@ -672,12 +746,12 @@ export class App {
 }
 
 function swatchColour(l, project) {
-  if (project.view.mode === 'debug') {
+  if (project.settings.view.mode === 'debug') {
     if (l.role.type === 'profile') return DEBUG.profile;
     if (l.role.type === 'drill') return DEBUG.drill;
     return DEBUG[`${l.role.type}_${l.role.side}`] || DEBUG.other;
   }
-  const st = project.stackup;
+  const st = effectiveStackup(project);
   if (l.role.type === 'soldermask') return lookupMaterial('mask', st.mask?.[l.role.side] ?? st.mask).value;
   if (l.role.type === 'legend') return lookupMaterial('silk', st.silk?.[l.role.side] ?? st.silk).value;
   if (l.role.type === 'copper') return lookupMaterial('finish', st.finish).value;
@@ -697,10 +771,6 @@ function fmt(v) {
 
 function titleCase(s) {
   return s.replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-function safeFileName(s) {
-  return s.replace(/[\\/:*?"<>|]+/g, '_').trim() || 'project';
 }
 
 function guessProjectName(names) {

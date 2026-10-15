@@ -5,7 +5,9 @@
 import { test, expect } from '@playwright/test';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { openApp, ROOT } from './helpers.js';
+import { openApp, ROOT } from './viewer-helpers.js';
+
+test.use({ viewport: { width: 1400, height: 850 } });
 import { loadFile } from '../../src/model/load-file.js';
 import { Raster } from '../../src/render/raster.js';
 import { drawImage } from '../../src/render/draw-image.js';

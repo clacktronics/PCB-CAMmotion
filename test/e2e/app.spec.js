@@ -1,163 +1,89 @@
+// Milestone 0 flow, both from a static server and from file://:
+// app loads, files can be dropped, an empty .pcam saves and reloads, no network is used.
 import { test, expect } from '@playwright/test';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { openApp, loadBoard, pixelAt, clientAt, waitRendered, boardFiles, ROOT } from './helpers.js';
-import { MISC, FINISH } from '../../src/model/materials.js';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { loadProject } from '../../src/project/pcam.js';
+import { MODES, TEST_BOARD, appUrl, dropFiles, failOnErrors, guardNetwork, openApp } from './helpers.js';
 
-test('opens from file:// with no network requests and no errors', async ({ page }) => {
-  const { external, errors } = await openApp(page);
-  await expect(page.getByText('Drop Gerber, Excellon')).toBeVisible();
-  await loadBoard(page);
-  await page.locator('[data-testid=mode-debug]').click();
-  await page.locator('[data-testid=view-bottom]').click();
-  await waitRendered(page);
-  expect(external).toEqual([]);
-  expect(errors).toEqual([]);
-});
+const BOARD_FILES = [
+  'cammotion-test-board-F_Cu.gbr',
+  'cammotion-test-board-PTH.drl',
+  'cammotion-test-board-job.gbrjob',
+];
 
-test('loads the synthetic board and identifies every layer', async ({ page }) => {
-  await openApp(page);
-  await loadBoard(page);
-  const rows = page.locator('[data-testid=layer]');
-  await expect(rows).toHaveCount(10);
-  const roles = await rows.evaluateAll((els) => els.map((e) => `${e.dataset.name}=${e.dataset.role}`));
-  expect(roles).toContain('synthetic-board-F_Cu.gbr=copper:top');
-  expect(roles).toContain('synthetic-board-B_Mask.gbr=soldermask:bottom');
-  expect(roles).toContain('synthetic-board-Edge_Cuts.gbr=profile:all');
-  expect(roles).toContain('synthetic-board-NPTH.drl=drill:all');
-  await expect(page.locator('[data-testid=status]')).toContainText('Loaded 11 files');
-  await expect(page.locator('[data-testid=stack-finish]')).toHaveValue('enig');
-});
-
-test('realistic view: holes see-through, mask green, exposed pads in the ENIG finish', async ({ page }) => {
-  await openApp(page);
-  await loadBoard(page);
-  const near = (a, b, tol = 6) => a.every((v, i) => Math.abs(v - b[i]) <= tol);
-  // mounting hole (NPTH ⌀3.2 at 4,4) shows the background
-  expect(near(await pixelAt(page, 4, 4), MISC.background.rgb)).toBe(true);
-  // outside the board outline (rounded corner) is background too
-  expect(near(await pixelAt(page, 0.3, 0.3), MISC.background.rgb)).toBe(true);
-  // bare board under the mask is green
-  const [r, g, b] = await pixelAt(page, 60, 10);
-  expect(g).toBeGreaterThan(r + 20);
-  expect(g).toBeGreaterThan(b + 20);
-  // 0805 pad at (30,40) is exposed ENIG (gold: red well above blue)
-  const pad = await pixelAt(page, 30, 40.3);
-  expect(pad[0]).toBeGreaterThan(pad[2] + 60);
-  expect(Math.abs(pad[0] - FINISH.enig.rgb[0])).toBeLessThan(60);
-});
-
-test('debug colours and bottom view change the picture', async ({ page }) => {
-  await openApp(page);
-  await loadBoard(page);
-  const before = await pixelAt(page, 30, 40.3);
-  await page.locator('[data-testid=mode-debug]').click();
-  await waitRendered(page);
-  const debug = await pixelAt(page, 30, 40.3);
-  expect(debug).not.toEqual(before);
-  await page.locator('[data-testid=view-bottom]').click();
-  await waitRendered(page);
-  const state = await page.evaluate(() => window.__pcam.state());
-  expect(state.view.side).toBe('bottom');
-  // the bottom pour (5..95 x 5..12) is in front when viewed from below
-  const bottomPour = await pixelAt(page, 30, 8);
-  expect(bottomPour[2]).toBeGreaterThan(bottomPour[0]); // bottom copper debug colour is blue
-});
-
-test('clicking a hole and a trace shows aperture/tool and the source line', async ({ page }) => {
-  await openApp(page);
-  await loadBoard(page);
-  let [x, y] = await clientAt(page, 8, 20);
-  await page.mouse.click(x, y);
-  const insp = page.locator('[data-testid=inspector]');
-  await expect(insp).toContainText('synthetic-board-PTH.drl');
-  await expect(insp).toContainText('T1');
-  await expect(page.locator('[data-testid=source-line]')).toContainText('X8.000Y20.000');
-  [x, y] = await clientAt(page, 15, 74);
-  await page.mouse.click(x, y);
-  await expect(insp).toContainText('synthetic-board-F_Cu.gbr');
-  await expect(insp).toContainText('D10');
-  await expect(page.locator('[data-testid=source-line]')).toContainText('D01*');
-  const sel = await page.evaluate(() => window.__pcam.state().selection);
-  expect(sel.line).toBeGreaterThan(1);
-});
-
-test('zoom with the wheel and pan by dragging', async ({ page }) => {
-  await openApp(page);
-  await loadBoard(page);
-  const v0 = (await page.evaluate(() => window.__pcam.state())).view;
-  const box = await page.locator('[data-testid=board]').boundingBox();
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-  await page.mouse.wheel(0, -600);
-  await page.waitForTimeout(200);
-  const v1 = (await page.evaluate(() => window.__pcam.state())).view;
-  expect(v1.scale).toBeGreaterThan(v0.scale * 1.5);
-  await page.mouse.down();
-  await page.mouse.move(box.x + box.width / 2 + 100, box.y + box.height / 2 + 50, { steps: 5 });
-  await page.mouse.up();
-  const v2 = (await page.evaluate(() => window.__pcam.state())).view;
-  expect(v2.cx).toBeLessThan(v1.cx);
-  expect(v2.cy).toBeGreaterThan(v1.cy);
-  await page.locator('[data-testid=fit]').click();
-  const v3 = (await page.evaluate(() => window.__pcam.state())).view;
-  expect(Math.abs(v3.scale - v0.scale)).toBeLessThan(1e-6);
-});
-
-test('drag and drop of files loads them', async ({ page }) => {
-  await openApp(page);
-  const files = boardFiles().map((p) => ({ name: p.split('/').pop(), b64: readFileSync(p).toString('base64') }));
-  await page.evaluate((files) => {
-    const dt = new DataTransfer();
-    for (const f of files) dt.items.add(new File([Uint8Array.from(atob(f.b64), (c) => c.charCodeAt(0))], f.name));
-    const main = document.querySelector('main');
-    main.dispatchEvent(new DragEvent('dragenter', { dataTransfer: dt, bubbles: true }));
-    main.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true }));
-  }, files);
-  await expect(page.locator('[data-testid=layer]')).toHaveCount(10);
-});
-
-test('save a .pcam, reopen it in a fresh page: same layers, settings and view', async ({ page, browser }) => {
-  await openApp(page);
-  await loadBoard(page);
-  await page.locator('[data-testid=mode-debug]').click();
-  await page.locator('[data-testid=view-bottom]').click();
-  await page.locator('[data-testid=layer] input[type=checkbox]').first().uncheck();
-  await page.locator('[data-testid=stack-mask-top-]').selectOption('red');
-  const before = await page.evaluate(() => window.__pcam.state());
-  const [download] = await Promise.all([page.waitForEvent('download'), page.locator('[data-testid=save]').click()]);
-  expect(download.suggestedFilename()).toBe('synthetic-board.pcam');
-  const path = test.info().outputPath('saved.pcam');
+async function saveDownload(page, testInfo, name) {
+  const [download] = await Promise.all([page.waitForEvent('download'), page.locator('#save').click()]);
+  const path = testInfo.outputPath(name);
   await download.saveAs(path);
+  return { path, suggested: download.suggestedFilename(), bytes: new Uint8Array(readFileSync(path)) };
+}
 
-  const page2 = await browser.newPage();
-  await openApp(page2);
-  await page2.locator('[data-testid=pcam-input]').setInputFiles(path);
-  await expect(page2.locator('[data-testid=layer]')).toHaveCount(10);
-  const after = await page2.evaluate(() => window.__pcam.state());
-  expect(after.project.view.mode).toBe('debug');
-  expect(after.project.view.side).toBe('bottom');
-  expect(after.project.stackup.mask.top).toBe('red');
-  expect(after.layers.map((l) => [l.name, l.role])).toEqual(before.layers.map((l) => [l.name, l.role]));
-  expect(after.project.layers).toEqual(before.project.layers);
-  await expect(page2.locator('[data-testid=layer] input[type=checkbox]').first()).not.toBeChecked();
-  await page2.close();
-});
+for (const mode of MODES) {
+  test.describe(`served over ${mode.name}`, () => {
+    let external;
+    let errors;
 
-test('autosave offers to recover the project after a reload', async ({ page }) => {
-  await openApp(page);
-  await loadBoard(page);
-  await page.waitForTimeout(2200);
-  await page.reload();
-  const recover = page.getByRole('button', { name: 'Recover' });
-  await expect(recover).toBeVisible();
-  await recover.click();
-  await expect(page.locator('[data-testid=layer]')).toHaveCount(10);
-});
+    test.beforeEach(async ({ page, baseURL }) => {
+      const url = appUrl(mode, baseURL);
+      external = await guardNetwork(page, url);
+      errors = failOnErrors(page);
+      await openApp(page, url);
+    });
 
-test('a real-world Eagle board loads without errors', async ({ page }) => {
-  await openApp(page);
-  await loadBoard(page, boardFiles(join(ROOT, 'samples/arduino-uno')));
-  const state = await page.evaluate(() => window.__pcam.state());
-  expect(state.layers).toHaveLength(7);
-  expect(state.layers.every((l) => l.errors === 0)).toBe(true);
-});
+    test.afterEach(() => {
+      expect(external, 'the app must never make network requests').toEqual([]);
+      expect(errors, 'console errors').toEqual([]);
+    });
+
+    test('loads with an empty project', async ({ page }) => {
+      await expect(page.locator('#empty')).toBeVisible();
+      await expect(page.locator('#project-name')).toHaveValue('untitled');
+      await expect(page.locator('#project-info')).toContainText('schema 1');
+    });
+
+    test('empty .pcam saves and reloads', async ({ page }, testInfo) => {
+      await page.locator('#project-name').fill('empty board');
+      const saved = await saveDownload(page, testInfo, 'empty.pcam');
+      expect(saved.suggested).toBe('empty board.pcam');
+      const project = loadProject(saved.bytes);
+      expect(project.manifest.name).toBe('empty board');
+      expect(project.sources).toEqual([]);
+
+      await page.locator('#new').click();
+      await expect(page.locator('#project-name')).toHaveValue('untitled');
+      await page.locator('#open-input').setInputFiles(saved.path);
+      await expect(page.locator('#project-name')).toHaveValue('empty board');
+      await expect(page.locator('#status')).toContainText('Opened');
+    });
+
+    test('dropped files are stored byte-for-byte in the saved .pcam', async ({ page }, testInfo) => {
+      await dropFiles(
+        page,
+        BOARD_FILES.map((f) => TEST_BOARD + f),
+      );
+      await expect(page.locator('.source-row')).toHaveCount(BOARD_FILES.length);
+      await expect(page.locator('[data-testid=layers]')).toContainText('cammotion-test-board-F_Cu.gbr');
+
+      const saved = await saveDownload(page, testInfo, 'board.pcam');
+      const project = loadProject(saved.bytes);
+      expect(project.sources.map((s) => s.name).sort()).toEqual([...BOARD_FILES].sort());
+      for (const s of project.sources)
+        expect(Buffer.from(s.bytes).equals(readFileSync(TEST_BOARD + s.name))).toBe(true);
+
+      // Dropping a .pcam opens it.
+      page.on('dialog', (d) => d.accept());
+      await page.locator('#new').click();
+      await expect(page.locator('.source-row')).toHaveCount(0);
+      await dropFiles(page, [saved.path]);
+      await expect(page.locator('.source-row')).toHaveCount(BOARD_FILES.length);
+    });
+
+    test('a broken .pcam gives a clear error and keeps the current project', async ({ page }, testInfo) => {
+      const bad = testInfo.outputPath('broken.PCAM');
+      writeFileSync(bad, 'this is not a zip');
+      await dropFiles(page, [bad]);
+      await expect(page.getByRole('alert')).toContainText('not a ZIP file');
+      await expect(page.locator('#project-name')).toHaveValue('untitled');
+    });
+  });
+}

@@ -79,14 +79,15 @@ so edits round-trip to valid files and analysis can point back to source lines.
 Every milestone is only done when its tests (see **Testing & QA → Tests per milestone**) are
 written, passing in CI, and the previous milestones' tests still pass.
 
-**Status (2026-10):** milestones 1 (parsers) and 2 (viewer) are implemented with their tests.
-From milestone 0, the app shell, file drop, `.pcam` save/load (+ autosave), `node:test`,
-Playwright, ESLint/Prettier, CI and the no-network/`file://` e2e tests are in place; still open
-are the **G-code safety checker** (`src/check/`) and the **CAMmotion test board** in `samples/`.
+**Status (2026-10):** milestones 0 (skeleton + harness), 1 (parsers) and 2 (viewer) are
+implemented with their tests; the machine-run part of the test board QA is still to do.
 Decisions made on the way:
 - No framework: plain ES modules, bundled by esbuild (dev dependency) into the committed
   `dist/app.js` classic script, because browsers block ES module imports on `file://`.
   `npm run lint` fails if the bundle is stale.
+- The viewer's per-layer settings (visibility, opacity, role override) and view state live in
+  `settings/project.json` of the schema-1 `.pcam` (`settings.layers`, `settings.view`);
+  the stackup in `stackup.json`. No schema change was needed.
 - Rendering: one DOM-free draw routine (`src/render/draw-image.js`) drives both the canvas
   and a pure-JS rasteriser, so Node tests check what the viewer draws; an e2e test compares
   the two pixel by pixel. "Reference renders" from gerbv/GerbView are not available yet, so
@@ -291,7 +292,8 @@ Tests are built with the feature, not afterwards. For every piece of work:
 - Geometry library for polygon offset/boolean (e.g. Clipper2 JS) vs writing our own.
 - Exact KiCad `.gbrjob` colour names → RGB/opacity values; collect real board photos to tune them.
 - Should `.pcam` also embed rendered previews (thumbnail PNG) for file browsers?
-- Framework or vanilla JS? Default: vanilla ES modules + a small bundler only if needed.
+- ~~Framework or vanilla JS?~~ Decided in milestone 0: vanilla ES modules, bundled by esbuild
+  into a committed `dist/app.js` because browsers refuse ES modules from `file://`.
 
 ## Bonus features (later — do NOT implement yet)
 

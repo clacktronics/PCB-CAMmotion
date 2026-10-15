@@ -81,7 +81,7 @@ export function transformPath(p, t, fixOrientation = true) {
   const phi = Math.atan2(c, a);
   const refl = det < 0;
   const out = new Array(p.length);
-  for (let i = 0; i < p.length; ) {
+  for (let i = 0; i < p.length;) {
     const op = p[i];
     out[i] = op;
     if (op === M || op === L) {
@@ -136,7 +136,7 @@ function splitContours(p) {
   let cur = null;
   let x = 0;
   let y = 0;
-  for (let i = 0; i < p.length; ) {
+  for (let i = 0; i < p.length;) {
     const op = p[i];
     if (op === M) {
       x = p[i + 1];
@@ -178,7 +178,7 @@ function samePt(p, x, y) {
  * that flip Y (canvas) must use a transform with negative Y scale so the result is consistent.
  */
 export function emitPath(sink, p, dx = 0, dy = 0) {
-  for (let i = 0; i < p.length; ) {
+  for (let i = 0; i < p.length;) {
     const op = p[i];
     if (op === M) {
       sink.moveTo(p[i + 1] + dx, p[i + 2] + dy);
@@ -198,7 +198,7 @@ export function emitPath(sink, p, dx = 0, dy = 0) {
 
 /** Conservative bounding box [minx, miny, maxx, maxy] of a path (arcs use exact extents). */
 export function pathBounds(p, out = [Infinity, Infinity, -Infinity, -Infinity]) {
-  for (let i = 0; i < p.length; ) {
+  for (let i = 0; i < p.length;) {
     const op = p[i];
     if (op === M || op === L) {
       grow(out, p[i + 1], p[i + 2]);
@@ -249,7 +249,7 @@ export function arcSegments(r, sweep, tolMm) {
 export function flattenPath(p, tolMm = 0.0005) {
   const contours = [];
   let cur = null;
-  for (let i = 0; i < p.length; ) {
+  for (let i = 0; i < p.length;) {
     const op = p[i];
     if (op === M) {
       cur = [p[i + 1], p[i + 2]];

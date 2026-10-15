@@ -1,74 +1,59 @@
-import { readdirSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import { expect } from '@playwright/test';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-export const ROOT = join(dirname(fileURLToPath(import.meta.url)), '../..');
-export const APP_URL = pathToFileURL(join(ROOT, 'index.html')).href;
-export const BOARD_DIR = join(ROOT, 'test/fixtures/synthetic/board');
+export const ROOT = fileURLToPath(new URL('../../', import.meta.url));
+export const FILE_URL = pathToFileURL(`${ROOT}index.html`).href;
+export const TEST_BOARD = `${ROOT}samples/test-board/`;
 
-export function boardFiles(dir = BOARD_DIR) {
-  return readdirSync(dir)
-    .filter((f) => !/LICENSE|\.json$/.test(f))
-    .map((f) => join(dir, f));
-}
+/** The ways the app must work: from a static server and opened straight from disk. */
+export const MODES = [
+  { name: 'http', url: '/' },
+  { name: 'file://', url: FILE_URL },
+];
 
-/** Open the app from file:// and fail on any request that is not file:/blob:/data:. */
-export async function openApp(page) {
+/**
+ * Record every request the page makes and block any that leave the app's own origin.
+ * Returns the list of offending URLs (expected to stay empty).
+ */
+export async function guardNetwork(page, appUrl) {
+  const origin = appUrl.startsWith('file:') ? 'file://' : new URL(appUrl).origin + '/';
   const external = [];
+  const isLocal = (url) => url.startsWith(origin) || url.startsWith('blob:') || url.startsWith('data:');
+  page.on('request', (req) => {
+    if (!isLocal(req.url())) external.push(req.url());
+  });
+  page.on('websocket', (ws) => external.push(ws.url()));
+  await page.route(/^(https?|wss?):/, (route) =>
+    isLocal(route.request().url()) ? route.continue() : route.abort('blockedbyclient'),
+  );
+  return external;
+}
+
+/** Fail the test on any console error or uncaught exception. */
+export function failOnErrors(page) {
   const errors = [];
-  page.on('pageerror', (e) => errors.push(e.message));
-  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
-  await page.route('**/*', (route) => {
-    const url = route.request().url();
-    if (/^(file|blob|data):/.test(url)) return route.continue();
-    external.push(url);
-    return route.abort();
-  });
-  await page.goto(APP_URL);
-  await expect(page.locator('[data-testid=board]')).toBeVisible();
-  return { external, errors };
+  page.on('console', (msg) => msg.type() === 'error' && errors.push(msg.text()));
+  page.on('pageerror', (err) => errors.push(err.message));
+  return errors;
 }
 
-export async function loadBoard(page, files = boardFiles()) {
-  await page.locator('[data-testid=file-input]').setInputFiles(files);
-  await expect(page.locator('[data-testid=layer]').first()).toBeVisible();
-  await waitRendered(page);
+/** Absolute URL of the app for a mode; `baseURL` comes from the Playwright fixture. */
+export const appUrl = (mode, baseURL) => new URL(mode.url, baseURL).href;
+
+export async function openApp(page, url) {
+  await page.goto(url);
+  await expect(page.locator('body')).toHaveAttribute('data-ready', 'true');
 }
 
-export async function waitRendered(page) {
-  await page.waitForFunction(() => {
-    const v = window.__pcam.app.viewer;
-    return v.renderCount > 0 && !v.pending_active;
-  });
-  await page.waitForTimeout(150);
-}
-
-/** Device pixel colour of the board canvas at a board position (mm). */
-export async function pixelAt(page, xMm, yMm) {
-  return page.evaluate(
-    ([x, y]) => {
-      const v = window.__pcam.app.viewer;
-      const m = v.map();
-      const px = Math.round(m.ox + (m.mirror ? -m.s : m.s) * x);
-      const py = Math.round(m.oy - m.s * y);
-      const d = v.ctx.getImageData(px, py, 1, 1).data;
-      return [d[0], d[1], d[2]];
-    },
-    [xMm, yMm],
-  );
-}
-
-/** Client (CSS) coordinates of a board position, for mouse clicks. */
-export async function clientAt(page, xMm, yMm) {
-  return page.evaluate(
-    ([x, y]) => {
-      const v = window.__pcam.app.viewer;
-      const m = v.map();
-      const r = v.canvas.getBoundingClientRect();
-      const dpr = window.devicePixelRatio || 1;
-      return [r.left + (m.ox + (m.mirror ? -m.s : m.s) * x) / dpr, r.top + (m.oy - m.s * y) / dpr];
-    },
-    [xMm, yMm],
-  );
+/** Simulate dropping files onto the window (as from the OS file manager). */
+export async function dropFiles(page, paths) {
+  const files = paths.map((p) => ({ name: p.split('/').pop(), data: [...readFileSync(p)] }));
+  await page.evaluate((files) => {
+    const dt = new DataTransfer();
+    for (const f of files) dt.items.add(new File([new Uint8Array(f.data)], f.name));
+    for (const type of ['dragenter', 'dragover', 'drop']) {
+      document.body.dispatchEvent(new DragEvent(type, { dataTransfer: dt, bubbles: true, cancelable: true }));
+    }
+  }, files);
 }

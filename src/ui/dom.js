@@ -11,6 +11,8 @@ export function h(tag, attrs = {}, children = []) {
     if (v === undefined || v === null || v === false) continue;
     if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2), v);
     else if (k === 'checked' || k === 'value' || k === 'selected' || k === 'disabled') el[k] = v;
+    // via CSSOM: the Content-Security-Policy (style-src 'self') blocks style="" attributes
+    else if (k === 'style') el.style.cssText = v;
     else el.setAttribute(k, v === true ? '' : String(v));
   }
   for (const c of Array.isArray(children) ? children : [children]) {

@@ -2,7 +2,9 @@
 // Update deliberately with: npx playwright test screenshot --update-snapshots
 
 import { test, expect } from '@playwright/test';
-import { openApp, loadBoard, waitRendered } from './helpers.js';
+import { openApp, loadBoard, waitRendered } from './viewer-helpers.js';
+
+test.use({ viewport: { width: 1400, height: 850 } });
 
 const views = [
   ['top-realistic', []],

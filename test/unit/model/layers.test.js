@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { FIXTURES, SAMPLES, bytes, SYNTH } from '../../helpers.js';
 import { identifyLayer, roleFromFileFunction, roleFromFilename, detectFileKind } from '../../../src/model/layers.js';
@@ -43,7 +43,11 @@ test('file names from KiCad, Eagle, Altium, OrCAD, gEDA, DipTrace, OSH Park, PCB
 });
 
 test('real sample boards: every layer identified as tracespace expects', () => {
-  for (const board of readdirSync(SAMPLES, { withFileTypes: true }).filter((d) => d.isDirectory())) {
+  const boards = readdirSync(SAMPLES, { withFileTypes: true }).filter(
+    (d) => d.isDirectory() && existsSync(join(SAMPLES, d.name, 'tracespace-layers.json')),
+  );
+  assert.ok(boards.length >= 8);
+  for (const board of boards) {
     const dir = join(SAMPLES, board.name);
     const expected = JSON.parse(readFileSync(join(dir, 'tracespace-layers.json'), 'utf8')).layers;
     for (const e of expected) {

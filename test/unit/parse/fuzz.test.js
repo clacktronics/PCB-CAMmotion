@@ -43,7 +43,7 @@ test('random strings never crash any parser', () => {
 test('random Gerber-alphabet soup never crashes', () => {
   const alphabet = 'XYIJD0123456789-+.*%GMADFSLMOCRPTABN,\n';
   fc.assert(
-    fc.property(fc.stringOf(fc.constantFrom(...alphabet), { maxLength: 600 }), (s) => exercise(s, 'gerber')),
+    fc.property(fc.string({ unit: fc.constantFrom(...alphabet), maxLength: 600 }), (s) => exercise(s, 'gerber')),
     { numRuns: 400, seed: 2 },
   );
 });

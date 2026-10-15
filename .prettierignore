@@ -1,12 +1,11 @@
 node_modules/
-dist/
 vendor/
+dist/
 samples/
 test/fixtures/
-test/e2e/__screenshots__/
+test/golden/
 test-results/
 playwright-report/
 package-lock.json
+# Markdown is hand-formatted (compact tables)
 *.md
-# hand-formatted generator (dense fixture tables)
-tools/synth/generate.mjs

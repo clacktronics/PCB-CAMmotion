@@ -1,115 +1,142 @@
-// .pcam project file: a ZIP container (vendored fflate).
-//
-//   project.json         manifest: schema version, app version, dates, units, source list
-//   sources/<name>       original files, byte-for-byte untouched
-//   settings/layers.json per-layer settings (visibility, opacity, role overrides)
-//   settings/view.json   view state (side, mode, zoom/pan)
-//   stackup.json         stackup and materials (from .gbrjob, defaults or user edits)
-// Unknown fields in JSON files and unknown ZIP entries are kept and written back unchanged.
+// .pcam save/load: a ZIP container holding the whole project.
+// No DOM here — runs in Node (tests) and in the browser (app).
 
 import { zipSync, unzipSync, strToU8, strFromU8 } from '../../vendor/fflate/fflate.js';
-import { SCHEMA_VERSION, createProject, defaultLayerSettings } from './project.js';
+import { PCAM_FORMAT, SCHEMA_VERSION, migrate } from './schema.js';
 
-export class PcamError extends Error {}
+export class PcamError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'PcamError';
+  }
+}
 
-const KNOWN = new Set(['project.json', 'settings/layers.json', 'settings/view.json', 'stackup.json']);
+const MANIFEST = 'project.json';
+const SETTINGS = 'settings/project.json';
+const STACKUP = 'stackup.json';
+const TOOLS = 'tools.json';
+const SOURCES = 'sources/';
+const KNOWN = new Set([MANIFEST, SETTINGS, STACKUP, TOOLS]);
+
+/** True for names ending in .pcam, any case. */
+export function isPcamFileName(name) {
+  return /\.pcam$/i.test(name);
+}
+
+/** File name for downloading a project, e.g. "My board" → "My board.pcam". */
+export function pcamFileName(project) {
+  const base = String(project.manifest.name || 'untitled')
+    .replace(/[\\/:*?"<>|]+/g, '_')
+    .trim();
+  return `${base || 'untitled'}.pcam`;
+}
+
+const json = (value) => strToU8(JSON.stringify(value, null, 2) + '\n');
 
 /**
- * Migrations from older schema versions: MIGRATIONS[n] upgrades a version-n manifest object
- * (with its parsed side files) to version n+1. Never reject old files; migrate them forward.
+ * A source file name as stored under sources/: no directories, no traversal.
+ * The original name is kept as far as possible so the file can be re-exported as-is.
  */
-export const MIGRATIONS = {};
-
-/**
- * @param {object} project
- * @param {Map<string, Uint8Array>} sources
- * @returns {Uint8Array}
- */
-export function savePcam(project, sources) {
-  const { layers, view, stackup, _extra, ...manifest } = project;
-  const mtime = new Date(project.modified || Date.now());
-  const files = {};
-  const json = (o) => [strToU8(JSON.stringify(o, null, 2) + '\n'), { level: 6, mtime }];
-  files['project.json'] = json({ ...manifest, schemaVersion: SCHEMA_VERSION });
-  files['settings/layers.json'] = json(layers);
-  files['settings/view.json'] = json(view);
-  files['stackup.json'] = json(stackup);
-  for (const s of project.sources) {
-    const bytes = sources.get(s.id);
-    if (!bytes) throw new PcamError(`Source ${s.name} has no data`);
-    files[s.path] = [bytes, { level: 6, mtime }];
-  }
-  for (const [path, bytes] of Object.entries(_extra || {})) {
-    if (!(path in files)) files[path] = [bytes, { level: 6, mtime }];
-  }
-  return zipSync(files);
+export function safeSourceName(name) {
+  const base = String(name).split(/[\\/]/).pop() ?? '';
+  const clean = base.replace(/[\x00-\x1f]/g, '_');
+  if (!clean || clean === '.' || clean === '..')
+    throw new PcamError(`Invalid source file name: ${JSON.stringify(name)}`);
+  return clean;
 }
 
 /**
- * @param {Uint8Array} bytes
- * @returns {{project: object, sources: Map<string, Uint8Array>, migratedFrom: number|null}}
+ * Serialise a project to .pcam bytes. Output is deterministic for a given project
+ * (entry order is fixed and every entry's timestamp is the manifest's `modified`).
+ * @returns {Uint8Array}
  */
-export function loadPcam(bytes) {
+export function saveProject(project) {
+  const mtime = new Date(project.manifest.modified);
+  const entries = {};
+  const put = (path, data, level = 6) => {
+    if (path in entries) throw new PcamError(`Duplicate entry in project: ${path}`);
+    entries[path] = [data, { level, mtime }];
+  };
+  put(MANIFEST, json({ ...project.manifest, schemaVersion: SCHEMA_VERSION, format: PCAM_FORMAT }));
+  put(SETTINGS, json(project.settings ?? {}));
+  if (project.stackup != null) put(STACKUP, json(project.stackup));
+  put(TOOLS, json(project.tools ?? {}));
+  for (const { name, bytes } of project.sources ?? []) put(SOURCES + safeSourceName(name), bytes);
+  for (const [path, bytes] of Object.entries(project.extra ?? {})) put(path, bytes);
+  return zipSync(entries);
+}
+
+function parseJson(entries, path, required) {
+  const bytes = entries[path];
+  if (!bytes) {
+    if (required) throw new PcamError(`Not a valid .pcam project: ${path} is missing`);
+    return undefined;
+  }
+  try {
+    return JSON.parse(strFromU8(bytes));
+  } catch (e) {
+    throw new PcamError(`Not a valid .pcam project: ${path} is not valid JSON (${e.message})`);
+  }
+}
+
+/**
+ * Read .pcam bytes into a project, migrating older schema versions forward.
+ * @param {Uint8Array} bytes
+ */
+export function loadProject(bytes) {
   let entries;
   try {
     entries = unzipSync(bytes);
   } catch (e) {
-    throw new PcamError(`Not a valid .pcam file (ZIP could not be read: ${e.message})`);
+    throw new PcamError(`Not a valid .pcam project: not a ZIP file (${e.message})`);
   }
-  const read = (path) => {
-    if (!entries[path]) return undefined;
-    try {
-      return JSON.parse(strFromU8(entries[path]));
-    } catch (e) {
-      throw new PcamError(`${path} in the project is not valid JSON: ${e.message}`);
+  for (const path of Object.keys(entries)) {
+    if (path.startsWith('/') || path.split('/').includes('..')) {
+      throw new PcamError(`Not a valid .pcam project: unsafe entry path ${JSON.stringify(path)}`);
     }
-  };
-  const manifest = read('project.json');
-  if (!manifest || typeof manifest !== 'object') throw new PcamError('Not a .pcam project: project.json is missing');
-  let version = Number(manifest.schemaVersion);
-  if (!Number.isInteger(version) || version < 0) throw new PcamError('project.json has no valid schemaVersion');
-  if (version > SCHEMA_VERSION) {
+  }
+  const manifest = parseJson(entries, MANIFEST, true);
+  if (manifest?.format !== PCAM_FORMAT)
+    throw new PcamError('Not a valid .pcam project: project.json has no "pcam" format tag');
+  if (!Number.isInteger(manifest.schemaVersion) || manifest.schemaVersion < 1) {
+    throw new PcamError(`Not a valid .pcam project: bad schemaVersion ${JSON.stringify(manifest.schemaVersion)}`);
+  }
+  if (manifest.schemaVersion > SCHEMA_VERSION) {
     throw new PcamError(
-      `This project was saved by a newer version (schema ${version}); this app reads up to ${SCHEMA_VERSION}`,
+      `This project was saved by a newer version of PCB-CAMmotion (schema ${manifest.schemaVersion}; this app reads up to ${SCHEMA_VERSION}). Update the app to open it.`,
     );
   }
-  let doc = {
-    manifest,
-    layers: read('settings/layers.json'),
-    view: read('settings/view.json'),
-    stackup: read('stackup.json'),
-  };
-  const migratedFrom = version < SCHEMA_VERSION ? version : null;
-  while (version < SCHEMA_VERSION) {
-    const m = MIGRATIONS[version];
-    if (!m) throw new PcamError(`No migration from schema ${version}`);
-    doc = m(doc);
-    version++;
-  }
-  const base = createProject(manifest.name);
-  const project = {
-    ...base,
-    ...doc.manifest,
-    schemaVersion: SCHEMA_VERSION,
-    layers: doc.layers || {},
-    view: { ...base.view, ...(doc.view || {}) },
-    stackup: { ...base.stackup, ...(doc.stackup || {}) },
-  };
-  const sources = new Map();
-  for (const s of project.sources || []) {
-    const data = entries[s.path];
-    if (!data) throw new PcamError(`Project source ${s.path} is missing from the file`);
-    sources.set(s.id, data);
-    project.layers[s.id] ??= defaultLayerSettings();
-  }
-  const used = new Set([...KNOWN, ...(project.sources || []).map((s) => s.path)]);
-  const extra = {};
-  for (const [path, data] of Object.entries(entries)) if (!used.has(path) && !path.endsWith('/')) extra[path] = data;
-  if (Object.keys(extra).length) project._extra = extra;
-  return { project, sources, migratedFrom };
+  const raw = migrate({ manifest, entries });
+  return fromEntries(raw.manifest, raw.entries);
 }
 
-/** True for names the app should open as a project (any case). */
-export function isPcamName(name) {
-  return /\.pcam$/i.test(name);
+function fromEntries(manifest, entries) {
+  const project = {
+    manifest,
+    sources: [],
+    settings: parseJson(entries, SETTINGS, false) ?? {},
+    stackup: parseJson(entries, STACKUP, false) ?? null,
+    tools: parseJson(entries, TOOLS, false) ?? {},
+    extra: {},
+  };
+  for (const [path, bytes] of Object.entries(entries)) {
+    if (KNOWN.has(path)) continue;
+    if (path.startsWith(SOURCES) && path.length > SOURCES.length && !path.slice(SOURCES.length).includes('/')) {
+      project.sources.push({ name: path.slice(SOURCES.length), bytes });
+    } else if (!path.endsWith('/')) {
+      project.extra[path] = bytes;
+    }
+  }
+  return project;
+}
+
+/**
+ * Add an imported file to the project's sources. A file with the same name replaces the
+ * older one (the user re-imported it). Returns a new project; the input is not mutated.
+ */
+export function addSource(project, name, bytes, now = new Date()) {
+  const clean = safeSourceName(name);
+  const sources = project.sources.filter((s) => s.name !== clean);
+  sources.push({ name: clean, bytes });
+  return { ...project, sources, manifest: { ...project.manifest, modified: now.toISOString() } };
 }

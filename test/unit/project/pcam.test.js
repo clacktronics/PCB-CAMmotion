@@ -1,122 +1,144 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { SYNTH, FIXTURES, bytes } from '../../helpers.js';
-import { createProject, addSourceFile, buildLayers, SCHEMA_VERSION } from '../../../src/project/project.js';
-import { savePcam, loadPcam, PcamError, isPcamName } from '../../../src/project/pcam.js';
-import { zipSync, unzipSync, strToU8, strFromU8 } from '../../../vendor/fflate/fflate.js';
+import { readFileSync } from 'node:fs';
+import { zipSync, strToU8, strFromU8, unzipSync } from '../../../vendor/fflate/fflate.js';
+import { createEmptyProject, migrate, SCHEMA_VERSION } from '../../../src/project/schema.js';
+import {
+  saveProject,
+  loadProject,
+  addSource,
+  isPcamFileName,
+  pcamFileName,
+  safeSourceName,
+  PcamError,
+} from '../../../src/project/pcam.js';
+import { APP_VERSION } from '../../../src/version.js';
+import { assertGolden } from '../../helpers/golden.js';
 
-const NOW = '2026-10-15T12:00:00.000Z';
+const NOW = new Date('2026-10-15T00:00:00Z');
+const fixture = (name) => new Uint8Array(readFileSync(new URL(`../../fixtures/pcam/${name}`, import.meta.url)));
 
-function boardProject() {
-  const p = createProject('synthetic-board', NOW);
-  const sources = new Map();
-  const dir = join(SYNTH, 'board');
-  for (const f of readdirSync(dir).sort()) addSourceFile(p, sources, f, bytes(join(dir, f)), NOW);
-  return { p, sources };
-}
-
-test('empty project saves and reloads', () => {
-  const p = createProject('empty', NOW);
-  const back = loadPcam(savePcam(p, new Map()));
-  assert.deepEqual(back.project, p);
-  assert.equal(back.sources.size, 0);
+test('empty project: save → load gives an identical project', () => {
+  const p = createEmptyProject({ name: 'empty', now: NOW });
+  assert.deepEqual(loadProject(saveProject(p)), p);
 });
 
-test('save → load gives an identical project with byte-identical sources', () => {
-  const { p, sources } = boardProject();
-  buildLayers(p, sources);
-  // settings the user changed
-  const first = p.sources[0].id;
-  p.layers[first].visible = false;
-  p.layers[first].opacity = 0.4;
-  p.layers[p.sources[1].id].role = { type: 'copper', side: 'bottom' };
-  Object.assign(p.view, { side: 'bottom', mode: 'debug', showPaste: true, cx: 12.5, cy: -3, scale: 42 });
-  p.stackup.mask = { top: 'Red', bottom: 'Blue' };
-  p.stackup.source = 'user';
-  const back = loadPcam(savePcam(p, sources));
-  assert.deepEqual(back.project, JSON.parse(JSON.stringify(p)));
-  assert.equal(back.sources.size, sources.size);
-  for (const [id, b] of sources) assert.deepEqual(back.sources.get(id), b, `source ${id} byte-for-byte`);
-  // and the rebuilt layers honour the saved settings
-  const { layers } = buildLayers(back.project, back.sources);
-  const l = layers.find((x) => x.id === p.sources[1].id);
-  assert.deepEqual([l.role.type, l.role.side, l.role.source], ['copper', 'bottom', 'user']);
-  assert.equal(layers.find((x) => x.id === first).visible, false);
+test('empty project manifest matches the golden file', () => {
+  const entries = unzipSync(saveProject(createEmptyProject({ name: 'empty', now: NOW })));
+  const manifest = JSON.parse(strFromU8(entries['project.json']));
+  assert.equal(manifest.appVersion, APP_VERSION);
+  // appVersion changes with every release; the golden file pins the schema shape.
+  manifest.appVersion = '<app version>';
+  assertGolden('project/empty-project.json', JSON.stringify(manifest, null, 2) + '\n');
+  assert.deepEqual(Object.keys(entries).sort(), ['project.json', 'settings/project.json', 'tools.json']);
 });
 
-test('saving twice gives identical bytes (deterministic)', () => {
-  const { p, sources } = boardProject();
-  assert.deepEqual(savePcam(p, sources), savePcam(p, sources));
+test('saving is deterministic', () => {
+  const p = createEmptyProject({ name: 'x', now: NOW });
+  assert.deepEqual(saveProject(p), saveProject(p));
 });
 
-test('unknown fields and unknown ZIP entries are kept', () => {
-  const { p, sources } = boardProject();
-  const z = unzipSync(savePcam(p, sources));
-  const manifest = JSON.parse(strFromU8(z['project.json']));
-  manifest.futureFeature = { answer: 42 };
-  z['project.json'] = strToU8(JSON.stringify(manifest));
-  z['cam/future-toolpaths.json'] = strToU8('{"paths":[]}');
-  const back = loadPcam(zipSync(z));
-  assert.deepEqual(back.project.futureFeature, { answer: 42 });
-  const again = unzipSync(savePcam(back.project, back.sources));
-  assert.equal(strFromU8(again['cam/future-toolpaths.json']), '{"paths":[]}');
-  assert.deepEqual(JSON.parse(strFromU8(again['project.json'])).futureFeature, { answer: 42 });
+test('sources stay byte-for-byte identical (CRLF, NUL, non-UTF-8)', () => {
+  const bytes = new Uint8Array([0x47, 0x30, 0x34, 0x0d, 0x0a, 0x00, 0xff, 0xfe, 0x80]);
+  const p = addSource(createEmptyProject({ now: NOW }), 'top.GTL', bytes, NOW);
+  const back = loadProject(saveProject(p));
+  assert.equal(back.sources.length, 1);
+  assert.equal(back.sources[0].name, 'top.GTL');
+  assert.deepEqual(back.sources[0].bytes, bytes);
 });
 
-test('layout of the .pcam container', () => {
-  const { p, sources } = boardProject();
-  const z = unzipSync(savePcam(p, sources));
-  for (const f of ['project.json', 'settings/layers.json', 'settings/view.json', 'stackup.json']) assert.ok(z[f], f);
-  assert.ok(z['sources/synthetic-board-F_Cu.gbr']);
-  assert.equal(JSON.parse(strFromU8(z['project.json'])).schemaVersion, SCHEMA_VERSION);
+test('re-importing a file with the same name replaces it; the input project is not mutated', () => {
+  const p0 = createEmptyProject({ now: NOW });
+  const p1 = addSource(p0, 'a.gbr', strToU8('one'), NOW);
+  const p2 = addSource(p1, 'a.gbr', strToU8('two'), NOW);
+  assert.equal(p0.sources.length, 0);
+  assert.equal(p2.sources.length, 1);
+  assert.equal(strFromU8(p2.sources[0].bytes), 'two');
 });
 
-test('schema v1 fixture still loads', () => {
-  const { project, sources, migratedFrom } = loadPcam(bytes(join(FIXTURES, 'pcam/schema-v1.pcam')));
-  assert.equal(migratedFrom, null);
-  assert.equal(project.schemaVersion, 1);
-  assert.equal(sources.size, project.sources.length);
-  const { layers } = buildLayers(project, sources);
-  assert.ok(layers.length >= 3);
+test('source names never escape sources/', () => {
+  assert.equal(safeSourceName('../../etc/passwd'), 'passwd');
+  assert.equal(safeSourceName('C:\\boards\\top.gtl'), 'top.gtl');
+  assert.throws(() => safeSourceName('..'), PcamError);
+  assert.throws(() => safeSourceName('dir/'), PcamError);
 });
 
-test('bad files give clear errors', () => {
-  assert.throws(() => loadPcam(new Uint8Array([1, 2, 3])), PcamError);
-  assert.throws(() => loadPcam(zipSync({ 'a.txt': strToU8('x') })), /project\.json is missing/);
-  assert.throws(() => loadPcam(zipSync({ 'project.json': strToU8('{"schemaVersion": 999}') })), /newer version/);
-  assert.throws(() => loadPcam(zipSync({ 'project.json': strToU8('{oops') })), /not valid JSON/);
-  const missing = {
-    'project.json': strToU8(
-      JSON.stringify({
-        ...createProject('x'),
-        layers: undefined,
-        sources: [{ id: 's1', name: 'a.gbr', path: 'sources/a.gbr' }],
-      }),
-    ),
+test('settings, stackup, tools and unknown data survive a round trip', () => {
+  const p = createEmptyProject({ now: NOW });
+  p.settings = { view: { zoom: 2 } };
+  p.stackup = { layers: [] };
+  p.tools = { library: [{ id: 'vbit-30', diameterMm: 0.2 }] };
+  p.manifest.addedLater = 'keep me';
+  p.extra['future/thing.bin'] = new Uint8Array([1, 2, 3]);
+  assert.deepEqual(loadProject(saveProject(p)), p);
+});
+
+test('fixture v1-empty.pcam loads', () => {
+  const p = loadProject(fixture('v1-empty.pcam'));
+  assert.equal(p.manifest.schemaVersion, 1);
+  assert.equal(p.manifest.name, 'empty');
+  assert.equal(p.manifest.units, 'mm');
+  assert.deepEqual(p.sources, []);
+});
+
+test('fixture v1-with-source.pcam loads, and unknown fields/entries survive load → save → load', () => {
+  const p = loadProject(fixture('v1-with-source.pcam'));
+  assert.equal(p.sources[0].name, 'board-F_Cu.gbr');
+  assert.match(strFromU8(p.sources[0].bytes), /\r\n%MOMM\*%\r\n/);
+  assert.deepEqual(p.manifest.futureField, { kept: true });
+  assert.deepEqual(p.settings, { view: { side: 'top' } });
+  assert.equal(strFromU8(p.extra['future/notes.txt']), 'written by a later version\n');
+  assert.deepEqual(loadProject(saveProject(p)), p);
+});
+
+test('every .pcam fixture loads and migrates to the current schema', () => {
+  for (const name of ['v1-empty.pcam', 'v1-with-source.pcam']) {
+    assert.equal(loadProject(fixture(name)).manifest.schemaVersion, SCHEMA_VERSION, name);
+  }
+});
+
+test('migrate() steps through every version and keeps unknown data', () => {
+  const migrations = {
+    1: (raw) => ({ ...raw, manifest: { ...raw.manifest, schemaVersion: 2, step1: true } }),
+    2: (raw) => ({ ...raw, manifest: { ...raw.manifest, schemaVersion: 3, step2: true } }),
   };
-  assert.throws(() => loadPcam(zipSync(missing)), /missing/);
+  const out = migrate({ manifest: { schemaVersion: 1, other: 'x' }, entries: { a: new Uint8Array() } }, migrations, 3);
+  assert.deepEqual(out.manifest, { schemaVersion: 3, other: 'x', step1: true, step2: true });
+  assert.ok('a' in out.entries);
+  assert.throws(
+    () => migrate({ manifest: { schemaVersion: 1 }, entries: {} }, {}, 2),
+    /No migration from .pcam schema 1/,
+  );
 });
 
-test('.pcam names in any case', () => {
-  assert.ok(isPcamName('board.pcam') && isPcamName('BOARD.PCAM') && isPcamName('x.PCam'));
-  assert.ok(!isPcamName('board.pcam.zip'));
+const zip = (files) =>
+  zipSync(Object.fromEntries(Object.entries(files).map(([k, v]) => [k, typeof v === 'string' ? strToU8(v) : v])));
+
+test('bad files give a clear error, never a crash', () => {
+  const cases = [
+    [strToU8('not a zip at all'), /not a ZIP file/],
+    [new Uint8Array(), /not a ZIP file|project.json is missing/],
+    [zip({ 'other.txt': 'x' }), /project.json is missing/],
+    [zip({ 'project.json': '{oops' }), /not valid JSON/],
+    [zip({ 'project.json': '{"schemaVersion":1}' }), /format tag/],
+    [zip({ 'project.json': '{"format":"pcam","schemaVersion":"1"}' }), /bad schemaVersion/],
+    [zip({ 'project.json': '{"format":"pcam","schemaVersion":99}' }), /newer version/],
+    [zip({ 'project.json': '{"format":"pcam","schemaVersion":1}', '../evil': 'x' }), /unsafe entry path/],
+    [zip({ 'project.json': '{"format":"pcam","schemaVersion":1}', 'tools.json': '[' }), /tools.json is not valid JSON/],
+  ];
+  for (const [bytes, message] of cases)
+    assert.throws(
+      () => loadProject(bytes),
+      (e) => e instanceof PcamError && message.test(e.message),
+    );
 });
 
-test('ZIP archives of Gerbers are expanded into sources; junk is skipped', () => {
-  const p = createProject('zip', NOW);
-  const sources = new Map();
-  const zip = zipSync({
-    'gerbers/a-F_Cu.gbr': readFileSync(join(SYNTH, 'board/synthetic-board-F_Cu.gbr')),
-    'gerbers/a.drl': readFileSync(join(SYNTH, 'board/synthetic-board-PTH.drl')),
-    '__MACOSX/._a-F_Cu.gbr': strToU8('junk'),
-    'readme.txt': strToU8('hello'),
-  });
-  const r = addSourceFile(p, sources, 'board.zip', zip, NOW);
-  assert.deepEqual(r.added.map((s) => s.name).sort(), ['a-F_Cu.gbr', 'a.drl']);
-  assert.equal(r.skipped.length, 1);
-  // duplicate names get a suffix rather than overwriting
-  addSourceFile(p, sources, 'a.drl', readFileSync(join(SYNTH, 'board/synthetic-board-PTH.drl')), NOW);
-  assert.ok(p.sources.some((s) => s.name === 'a (2).drl'));
+test('file names: .pcam in any case; download name is sanitised', () => {
+  assert.ok(isPcamFileName('board.pcam'));
+  assert.ok(isPcamFileName('BOARD.PCAM'));
+  assert.ok(!isPcamFileName('board.pcam.zip'));
+  assert.ok(!isPcamFileName('board.gbr'));
+  const p = createEmptyProject({ name: 'my/board: v2', now: NOW });
+  assert.equal(pcamFileName(p), 'my_board_ v2.pcam');
+  assert.equal(pcamFileName(createEmptyProject({ name: '  ', now: NOW })), 'untitled.pcam');
 });

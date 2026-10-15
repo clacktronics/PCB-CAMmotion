@@ -310,3 +310,10 @@ button.on {
 .hidden {
   display: none !important;
 }
+.status [data-kind='error'],
+#status[data-kind='error'] {
+  color: var(--err);
+}
+button.attention {
+  border-color: var(--warn);
+}

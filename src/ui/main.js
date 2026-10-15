@@ -18,7 +18,12 @@ function start() {
     },
     state() {
       return {
-        project: app.project,
+        project: {
+          manifest: app.project.manifest,
+          settings: app.project.settings,
+          stackup: app.project.stackup,
+          sources: app.project.sources.map((src) => src.name),
+        },
         layers: app.layers.map((l) => ({
           id: l.id,
           name: l.name,

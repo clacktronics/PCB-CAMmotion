@@ -2,7 +2,9 @@
 
 import { test, expect } from '@playwright/test';
 import { join } from 'node:path';
-import { openApp, ROOT } from './helpers.js';
+import { openApp, ROOT } from './viewer-helpers.js';
+
+test.use({ viewport: { width: 1400, height: 850 } });
 
 const LARGE = join(ROOT, 'test/fixtures/synthetic/gerber-large/large-dense-traces-30MB.gbr');
 const HOLES = join(ROOT, 'test/fixtures/synthetic/drill-large/holes-300k.drl');
@@ -10,6 +12,7 @@ const LOAD_BUDGET_MS = 25_000;
 const RENDER_BUDGET_MS = 6_000;
 
 test('30 MB Gerber (1.3 M draws) loads and renders within budget', async ({ page }) => {
+  test.setTimeout(90_000);
   await openApp(page);
   const t0 = Date.now();
   await page.locator('[data-testid=file-input]').setInputFiles([LARGE, HOLES]);
