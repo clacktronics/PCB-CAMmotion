@@ -3,6 +3,7 @@
 
 import { Viewer } from '../render/viewer.js';
 import { Viewer3D } from '../render3d/viewer3d.js';
+import { EXPLODE_STYLES } from '../model/stack3d.js';
 import {
   createProject,
   addSourceFile,
@@ -129,11 +130,29 @@ export class App {
       'data-testid': 'explode',
       oninput: (e) => this.#setView({ explode: Number(e.target.value) }),
     });
-    this.explodeBox = h(
-      'label',
-      { class: 'explode hidden', title: 'Explode: spread the layers apart to see each one' },
-      ['Explode', this.explodeInput],
+    const styleTitles = {
+      sheets:
+        'Sheets: the board comes apart by copper layer; each copper layer stays on its own slab of substrate, with the mask and silkscreen on the outer ones',
+      layers: 'Layers: every layer comes apart on its own; the substrate stays in the middle',
+    };
+    this.btnExplodeStyle = Object.fromEntries(
+      EXPLODE_STYLES.map((k) => [
+        k,
+        h(
+          'button',
+          {
+            'data-testid': `explode-${k}`,
+            title: styleTitles[k],
+            onclick: () => this.#setView({ explodeStyle: k }),
+          },
+          k === 'sheets' ? 'Sheets' : 'Layers',
+        ),
+      ]),
     );
+    this.explodeBox = h('span', { class: 'explode hidden' }, [
+      h('label', { title: 'Explode: spread the layers apart to see each one' }, ['Explode', this.explodeInput]),
+      h('span', { class: 'seg' }, Object.values(this.btnExplodeStyle)),
+    ]);
     this.btnBg = h(
       'button',
       {
@@ -429,6 +448,7 @@ export class App {
       side: v.side,
       background: v.background,
       explode: v.explode,
+      explodeStyle: v.explodeStyle,
     });
     this.viewer3d.setLayers(this.#renderLayers());
     this.#showDimension();
@@ -666,6 +686,7 @@ export class App {
     for (const [k, b] of Object.entries(this.btnDim)) b.classList.toggle('on', !!v.view3d === (k === '3d'));
     this.explodeBox.classList.toggle('hidden', !v.view3d);
     this.explodeInput.value = String(v.explode ?? 0);
+    for (const [k, b] of Object.entries(this.btnExplodeStyle)) b.classList.toggle('on', v.explodeStyle === k);
     for (const [k, b] of Object.entries(this.btnMode)) {
       b.classList.toggle('on', v.mode === k);
       // the 3D view always shows the real materials

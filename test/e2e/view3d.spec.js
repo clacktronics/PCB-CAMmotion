@@ -86,10 +86,45 @@ test('3D: shows the stackup in physical order with plated and non-plated holes',
   expect(errors).toEqual([]);
 });
 
-test('3D: explode slider spreads the layers out from the core and is saved', async ({ page }) => {
+test('3D: Sheets explode (default) splits the board by copper layer, each on its substrate', async ({ page }) => {
   await openApp(page);
   await loadBoard(page, TEST_BOARD);
   await open3d(page);
+  await expect(page.locator('[data-testid=explode-sheets]')).toHaveClass(/\bon\b/);
+  const z = (s) => Object.fromEntries(s.items.map((i) => [`${i.type}:${i.side}`, i.z]));
+  const before = await state3d(page);
+  expect(before.sheets).toBe(2);
+  // assembled: the core shows whole, its two halves meet at the board middle
+  expect(before.items.filter((i) => i.type === 'dielectric').every((i) => !i.visible)).toBe(true);
+  expect(before.pieces.every((p) => p.visible)).toBe(true);
+  await page.locator('[data-testid=explode]').fill('1');
+  await page.waitForFunction(() => window.__pcam.app.viewer3d.state().explode === 1);
+  const after = await state3d(page);
+  const [b, a] = [z(before), z(after)];
+  // the top sheet (silk, mask, copper and the upper half of the core) moves up as one
+  const up = a['copper:top'] - b['copper:top'];
+  expect(up).toBeGreaterThan(1);
+  for (const k of ['soldermask:top', 'legend:top']) expect(a[k] - b[k]).toBeCloseTo(up, 6);
+  const piece = (s, id) => s.pieces.filter((p) => p.id === id).map((p) => p.z);
+  piece(after, 'dielectric-1:upper').forEach((zz, i) =>
+    expect(zz - piece(before, 'dielectric-1:upper')[i]).toBeCloseTo(up, 6),
+  );
+  // the bottom sheet moves down by the same amount
+  const down = a['copper:bottom'] - b['copper:bottom'];
+  expect(down).toBeCloseTo(-up, 6);
+  expect(a['soldermask:bottom'] - b['soldermask:bottom']).toBeCloseTo(down, 6);
+  piece(after, 'dielectric-1:lower').forEach((zz, i) =>
+    expect(zz - piece(before, 'dielectric-1:lower')[i]).toBeCloseTo(down, 6),
+  );
+});
+
+test('3D: Layers explode spreads every layer out from the core and is saved', async ({ page }) => {
+  await openApp(page);
+  await loadBoard(page, TEST_BOARD);
+  await open3d(page);
+  await page.locator('[data-testid=explode-layers]').click();
+  await expect(page.locator('[data-testid=explode-layers]')).toHaveClass(/\bon\b/);
+  expect((await state3d(page)).pieces.every((p) => !p.visible)).toBe(true);
   const z = (s) => Object.fromEntries(s.items.map((i) => [`${i.type}:${i.side}`, i.z]));
   const before = z(await state3d(page));
   await page.locator('[data-testid=explode]').fill('1');
@@ -103,6 +138,7 @@ test('3D: explode slider spreads the layers out from the core and is saved', asy
   expect(after['soldermask:bottom']).toBeLessThan(after['copper:bottom'] - 1);
   const view = await page.evaluate(() => window.__pcam.state().project.settings.view);
   expect(view.explode).toBe(1);
+  expect(view.explodeStyle).toBe('layers');
   expect(view.view3d).toBe(true);
 });
 
@@ -151,13 +187,20 @@ test('3D: view, explode and camera are restored from the saved .pcam', async ({ 
   await loadBoard(page, TEST_BOARD);
   await open3d(page);
   await page.locator('[data-testid=explode]').fill('0.4');
+  await page.locator('[data-testid=explode-layers]').click();
   await page.locator('[data-testid=view-bottom]').click();
   const camera = (await state3d(page)).camera;
   const [download] = await Promise.all([page.waitForEvent('download'), page.locator('#save').click()]);
   const path = testInfo.outputPath('3d.pcam');
   await download.saveAs(path);
   const project = loadProject(new Uint8Array(readFileSync(path)));
-  expect(project.settings.view).toMatchObject({ view3d: true, explode: 0.4, side: 'bottom', camera3d: camera });
+  expect(project.settings.view).toMatchObject({
+    view3d: true,
+    explode: 0.4,
+    explodeStyle: 'layers',
+    side: 'bottom',
+    camera3d: camera,
+  });
 
   const fresh = await page.context().newPage();
   await openApp(fresh);
@@ -170,6 +213,8 @@ test('3D: view, explode and camera are restored from the saved .pcam', async ({ 
   await expect(fresh.locator('[data-testid=explode]')).toHaveValue('0.4');
   const s = await state3d(fresh);
   expect(s.explode).toBe(0.4);
+  expect(s.explodeStyle).toBe('layers');
+  await expect(fresh.locator('[data-testid=explode-layers]')).toHaveClass(/\bon\b/);
   expect(s.camera).toEqual(camera);
 
   await fresh.locator('[data-testid=view-2d]').click();

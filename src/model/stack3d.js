@@ -227,3 +227,76 @@ function positive(v) {
   const n = Number(v);
   return Number.isFinite(n) && n > 0 ? n : null;
 }
+
+/**
+ * Explode styles: sheets (the board comes apart by copper layer, each copper layer on its
+ * own slab of substrate with the outer sheets keeping their mask and silkscreen) or layers
+ * (every layer comes apart on its own, the substrate stays in the middle).
+ */
+export const EXPLODE_STYLES = ['sheets', 'layers'];
+
+/**
+ * Group the stack into sheets, one per copper plane, for the sheets explode style.
+ * Dielectric in the top half of the board goes with the copper above it (copper on top of
+ * its substrate), in the bottom half with the copper below it, so every copper layer faces
+ * outwards and can be seen; the core at the middle is split in two (with an odd number of
+ * copper layers, the core under the middle copper).
+ * Mask, silkscreen and paste go with the outer copper of their side.
+ * @param {StackItem[]} items from buildStack3d
+ * @returns {{count:number, levels:number[], sheetOf:Map<string, number>,
+ *   pieces:{id:string, itemId:string, sheet:number, z0Mm:number, z1Mm:number}[]}}
+ *   levels: per sheet, counted from the middle (top positive); sheetOf: non-dielectric item
+ *   id -> sheet; pieces: the dielectric, cut and assigned to sheets
+ */
+export function buildSheets(items) {
+  const cores = items.filter((i) => i.type === 'dielectric').sort((a, b) => b.z1Mm - a.z1Mm);
+  const count = cores.length + 1;
+  const mid = (count - 1) / 2;
+  const centre = (i) => (i.z0Mm + i.z1Mm) / 2;
+  const sheetOf = new Map();
+  for (const it of items) {
+    if (it.type === 'dielectric') continue;
+    // copper plane index = number of cores above the item
+    sheetOf.set(it.id, cores.filter((c) => centre(c) > centre(it)).length);
+  }
+  const pieces = [];
+  // the core that is cut in two: the middle one (even plane count), or the one under the
+  // middle copper (odd count) so that copper still sits on substrate
+  const cut = count % 2 ? mid + 0.5 : mid;
+  cores.forEach((c, i) => {
+    const at = i + 0.5; // the core lies between plane i and plane i + 1
+    if (at < cut) pieces.push({ id: c.id, itemId: c.id, sheet: i, z0Mm: c.z0Mm, z1Mm: c.z1Mm });
+    else if (at > cut) pieces.push({ id: c.id, itemId: c.id, sheet: i + 1, z0Mm: c.z0Mm, z1Mm: c.z1Mm });
+    else {
+      const zm = centre(c);
+      pieces.push({ id: `${c.id}:upper`, itemId: c.id, sheet: i, z0Mm: zm, z1Mm: c.z1Mm });
+      pieces.push({ id: `${c.id}:lower`, itemId: c.id, sheet: i + 1, z0Mm: c.z0Mm, z1Mm: zm });
+    }
+  });
+  const levels = Array.from({ length: count }, (_, k) => mid - k);
+  return { count, levels, sheetOf, pieces };
+}
+
+/**
+ * Z offset of each sheet in the sheets explode style.
+ * @param {number} amount 0 (assembled) … 1 (fully exploded)
+ * @param {number} gapMm extra space between neighbouring sheets at amount = 1
+ */
+export function sheetOffsets(sheets, amount, gapMm) {
+  const a = Math.min(1, Math.max(0, Number(amount) || 0));
+  return sheets.levels.map((level) => level * gapMm * a + 0); // + 0: no -0
+}
+
+/**
+ * Height range of each sheet (unexploded): its dielectric and copper, for the hole barrels.
+ * @returns {{plated:[number, number]|null, bare:[number, number]|null}[]}
+ */
+export function sheetSpans(items, sheets) {
+  return sheets.levels.map((_, k) => {
+    const ps = sheets.pieces.filter((p) => p.sheet === k);
+    const cu = items.filter((i) => i.type === 'copper' && sheets.sheetOf.get(i.id) === k);
+    const range = (list) =>
+      list.length ? [Math.min(...list.map((i) => i.z0Mm)), Math.max(...list.map((i) => i.z1Mm))] : null;
+    return { plated: range([...ps, ...cu]), bare: range(ps) };
+  });
+}

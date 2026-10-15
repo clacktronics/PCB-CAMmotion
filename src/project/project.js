@@ -15,6 +15,7 @@
 //                    ensureSettings turns into show.paste.
 //                    mode: realistic | debug | classic | xor | outline (model/view-modes.js)
 //                    view3d: show the 3D view; explode: 0..1 how far the 3D layers are spread;
+//                    explodeStyle: sheets (apart by copper layer, each on its substrate) | layers;
 //                    camera3d: null | { position: [x, y, z], target: [x, y, z] } in mm
 //   settings.analyze: { open, tab, highlight, playback }   the analyser dock (milestone 3)
 //                    tab: apertures | shapes | commands; highlight: null | { layer, code }
@@ -35,6 +36,7 @@ import { extractOutline } from '../model/outline.js';
 import { resolveJobFiles } from '../parse/gbrjob.js';
 import { DEFAULT_STACKUP } from '../model/materials.js';
 import { DEFAULT_SHOW, normaliseShow } from '../model/layer-groups.js';
+import { EXPLODE_STYLES } from '../model/stack3d.js';
 import { unzipSync } from '../../vendor/fflate/fflate.js';
 
 export const DEFAULT_VIEW = {
@@ -49,6 +51,7 @@ export const DEFAULT_VIEW = {
   scale: null,
   view3d: false,
   explode: 0,
+  explodeStyle: 'sheets',
   camera3d: null,
 };
 
@@ -79,6 +82,7 @@ export function ensureSettings(project) {
   const explode = Number(s.view.explode);
   s.view.explode = Number.isFinite(explode) ? Math.min(1, Math.max(0, explode)) : 0;
   s.view.view3d = s.view.view3d === true;
+  if (!EXPLODE_STYLES.includes(s.view.explodeStyle)) s.view.explodeStyle = DEFAULT_VIEW.explodeStyle;
   s.analyze = normaliseAnalyze(s.analyze);
   for (const src of project.sources) s.layers[src.name] ??= defaultLayerSettings();
   return project;

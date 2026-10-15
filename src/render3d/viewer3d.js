@@ -27,7 +27,16 @@ import {
 } from '../../vendor/three/three.module.js';
 import { OrbitControls } from '../../vendor/three/OrbitControls.js';
 import { RoomEnvironment } from '../../vendor/three/RoomEnvironment.js';
-import { buildStack3d, explodeOffsets, explodeGapMm, drillHoles, edgeWalls } from '../model/stack3d.js';
+import {
+  buildStack3d,
+  explodeOffsets,
+  explodeGapMm,
+  drillHoles,
+  edgeWalls,
+  buildSheets,
+  sheetOffsets,
+  sheetSpans,
+} from '../model/stack3d.js';
 import { boardArea } from '../render/board-render.js';
 import { LayerPictures, pictureFrame, loopsBounds } from './layer-pictures.js';
 import { backgroundColour } from '../model/view-modes.js';
@@ -35,6 +44,7 @@ import { SUBSTRATE, MISC, SURFACE, lookupMaterial } from '../model/materials.js'
 
 const FOV_DEG = 35;
 const MAX_INSTANCES = 50000;
+const SHEET_GAP_FACTOR = 2.5;
 
 export class Viewer3D {
   /**
@@ -45,12 +55,15 @@ export class Viewer3D {
     this.canvas = canvas;
     this.cb = cb;
     this.layers = [];
-    this.settings = { stackup: {}, solo: [], background: 'dark', explode: 0, side: 'top' };
+    this.settings = { stackup: {}, solo: [], background: 'dark', explode: 0, explodeStyle: 'sheets', side: 'top' };
     this.visible = false;
     this.needsScene = true;
     this.renderCount = 0;
     this.items = [];
-    this.parts = []; // { item, mesh, face: 'z0'|'z1' } and walls
+    // { mesh, baseZ, item?, style?, sheet?, walls? }: baseZ = unexploded z of the mesh origin;
+    // style = the explode style it belongs to (none = both); sheet = its sheet (sheets style)
+    this.parts = [];
+    this.sheets = buildSheets([]);
     this.holes = null;
     this.frame = null;
     this.gl = null;
@@ -125,7 +138,7 @@ export class Viewer3D {
     Object.assign(this.settings, patch);
     if ('stackup' in patch || 'solo' in patch) return this.layersChanged();
     if (!this.gl) return;
-    if ('explode' in patch) this.#placeItems();
+    if ('explode' in patch || 'explodeStyle' in patch) this.#placeItems();
     if ('side' in patch) this.fit();
     this.requestRender();
   }
@@ -193,55 +206,57 @@ export class Viewer3D {
     const cy = (y0 + y1) / 2;
     const plane = new PlaneGeometry(x1 - x0, y1 - y0);
     const sub = lookupMaterial('substrate', st.substrate).value || SUBSTRATE.fr4;
+    const edgeMat = () =>
+      new MeshStandardMaterial({
+        color: srgb(sub.rgb, 0.8),
+        side: DoubleSide,
+        envMap: this.envMap,
+        ...SURFACE.substrate,
+      });
+    const sheets = buildSheets(items);
+    this.sheets = sheets;
+    let core = null; // the substrate picture, shared by every piece of dielectric
+    const coreMaterial = () => {
+      if (core) return core;
+      const pic = pictures.picture({ type: 'dielectric', side: 'inner', layerId: null });
+      return (core = this.#material(pic, anisotropy));
+    };
+    const slab = (z0, z1, name, part) => {
+      for (const z of [z0, z1]) {
+        const mesh = new Mesh(plane, coreMaterial());
+        mesh.position.set(cx, cy, 0);
+        mesh.name = name;
+        this.board.add(mesh);
+        this.parts.push({ ...part, mesh, baseZ: z });
+      }
+      const edge = new Mesh(wallGeometry(loops, z0, z1), edgeMat());
+      edge.name = `${name}:edge`;
+      this.board.add(edge);
+      this.parts.push({ ...part, mesh: edge, baseZ: 0, walls: true });
+    };
 
     for (const item of items) {
-      if (item.layerId && solo.length && !solo.includes(item.layerId)) continue;
-      const pic = pictures.picture(item);
-      const tex = new CanvasTexture(pic.canvas);
-      tex.colorSpace = SRGBColorSpace;
-      tex.anisotropy = anisotropy;
-      tex.minFilter = LinearMipmapLinearFilter;
-      const transparent = pic.opacity < 1;
-      const mat = new MeshStandardMaterial({
-        map: tex,
-        side: DoubleSide,
-        transparent,
-        opacity: pic.opacity,
-        alphaTest: transparent ? 0.02 : 0.5,
-        depthWrite: !transparent,
-        envMap: this.envMap,
-        ...pic.surface,
-      });
-      // thin layers are drawn as one face: the outer face of the layer
-      const faces = item.type === 'dielectric' ? ['z0', 'z1'] : [item.side === 'bottom' ? 'z0' : 'z1'];
-      for (const [i, face] of faces.entries()) {
-        const mesh = new Mesh(plane, i ? mat.clone() : mat);
-        mesh.position.set(cx, cy, 0);
-        mesh.name = item.id;
-        this.board.add(mesh);
-        this.parts.push({ item, mesh, face });
-      }
       if (item.type === 'dielectric') {
-        const walls = edgeWalls(loops, item.z0Mm, item.z1Mm);
-        const g = new BufferGeometry();
-        g.setAttribute('position', new BufferAttribute(walls.positions, 3));
-        g.setAttribute('normal', new BufferAttribute(walls.normals, 3));
-        const edge = new Mesh(
-          g,
-          new MeshStandardMaterial({
-            color: srgb(sub.rgb, 0.8),
-            side: DoubleSide,
-            envMap: this.envMap,
-            ...SURFACE.substrate,
-          }),
-        );
-        edge.name = `${item.id}:edge`;
-        this.board.add(edge);
-        this.parts.push({ item, mesh: edge, face: 'walls' });
+        // layers style: the whole core stays in the middle
+        slab(item.z0Mm, item.z1Mm, item.id, { item, style: 'layers' });
+        continue;
       }
+      if (item.layerId && solo.length && !solo.includes(item.layerId)) continue;
+      const mat = this.#material(pictures.picture(item), anisotropy);
+      // thin layers are drawn as one face: the outer face of the layer
+      const mesh = new Mesh(plane, mat);
+      mesh.position.set(cx, cy, 0);
+      mesh.name = item.id;
+      this.board.add(mesh);
+      this.parts.push({ item, mesh, baseZ: item.side === 'bottom' ? item.z0Mm : item.z1Mm });
+    }
+    // sheets style: the dielectric cut and given to the copper layers
+    for (const piece of sheets.pieces) {
+      const item = items.find((i) => i.id === piece.itemId);
+      slab(piece.z0Mm, piece.z1Mm, piece.id, { item, style: 'sheets', sheet: piece.sheet });
     }
     pictures.dispose();
-    this.#buildHoles(layers, sub);
+    this.#buildHoles(layers, sub, items, sheets);
     this.#placeItems();
     if (this.savedCamera) {
       this.setCamera(this.savedCamera);
@@ -250,72 +265,97 @@ export class Viewer3D {
     this.requestRender();
   }
 
-  /** Hole walls: plated barrels (finish colour) and non-plated hole walls (substrate). */
-  #buildHoles(layers, sub) {
+  /** Material for a layer picture: its colours, cut-outs, opacity and surface. */
+  #material(pic, anisotropy) {
+    const tex = new CanvasTexture(pic.canvas);
+    tex.colorSpace = SRGBColorSpace;
+    tex.anisotropy = anisotropy;
+    tex.minFilter = LinearMipmapLinearFilter;
+    const transparent = pic.opacity < 1;
+    return new MeshStandardMaterial({
+      map: tex,
+      side: DoubleSide,
+      transparent,
+      opacity: pic.opacity,
+      alphaTest: transparent ? 0.02 : 0.5,
+      depthWrite: !transparent,
+      envMap: this.envMap,
+      ...pic.surface,
+    });
+  }
+
+  /**
+   * Hole walls: plated barrels (finish colour) and non-plated hole walls (substrate). The
+   * layers style has one set stretched across the exploded stack; the sheets style one set
+   * per sheet, through that sheet's substrate and copper.
+   */
+  #buildHoles(layers, sub, items, sheets) {
     const holes = drillHoles(layers).slice(0, MAX_INSTANCES);
     if (!holes.length) return;
     const geo = new CylinderGeometry(0.5, 0.5, 1, 24, 1, true);
     geo.rotateX(Math.PI / 2); // axis along Z
     const finish = lookupMaterial('finish', this.settings.stackup?.finish).value;
-    const make = (list, rgb, surface) => {
+    const platedMat = new MeshStandardMaterial({
+      color: srgb(finish.rgb),
+      side: DoubleSide,
+      envMap: this.envMap,
+      ...SURFACE.copper,
+    });
+    const bareMat = new MeshStandardMaterial({
+      color: srgb(MISC.holeWall.rgb ?? sub.rgb),
+      side: DoubleSide,
+      envMap: this.envMap,
+      ...SURFACE.holeWall,
+    });
+    const make = (list, mat) => {
       if (!list.length) return null;
-      const mesh = new InstancedMesh(
-        geo,
-        new MeshStandardMaterial({ color: srgb(rgb), side: DoubleSide, envMap: this.envMap, ...surface }),
-        list.length,
-      );
+      const mesh = new InstancedMesh(geo, mat, list.length);
       mesh.userData.holes = list;
       this.board.add(mesh);
       return mesh;
     };
-    this.holes = {
-      plated: make(
-        holes.filter((h) => h.plated),
-        finish.rgb,
-        SURFACE.copper,
-      ),
-      npth: make(
-        holes.filter((h) => !h.plated),
-        MISC.holeWall.rgb ?? sub.rgb,
-        SURFACE.holeWall,
-      ),
-    };
+    const plated = holes.filter((h) => h.plated);
+    const bare = holes.filter((h) => !h.plated);
+    this.holes = { plated: make(plated, platedMat), npth: make(bare, bareMat) };
+    for (const mesh of Object.values(this.holes)) if (mesh) this.parts.push({ mesh, baseZ: 0, style: 'layers' });
+    sheetSpans(items, sheets).forEach((span, k) => {
+      for (const [list, mat, z] of [
+        [plated, platedMat, span.plated],
+        [bare, bareMat, span.bare],
+      ]) {
+        const mesh = z && make(list, mat);
+        if (!mesh) continue;
+        setBarrels(mesh, z);
+        this.parts.push({ mesh, baseZ: 0, style: 'sheets', sheet: k });
+      }
+    });
   }
 
-  /** Put every item at its Z for the current explode amount, and stretch the hole walls. */
+  /** Put every part at its Z for the current explode amount and style. */
   #placeItems() {
     if (!this.frame) return;
     const b = this.frame.bounds;
     const gap = explodeGapMm(b[2] - b[0], b[3] - b[1]);
-    const dz = explodeOffsets(this.items, this.settings.explode, gap);
+    const amount = this.settings.explode;
+    const style = this.settings.explodeStyle === 'layers' ? 'layers' : 'sheets';
+    const dz = explodeOffsets(this.items, amount, gap);
+    // fewer, thicker parts: sheets get more room between them
+    const sheetDz = sheetOffsets(this.sheets, amount, gap * SHEET_GAP_FACTOR);
     for (const p of this.parts) {
-      const off = dz.get(p.item.id) ?? 0;
-      if (p.face === 'walls') p.mesh.position.z = off;
-      else p.mesh.position.z = (p.face === 'z0' ? p.item.z0Mm : p.item.z1Mm) + off;
+      p.mesh.visible = !p.style || p.style === style;
+      const sheet = p.sheet ?? (p.item && this.sheets.sheetOf.get(p.item.id));
+      const off = (p.style ?? style) === 'sheets' ? (sheetDz[sheet] ?? 0) : p.item ? (dz.get(p.item.id) ?? 0) : 0;
+      p.mesh.position.z = p.baseZ + off;
     }
-    if (!this.holes) return;
+    if (style !== 'layers' || !this.holes) return;
+    // layers style: the barrels stretch from the bottom to the top copper
     const span = (types) => {
       const list = this.items.filter((i) => types.includes(i.type));
       if (!list.length) return null;
       return [Math.min(...list.map((i) => i.z0Mm + dz.get(i.id))), Math.max(...list.map((i) => i.z1Mm + dz.get(i.id)))];
     };
-    const plated = span(['copper', 'dielectric']);
-    const bare = span(['dielectric']);
-    const m = new Matrix4();
-    for (const [mesh, z] of [
-      [this.holes.plated, plated],
-      [this.holes.npth, bare],
-    ]) {
-      if (!mesh || !z) continue;
-      const len = Math.max(z[1] - z[0], 1e-3);
-      mesh.userData.holes.forEach((h, i) => {
-        m.makeScale(h.diaMm, h.diaMm, len);
-        m.setPosition(h.x, h.y, (z[0] + z[1]) / 2);
-        mesh.setMatrixAt(i, m);
-      });
-      mesh.instanceMatrix.needsUpdate = true;
-      mesh.computeBoundingSphere();
-    }
+    if (this.holes.plated) setBarrels(this.holes.plated, span(['copper', 'dielectric']));
+    if (this.holes.npth) setBarrels(this.holes.npth, span(['dielectric']));
   }
 
   // ---------------------------------------------------------------- camera
@@ -382,13 +422,21 @@ export class Viewer3D {
       failed: this.failed,
       renders: this.renderCount,
       explode: this.settings.explode,
+      explodeStyle: this.settings.explodeStyle,
+      sheets: this.sheets.count,
+      // faces of the dielectric pieces of the sheets style
+      pieces: this.parts
+        .filter((p) => p.style === 'sheets' && p.item && !p.walls)
+        .map((p) => ({ id: p.mesh.name, sheet: p.sheet, z: p.mesh.position.z, visible: p.mesh.visible })),
       items: this.parts
-        .filter((p) => p.face !== 'walls')
+        .filter((p) => p.item && !p.walls && p.style !== 'sheets')
         .map((p) => ({
           id: p.item.id,
           type: p.item.type,
           side: p.item.side,
           z: p.mesh.position.z,
+          sheet: this.sheets.sheetOf.get(p.item.id) ?? null,
+          visible: p.mesh.visible,
           metalness: p.mesh.material.metalness,
           roughness: p.mesh.material.roughness,
         })),
@@ -400,6 +448,29 @@ export class Viewer3D {
       camera: this.getCamera(),
     };
   }
+}
+
+/** Place hole barrels between two heights (mm). */
+function setBarrels(mesh, z) {
+  if (!z) return;
+  const m = new Matrix4();
+  const len = Math.max(z[1] - z[0], 1e-3);
+  mesh.userData.holes.forEach((h, i) => {
+    m.makeScale(h.diaMm, h.diaMm, len);
+    m.setPosition(h.x, h.y, (z[0] + z[1]) / 2);
+    mesh.setMatrixAt(i, m);
+  });
+  mesh.instanceMatrix.needsUpdate = true;
+  mesh.computeBoundingSphere();
+}
+
+/** Board edge between two heights, from the board outline loops. */
+function wallGeometry(loops, z0Mm, z1Mm) {
+  const walls = edgeWalls(loops, z0Mm, z1Mm);
+  const g = new BufferGeometry();
+  g.setAttribute('position', new BufferAttribute(walls.positions, 3));
+  g.setAttribute('normal', new BufferAttribute(walls.normals, 3));
+  return g;
 }
 
 function srgb(rgb, k = 1) {

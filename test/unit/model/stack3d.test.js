@@ -8,6 +8,10 @@ import {
   drillHoles,
   edgeWalls,
   DEFAULT_THICKNESS_MM,
+  EXPLODE_STYLES,
+  buildSheets,
+  sheetOffsets,
+  sheetSpans,
 } from '../../../src/model/stack3d.js';
 import { near } from '../../helpers.js';
 
@@ -160,4 +164,97 @@ test('edge walls: two triangles per outline segment, normals pointing out of a C
   const zs = new Set();
   for (let i = 2; i < positions.length; i += 3) zs.add(Math.round(positions[i] * 10) / 10);
   assert.deepEqual([...zs].sort(), [-0.8, 0.8]);
+});
+
+test('sheets: a two-layer board splits into a top and a bottom half, the core cut in the middle', () => {
+  assert.deepEqual(EXPLODE_STYLES, ['sheets', 'layers']);
+  const { items } = buildStack3d(twoLayer);
+  const sh = buildSheets(items);
+  assert.equal(sh.count, 2);
+  assert.deepEqual(sh.levels, [0.5, -0.5]);
+  assert.deepEqual(
+    ['F_Silk', 'F_Mask', 'F_Cu', 'B_Cu', 'B_Mask'].map((id) => sh.sheetOf.get(id)),
+    [0, 0, 0, 1, 1],
+  );
+  const core = byId(items)['dielectric-1'];
+  assert.deepEqual(
+    sh.pieces.map((p) => [p.id, p.sheet]),
+    [
+      ['dielectric-1:upper', 0],
+      ['dielectric-1:lower', 1],
+    ],
+  );
+  assert.ok(near(sh.pieces[0].z0Mm, 0, 1e-9) && near(sh.pieces[1].z1Mm, 0, 1e-9), 'cut at the board middle');
+  assert.equal(sh.pieces[0].z1Mm, core.z1Mm);
+  assert.equal(sh.pieces[1].z0Mm, core.z0Mm);
+});
+
+test('sheets: four layers, each copper on its own core facing outwards; middle core split', () => {
+  const layers = [
+    L('F_Cu', 'copper', 'top'),
+    L('F_Mask', 'soldermask', 'top'),
+    L('In1', 'copper', 'inner', { index: 1 }),
+    L('In2', 'copper', 'inner', { index: 2 }),
+    L('B_Cu', 'copper', 'bottom'),
+  ];
+  const { items } = buildStack3d(layers);
+  const sh = buildSheets(items);
+  assert.equal(sh.count, 4);
+  assert.deepEqual(
+    ['F_Mask', 'F_Cu', 'In1', 'In2', 'B_Cu'].map((id) => sh.sheetOf.get(id)),
+    [0, 0, 1, 2, 3],
+  );
+  assert.deepEqual(
+    sh.pieces.map((p) => [p.id, p.sheet]),
+    [
+      ['dielectric-1', 0], // under F_Cu
+      ['dielectric-2:upper', 1], // under In1
+      ['dielectric-2:lower', 2], // over In2
+      ['dielectric-3', 3], // over B_Cu
+    ],
+  );
+  // every copper sits on the outer face of its sheet
+  const s = byId(items);
+  const pieceOf = (k) => sh.pieces.filter((p) => p.sheet === k);
+  assert.ok(near(s.In1.z0Mm, pieceOf(1)[0].z1Mm, 1e-9), 'In1 on top of its core');
+  assert.ok(near(s.In2.z1Mm, pieceOf(2)[0].z0Mm, 1e-9), 'In2 under its core');
+  assert.deepEqual(sh.levels, [1.5, 0.5, -0.5, -1.5]);
+});
+
+test('sheets: with three copper layers the middle one still sits on its own substrate', () => {
+  const layers = [L('F_Cu', 'copper', 'top'), L('In1', 'copper', 'inner', { index: 1 }), L('B_Cu', 'copper', 'bottom')];
+  const { items } = buildStack3d(layers);
+  const sh = buildSheets(items);
+  assert.equal(sh.count, 3);
+  assert.deepEqual(
+    sh.pieces.map((p) => [p.id, p.sheet]),
+    [
+      ['dielectric-1', 0],
+      ['dielectric-2:upper', 1],
+      ['dielectric-2:lower', 2],
+    ],
+  );
+  for (let k = 0; k < 3; k++)
+    assert.ok(
+      sh.pieces.some((p) => p.sheet === k),
+      `sheet ${k} has substrate`,
+    );
+});
+
+test('sheet offsets spread symmetrically; spans cover each sheet core and copper', () => {
+  const { items } = buildStack3d(twoLayer);
+  const sh = buildSheets(items);
+  assert.deepEqual(sheetOffsets(sh, 0, 10), [0, 0]);
+  assert.deepEqual(sheetOffsets(sh, 1, 10), [5, -5]);
+  assert.deepEqual(sheetOffsets(sh, 9, 10), [5, -5]);
+  const spans = sheetSpans(items, sh);
+  const s = byId(items);
+  const same = (got, want) =>
+    assert.ok(
+      got.every((v, i) => near(v, want[i], 1e-9)),
+      `${got} vs ${want}`,
+    );
+  same(spans[0].plated, [0, s.F_Cu.z1Mm]);
+  same(spans[0].bare, [0, s['dielectric-1'].z1Mm]);
+  same(spans[1].plated, [s.B_Cu.z0Mm, 0]);
 });

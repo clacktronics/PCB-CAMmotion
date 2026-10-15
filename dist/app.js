@@ -18611,6 +18611,44 @@ void main() {
     const n2 = Number(v);
     return Number.isFinite(n2) && n2 > 0 ? n2 : null;
   }
+  var EXPLODE_STYLES = ["sheets", "layers"];
+  function buildSheets(items) {
+    const cores = items.filter((i) => i.type === "dielectric").sort((a2, b3) => b3.z1Mm - a2.z1Mm);
+    const count2 = cores.length + 1;
+    const mid = (count2 - 1) / 2;
+    const centre = (i) => (i.z0Mm + i.z1Mm) / 2;
+    const sheetOf = /* @__PURE__ */ new Map();
+    for (const it of items) {
+      if (it.type === "dielectric") continue;
+      sheetOf.set(it.id, cores.filter((c) => centre(c) > centre(it)).length);
+    }
+    const pieces = [];
+    const cut = count2 % 2 ? mid + 0.5 : mid;
+    cores.forEach((c, i) => {
+      const at2 = i + 0.5;
+      if (at2 < cut) pieces.push({ id: c.id, itemId: c.id, sheet: i, z0Mm: c.z0Mm, z1Mm: c.z1Mm });
+      else if (at2 > cut) pieces.push({ id: c.id, itemId: c.id, sheet: i + 1, z0Mm: c.z0Mm, z1Mm: c.z1Mm });
+      else {
+        const zm2 = centre(c);
+        pieces.push({ id: `${c.id}:upper`, itemId: c.id, sheet: i, z0Mm: zm2, z1Mm: c.z1Mm });
+        pieces.push({ id: `${c.id}:lower`, itemId: c.id, sheet: i + 1, z0Mm: c.z0Mm, z1Mm: zm2 });
+      }
+    });
+    const levels = Array.from({ length: count2 }, (_, k2) => mid - k2);
+    return { count: count2, levels, sheetOf, pieces };
+  }
+  function sheetOffsets(sheets, amount, gapMm) {
+    const a2 = Math.min(1, Math.max(0, Number(amount) || 0));
+    return sheets.levels.map((level) => level * gapMm * a2 + 0);
+  }
+  function sheetSpans(items, sheets) {
+    return sheets.levels.map((_, k2) => {
+      const ps3 = sheets.pieces.filter((p) => p.sheet === k2);
+      const cu2 = items.filter((i) => i.type === "copper" && sheets.sheetOf.get(i.id) === k2);
+      const range2 = (list) => list.length ? [Math.min(...list.map((i) => i.z0Mm)), Math.max(...list.map((i) => i.z1Mm))] : null;
+      return { plated: range2([...ps3, ...cu2]), bare: range2(ps3) };
+    });
+  }
 
   // src/render3d/layer-pictures.js
   function pictureFrame(bounds, maxPx = 2048, maxPxPerMm = 25) {
@@ -18771,6 +18809,7 @@ void main() {
   // src/render3d/viewer3d.js
   var FOV_DEG = 35;
   var MAX_INSTANCES = 5e4;
+  var SHEET_GAP_FACTOR = 2.5;
   var Viewer3D = class {
     /**
      * @param {HTMLCanvasElement} canvas
@@ -18780,12 +18819,13 @@ void main() {
       this.canvas = canvas;
       this.cb = cb;
       this.layers = [];
-      this.settings = { stackup: {}, solo: [], background: "dark", explode: 0, side: "top" };
+      this.settings = { stackup: {}, solo: [], background: "dark", explode: 0, explodeStyle: "sheets", side: "top" };
       this.visible = false;
       this.needsScene = true;
       this.renderCount = 0;
       this.items = [];
       this.parts = [];
+      this.sheets = buildSheets([]);
       this.holes = null;
       this.frame = null;
       this.gl = null;
@@ -18852,7 +18892,7 @@ void main() {
       Object.assign(this.settings, patch);
       if ("stackup" in patch || "solo" in patch) return this.layersChanged();
       if (!this.gl) return;
-      if ("explode" in patch) this.#placeItems();
+      if ("explode" in patch || "explodeStyle" in patch) this.#placeItems();
       if ("side" in patch) this.fit();
       this.requestRender();
     }
@@ -18913,53 +18953,52 @@ void main() {
       const cy = (y0 + y1) / 2;
       const plane = new Wn(x1 - x0, y1 - y0);
       const sub = lookupMaterial("substrate", st2.substrate).value || SUBSTRATE.fr4;
-      for (const item of items) {
-        if (item.layerId && solo.length && !solo.includes(item.layerId)) continue;
-        const pic = pictures.picture(item);
-        const tex = new Tp(pic.canvas);
-        tex.colorSpace = Et;
-        tex.anisotropy = anisotropy;
-        tex.minFilter = ws;
-        const transparent = pic.opacity < 1;
-        const mat = new ha({
-          map: tex,
-          side: Fc,
-          transparent,
-          opacity: pic.opacity,
-          alphaTest: transparent ? 0.02 : 0.5,
-          depthWrite: !transparent,
-          envMap: this.envMap,
-          ...pic.surface
-        });
-        const faces = item.type === "dielectric" ? ["z0", "z1"] : [item.side === "bottom" ? "z0" : "z1"];
-        for (const [i, face] of faces.entries()) {
-          const mesh = new Zt(plane, i ? mat.clone() : mat);
+      const edgeMat = () => new ha({
+        color: srgb(sub.rgb, 0.8),
+        side: Fc,
+        envMap: this.envMap,
+        ...SURFACE.substrate
+      });
+      const sheets = buildSheets(items);
+      this.sheets = sheets;
+      let core = null;
+      const coreMaterial = () => {
+        if (core) return core;
+        const pic = pictures.picture({ type: "dielectric", side: "inner", layerId: null });
+        return core = this.#material(pic, anisotropy);
+      };
+      const slab = (z0, z1, name, part) => {
+        for (const z2 of [z0, z1]) {
+          const mesh = new Zt(plane, coreMaterial());
           mesh.position.set(cx, cy, 0);
-          mesh.name = item.id;
+          mesh.name = name;
           this.board.add(mesh);
-          this.parts.push({ item, mesh, face });
+          this.parts.push({ ...part, mesh, baseZ: z2 });
         }
+        const edge = new Zt(wallGeometry(loops, z0, z1), edgeMat());
+        edge.name = `${name}:edge`;
+        this.board.add(edge);
+        this.parts.push({ ...part, mesh: edge, baseZ: 0, walls: true });
+      };
+      for (const item of items) {
         if (item.type === "dielectric") {
-          const walls = edgeWalls(loops, item.z0Mm, item.z1Mm);
-          const g = new H();
-          g.setAttribute("position", new st(walls.positions, 3));
-          g.setAttribute("normal", new st(walls.normals, 3));
-          const edge = new Zt(
-            g,
-            new ha({
-              color: srgb(sub.rgb, 0.8),
-              side: Fc,
-              envMap: this.envMap,
-              ...SURFACE.substrate
-            })
-          );
-          edge.name = `${item.id}:edge`;
-          this.board.add(edge);
-          this.parts.push({ item, mesh: edge, face: "walls" });
+          slab(item.z0Mm, item.z1Mm, item.id, { item, style: "layers" });
+          continue;
         }
+        if (item.layerId && solo.length && !solo.includes(item.layerId)) continue;
+        const mat = this.#material(pictures.picture(item), anisotropy);
+        const mesh = new Zt(plane, mat);
+        mesh.position.set(cx, cy, 0);
+        mesh.name = item.id;
+        this.board.add(mesh);
+        this.parts.push({ item, mesh, baseZ: item.side === "bottom" ? item.z0Mm : item.z1Mm });
+      }
+      for (const piece of sheets.pieces) {
+        const item = items.find((i) => i.id === piece.itemId);
+        slab(piece.z0Mm, piece.z1Mm, piece.id, { item, style: "sheets", sheet: piece.sheet });
       }
       pictures.dispose();
-      this.#buildHoles(layers, sub);
+      this.#buildHoles(layers, sub, items, sheets);
       this.#placeItems();
       if (this.savedCamera) {
         this.setCamera(this.savedCamera);
@@ -18967,71 +19006,93 @@ void main() {
       } else if (!this.hasCamera) this.fit();
       this.requestRender();
     }
-    /** Hole walls: plated barrels (finish colour) and non-plated hole walls (substrate). */
-    #buildHoles(layers, sub) {
+    /** Material for a layer picture: its colours, cut-outs, opacity and surface. */
+    #material(pic, anisotropy) {
+      const tex = new Tp(pic.canvas);
+      tex.colorSpace = Et;
+      tex.anisotropy = anisotropy;
+      tex.minFilter = ws;
+      const transparent = pic.opacity < 1;
+      return new ha({
+        map: tex,
+        side: Fc,
+        transparent,
+        opacity: pic.opacity,
+        alphaTest: transparent ? 0.02 : 0.5,
+        depthWrite: !transparent,
+        envMap: this.envMap,
+        ...pic.surface
+      });
+    }
+    /**
+     * Hole walls: plated barrels (finish colour) and non-plated hole walls (substrate). The
+     * layers style has one set stretched across the exploded stack; the sheets style one set
+     * per sheet, through that sheet's substrate and copper.
+     */
+    #buildHoles(layers, sub, items, sheets) {
       const holes = drillHoles(layers).slice(0, MAX_INSTANCES);
       if (!holes.length) return;
       const geo = new cs(0.5, 0.5, 1, 24, 1, true);
       geo.rotateX(Math.PI / 2);
       const finish2 = lookupMaterial("finish", this.settings.stackup?.finish).value;
-      const make = (list, rgb, surface) => {
+      const platedMat = new ha({
+        color: srgb(finish2.rgb),
+        side: Fc,
+        envMap: this.envMap,
+        ...SURFACE.copper
+      });
+      const bareMat = new ha({
+        color: srgb(MISC.holeWall.rgb ?? sub.rgb),
+        side: Fc,
+        envMap: this.envMap,
+        ...SURFACE.holeWall
+      });
+      const make = (list, mat) => {
         if (!list.length) return null;
-        const mesh = new Rh(
-          geo,
-          new ha({ color: srgb(rgb), side: Fc, envMap: this.envMap, ...surface }),
-          list.length
-        );
+        const mesh = new Rh(geo, mat, list.length);
         mesh.userData.holes = list;
         this.board.add(mesh);
         return mesh;
       };
-      this.holes = {
-        plated: make(
-          holes.filter((h2) => h2.plated),
-          finish2.rgb,
-          SURFACE.copper
-        ),
-        npth: make(
-          holes.filter((h2) => !h2.plated),
-          MISC.holeWall.rgb ?? sub.rgb,
-          SURFACE.holeWall
-        )
-      };
+      const plated = holes.filter((h2) => h2.plated);
+      const bare = holes.filter((h2) => !h2.plated);
+      this.holes = { plated: make(plated, platedMat), npth: make(bare, bareMat) };
+      for (const mesh of Object.values(this.holes)) if (mesh) this.parts.push({ mesh, baseZ: 0, style: "layers" });
+      sheetSpans(items, sheets).forEach((span, k2) => {
+        for (const [list, mat, z2] of [
+          [plated, platedMat, span.plated],
+          [bare, bareMat, span.bare]
+        ]) {
+          const mesh = z2 && make(list, mat);
+          if (!mesh) continue;
+          setBarrels(mesh, z2);
+          this.parts.push({ mesh, baseZ: 0, style: "sheets", sheet: k2 });
+        }
+      });
     }
-    /** Put every item at its Z for the current explode amount, and stretch the hole walls. */
+    /** Put every part at its Z for the current explode amount and style. */
     #placeItems() {
       if (!this.frame) return;
       const b3 = this.frame.bounds;
       const gap = explodeGapMm(b3[2] - b3[0], b3[3] - b3[1]);
-      const dz = explodeOffsets(this.items, this.settings.explode, gap);
+      const amount = this.settings.explode;
+      const style = this.settings.explodeStyle === "layers" ? "layers" : "sheets";
+      const dz = explodeOffsets(this.items, amount, gap);
+      const sheetDz = sheetOffsets(this.sheets, amount, gap * SHEET_GAP_FACTOR);
       for (const p of this.parts) {
-        const off = dz.get(p.item.id) ?? 0;
-        if (p.face === "walls") p.mesh.position.z = off;
-        else p.mesh.position.z = (p.face === "z0" ? p.item.z0Mm : p.item.z1Mm) + off;
+        p.mesh.visible = !p.style || p.style === style;
+        const sheet = p.sheet ?? (p.item && this.sheets.sheetOf.get(p.item.id));
+        const off = (p.style ?? style) === "sheets" ? sheetDz[sheet] ?? 0 : p.item ? dz.get(p.item.id) ?? 0 : 0;
+        p.mesh.position.z = p.baseZ + off;
       }
-      if (!this.holes) return;
+      if (style !== "layers" || !this.holes) return;
       const span = (types) => {
         const list = this.items.filter((i) => types.includes(i.type));
         if (!list.length) return null;
         return [Math.min(...list.map((i) => i.z0Mm + dz.get(i.id))), Math.max(...list.map((i) => i.z1Mm + dz.get(i.id)))];
       };
-      const plated = span(["copper", "dielectric"]);
-      const bare = span(["dielectric"]);
-      const m = new G();
-      for (const [mesh, z2] of [
-        [this.holes.plated, plated],
-        [this.holes.npth, bare]
-      ]) {
-        if (!mesh || !z2) continue;
-        const len = Math.max(z2[1] - z2[0], 1e-3);
-        mesh.userData.holes.forEach((h2, i) => {
-          m.makeScale(h2.diaMm, h2.diaMm, len);
-          m.setPosition(h2.x, h2.y, (z2[0] + z2[1]) / 2);
-          mesh.setMatrixAt(i, m);
-        });
-        mesh.instanceMatrix.needsUpdate = true;
-        mesh.computeBoundingSphere();
-      }
+      if (this.holes.plated) setBarrels(this.holes.plated, span(["copper", "dielectric"]));
+      if (this.holes.npth) setBarrels(this.holes.npth, span(["dielectric"]));
     }
     // ---------------------------------------------------------------- camera
     /** Frame the whole board, looking from the top or bottom side at an angle. */
@@ -19091,11 +19152,17 @@ void main() {
         failed: this.failed,
         renders: this.renderCount,
         explode: this.settings.explode,
-        items: this.parts.filter((p) => p.face !== "walls").map((p) => ({
+        explodeStyle: this.settings.explodeStyle,
+        sheets: this.sheets.count,
+        // faces of the dielectric pieces of the sheets style
+        pieces: this.parts.filter((p) => p.style === "sheets" && p.item && !p.walls).map((p) => ({ id: p.mesh.name, sheet: p.sheet, z: p.mesh.position.z, visible: p.mesh.visible })),
+        items: this.parts.filter((p) => p.item && !p.walls && p.style !== "sheets").map((p) => ({
           id: p.item.id,
           type: p.item.type,
           side: p.item.side,
           z: p.mesh.position.z,
+          sheet: this.sheets.sheetOf.get(p.item.id) ?? null,
+          visible: p.mesh.visible,
           metalness: p.mesh.material.metalness,
           roughness: p.mesh.material.roughness
         })),
@@ -19108,6 +19175,25 @@ void main() {
       };
     }
   };
+  function setBarrels(mesh, z2) {
+    if (!z2) return;
+    const m = new G();
+    const len = Math.max(z2[1] - z2[0], 1e-3);
+    mesh.userData.holes.forEach((h2, i) => {
+      m.makeScale(h2.diaMm, h2.diaMm, len);
+      m.setPosition(h2.x, h2.y, (z2[0] + z2[1]) / 2);
+      mesh.setMatrixAt(i, m);
+    });
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.computeBoundingSphere();
+  }
+  function wallGeometry(loops, z0Mm, z1Mm) {
+    const walls = edgeWalls(loops, z0Mm, z1Mm);
+    const g = new H();
+    g.setAttribute("position", new st(walls.positions, 3));
+    g.setAttribute("normal", new st(walls.normals, 3));
+    return g;
+  }
   function srgb(rgb, k2 = 1) {
     return new U().setRGB(rgb[0] / 255 * k2, rgb[1] / 255 * k2, rgb[2] / 255 * k2, Et);
   }
@@ -21742,6 +21828,7 @@ void main() {
     scale: null,
     view3d: false,
     explode: 0,
+    explodeStyle: "sheets",
     camera3d: null
   };
   var ANALYZE_TABS = ["apertures", "shapes", "commands"];
@@ -21767,6 +21854,7 @@ void main() {
     const explode = Number(s.view.explode);
     s.view.explode = Number.isFinite(explode) ? Math.min(1, Math.max(0, explode)) : 0;
     s.view.view3d = s.view.view3d === true;
+    if (!EXPLODE_STYLES.includes(s.view.explodeStyle)) s.view.explodeStyle = DEFAULT_VIEW.explodeStyle;
     s.analyze = normaliseAnalyze(s.analyze);
     for (const src of project.sources) s.layers[src.name] ??= defaultLayerSettings();
     return project;
@@ -23376,11 +23464,28 @@ void main() {
         "data-testid": "explode",
         oninput: (e) => this.#setView({ explode: Number(e.target.value) })
       });
-      this.explodeBox = h(
-        "label",
-        { class: "explode hidden", title: "Explode: spread the layers apart to see each one" },
-        ["Explode", this.explodeInput]
+      const styleTitles = {
+        sheets: "Sheets: the board comes apart by copper layer; each copper layer stays on its own slab of substrate, with the mask and silkscreen on the outer ones",
+        layers: "Layers: every layer comes apart on its own; the substrate stays in the middle"
+      };
+      this.btnExplodeStyle = Object.fromEntries(
+        EXPLODE_STYLES.map((k2) => [
+          k2,
+          h(
+            "button",
+            {
+              "data-testid": `explode-${k2}`,
+              title: styleTitles[k2],
+              onclick: () => this.#setView({ explodeStyle: k2 })
+            },
+            k2 === "sheets" ? "Sheets" : "Layers"
+          )
+        ])
       );
+      this.explodeBox = h("span", { class: "explode hidden" }, [
+        h("label", { title: "Explode: spread the layers apart to see each one" }, ["Explode", this.explodeInput]),
+        h("span", { class: "seg" }, Object.values(this.btnExplodeStyle))
+      ]);
       this.btnBg = h(
         "button",
         {
@@ -23661,7 +23766,8 @@ void main() {
         solo: v.solo,
         side: v.side,
         background: v.background,
-        explode: v.explode
+        explode: v.explode,
+        explodeStyle: v.explodeStyle
       });
       this.viewer3d.setLayers(this.#renderLayers());
       this.#showDimension();
@@ -23876,6 +23982,7 @@ void main() {
       for (const [k2, b3] of Object.entries(this.btnDim)) b3.classList.toggle("on", !!v.view3d === (k2 === "3d"));
       this.explodeBox.classList.toggle("hidden", !v.view3d);
       this.explodeInput.value = String(v.explode ?? 0);
+      for (const [k2, b3] of Object.entries(this.btnExplodeStyle)) b3.classList.toggle("on", v.explodeStyle === k2);
       for (const [k2, b3] of Object.entries(this.btnMode)) {
         b3.classList.toggle("on", v.mode === k2);
         b3.disabled = !!v.view3d;

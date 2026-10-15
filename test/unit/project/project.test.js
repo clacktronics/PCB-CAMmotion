@@ -87,6 +87,7 @@ test('viewer settings and layer overrides survive save → load (in settings/pro
     scale: 42,
     view3d: true,
     explode: 0.35,
+    explodeStyle: 'layers',
     camera3d: { position: [10, -60, 80], target: [40, 30, 0] },
   });
   p.settings.analyze = {
@@ -126,7 +127,12 @@ test('layer group toggles: defaults for older files; the old showPaste flag beco
 
 test('3D view settings: defaults for older files, explode kept within 0..1', () => {
   const p = ensureSettings(loadProject(bytes(join(FIXTURES, 'pcam', 'v1-with-source.pcam'))));
-  assert.deepEqual([p.settings.view.view3d, p.settings.view.explode, p.settings.view.camera3d], [false, 0, null]);
+  assert.deepEqual(
+    [p.settings.view.view3d, p.settings.view.explode, p.settings.view.explodeStyle, p.settings.view.camera3d],
+    [false, 0, 'sheets', null],
+  );
+  p.settings.view.explodeStyle = 'sideways';
+  assert.equal(ensureSettings(p).settings.view.explodeStyle, 'sheets', 'unknown style falls back');
   for (const [given, want] of [
     [2, 1],
     [-1, 0],
