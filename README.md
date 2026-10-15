@@ -32,7 +32,8 @@ continue where you left off.
 - **Inspector:** click any pad, track, region or hole to see its aperture/tool, polarity,
   coordinates, X2 attributes and the source line it came from. Parser messages per file are
   listed with line numbers.
-- **Analyser** (the dock under the board, for the selected layer; **▾** folds it away):
+- **Analyser** (the dock under the board, for the selected layer; the **Analyser** toolbar button
+  or **A** turns it on and off, and hiding it ends playback and clears the highlight):
   - *Apertures*: every aperture (or drill tool) with its shape, size, area, flashes, draws, arcs,
     drawn length, `.AperFunction` and definition line; unused ones greyed out. Click a column to
     sort, click a row to highlight every use on the board.

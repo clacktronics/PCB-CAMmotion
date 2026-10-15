@@ -171,12 +171,26 @@ export class App {
       value: this.project.manifest.name,
       title: 'Project name',
       spellcheck: 'false',
-      size: 16,
+      size: 12,
       oninput: (e) => {
         this.project.manifest.name = e.target.value;
         this.#touch();
       },
     });
+    const app = this;
+    this.dock = new AnalyserDock({
+      settings: () => app.project.settings.analyze,
+      layer: () => app.layerById(app.activeLayerId) || null,
+      layers: () => app.layers,
+      selection: () => app.selection,
+      select: (layerId, index) => app.#selectObject(layerId, index),
+      get viewer() {
+        return app.viewer;
+      },
+      touch: () => app.#touch(),
+      message: (text) => app.#message(text),
+    });
+
     const toolbar = h('header', { class: 'toolbar' }, [
       h('span', { class: 'title' }, 'PCB-CAMmotion'),
       h('button', { id: 'new', onclick: () => this.newProject(), title: 'Start an empty project' }, 'New'),
@@ -198,6 +212,7 @@ export class App {
       h('span', { class: 'seg' }, Object.values(this.btnMode)),
       this.btnBg,
       this.btnPaste,
+      this.dock.toolbarButton,
       h('span', { class: 'spacer' }),
       this.nameInput,
     ]);
@@ -252,20 +267,6 @@ export class App {
       this.projectInfo,
     ]);
 
-    const app = this;
-    this.dock = new AnalyserDock({
-      settings: () => app.project.settings.analyze,
-      layer: () => app.layerById(app.activeLayerId) || null,
-      layers: () => app.layers,
-      selection: () => app.selection,
-      select: (layerId, index) => app.#selectObject(layerId, index),
-      get viewer() {
-        return app.viewer;
-      },
-      touch: () => app.#touch(),
-      message: (text) => app.#message(text),
-    });
-
     clear(this.root);
     this.root.append(toolbar, left, this.main, this.dock.el, right, status);
     this.#bindDrop();
@@ -281,6 +282,7 @@ export class App {
       if (k === ',' || k === '.') this.dock.step(k === '.' ? 1 : -1);
       else if (k === 'f') this.#fit();
       else if (k === 's') this.#toggleSolo();
+      else if (k === 'a') this.dock.setOpen(!this.project.settings.analyze.open);
       else if (k === 'b') this.#setView({ background: this.view.background === 'light' ? 'dark' : 'light' });
       else if (k === 'i' && this.activeLayerId && this.view.mode !== 'realistic') {
         this.#setLayer(this.activeLayerId, { invert: !this.layerById(this.activeLayerId)?.invert });

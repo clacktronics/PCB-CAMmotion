@@ -87,12 +87,26 @@ export class AnalyserDock {
       PLAYBACK_SPEEDS.map((v) => h('option', { value: v }, `${v.toLocaleString('en')}/s`)),
     );
     this.pos = h('span', { class: 'pb-pos', 'data-testid': 'pb-pos' }, '');
-    this.btnOpen = h('button', {
-      class: 'dock-toggle',
-      'data-testid': 'dock-toggle',
-      title: 'Show or hide the analyser',
-      onclick: () => this.setOpen(!this.s.open),
-    });
+    this.btnOpen = h(
+      'button',
+      {
+        class: 'dock-toggle',
+        'data-testid': 'dock-toggle',
+        title: 'Hide the analyser (A)',
+        onclick: () => this.setOpen(false),
+      },
+      '✕',
+    );
+    // the toolbar's on/off button for the whole dock (placed by the app shell)
+    this.toolbarButton = h(
+      'button',
+      {
+        'data-testid': 'analyser-toggle',
+        title: 'Show or hide the analyser: apertures, shapes, commands and playback (A)',
+        onclick: () => this.setOpen(!this.s.open),
+      },
+      'Analyser',
+    );
     this.head = h('div', { class: 'dock-head' }, [
       this.btnOpen,
       h('span', { class: 'seg' }, Object.values(this.tabs)),
@@ -112,8 +126,19 @@ export class AnalyserDock {
     this.el = h('section', { class: 'analyser' }, [this.head, this.body]);
   }
 
+  /**
+   * Show or hide the dock. Hiding also ends playback and clears the highlight, so the board
+   * never stays half-drawn or marked with no controls in sight.
+   */
   setOpen(open) {
     this.s.open = open;
+    if (!open) {
+      this.#pause();
+      Object.assign(this.s.playback, { layer: null, step: null });
+      this.s.highlight = null;
+      this.#applyPlayback();
+      this.#applyHighlight();
+    }
     this.host.touch();
     this.refresh();
   }
@@ -161,7 +186,8 @@ export class AnalyserDock {
   refresh() {
     const s = this.s;
     this.el.classList.toggle('closed', !s.open);
-    this.btnOpen.textContent = s.open ? '▾' : '▴';
+    this.toolbarButton.classList.toggle('on', s.open);
+    this.toolbarButton.setAttribute('aria-pressed', s.open ? 'true' : 'false');
     for (const [k, b] of Object.entries(this.tabs)) b.classList.toggle('on', s.open && s.tab === k);
     this.bySel.value = s.playback.by;
     this.speedSel.value = String(s.playback.speed);

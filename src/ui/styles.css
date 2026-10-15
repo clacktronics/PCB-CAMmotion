@@ -420,9 +420,6 @@ button.attention {
   border-top: 1px solid var(--line);
 }
 .analyser.closed {
-  height: auto;
-}
-.analyser.closed .dock-body {
   display: none;
 }
 .dock-head {
