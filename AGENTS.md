@@ -26,6 +26,10 @@ The whole project is saved as one downloadable `.pcam` file.
 - **Machine output is safety-critical.** Post-processor changes need a test with expected
   output, and must keep safe-Z moves, spindle on/off, and feed limits intact.
 
+- **Bonus features are not to be built yet.** DXF/SVG/bitmap import, BOM/3D model/placement
+  checks, stencil generation and panelisation are listed in `PROJECT_PLAN.md` → Bonus
+  features. Don't implement them unless asked, but don't design anything that would block them.
+
 ## Code layout
 
 ```

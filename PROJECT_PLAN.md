@@ -275,6 +275,19 @@ Tests are built with the feature, not afterwards. For every piece of work:
 - Should `.pcam` also embed rendered previews (thumbnail PNG) for file browsers?
 - Framework or vanilla JS? Default: vanilla ES modules + a small bundler only if needed.
 
+## Bonus features (later — do NOT implement yet)
+
+Wanted eventually, but not part of milestones 0–11. Recorded here so the core design
+doesn't block them. Only start one when it is explicitly scheduled.
+
+| Feature | What it would do | Design hooks to keep open now |
+|---------|------------------|-------------------------------|
+| **Import non-PCB files** | DXF, SVG and bitmaps (PNG/JPG/BMP) as layers: logos, outlines, artwork, mechanical drawings | Importers produce the same command model as the Gerber parser; bitmaps traced to polygons with a threshold. Imports get their own source type in `.pcam`. |
+| **BOM, 3D models & placement files** | Import BOM (CSV), pick-and-place/centroid files and 3D models (STEP/WRL/GLB) to check footprints against pads (position, rotation, pin count, pad/pin fit) and show components in the 3D view | X2 component attributes (`.C`, `.P`, `.CRot`) kept in the model; 3D view has a slot for extra meshes; findings use the DRC result format. |
+| **Stencil generation** | Paste-layer stencils for laser/vinyl cutting or CNC: aperture reduction, home-plate/window-pane patterns, frame, fiducials, SVG/DXF/G-code output | Built on the editor + CAM offsetting; outputs via the existing export/post-processor paths. |
+| **Panelisation** | Arrange boards (same or mixed) into a panel with rails, mouse-bites, V-scores, tabs, fiducials and tooling holes; output panelised Gerbers/drills/toolpaths | Model supports multiple board instances with transforms (like step-and-repeat); toolpaths generated per instance. |
+
 ## Out of scope (for now)
 
-- PCB design/routing, schematic, 3D component models, netlist-based (electrical) DRC, cloud features.
+- PCB design/routing, schematic, netlist-based (electrical) DRC, cloud features.
+- The bonus features above until they are scheduled.
