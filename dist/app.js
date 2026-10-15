@@ -2143,7 +2143,8 @@
     /**
      * One layer as a slice through the board, in real materials: substrate plus the layer's
      * material (bare copper for any copper layer, inner ones included; mask, silkscreen or paste
-     * otherwise), plated hole barrels through copper, and the holes cut out.
+     * otherwise), plated hole barrels through copper, and the holes cut out. Per-layer invert
+     * (an analysis-view setting) is ignored here.
      */
     renderSlice(ctx, l, { layers, profile, drills, board, substrate, st, map, w, h: h2 }) {
       const out = this.workCanvas(2, w, h2);
@@ -2153,8 +2154,8 @@
       let m = this.mask(l, map, w, h2);
       if (type === "soldermask") {
         const openings = (l.role.polarity || "negative") !== "positive";
-        if (openings !== !!l.invert) m = this.inverted(m, layers, profile, map, w, h2);
-      } else if (l.invert) m = this.inverted(m, layers, profile, map, w, h2);
+        if (openings) m = this.inverted(m, layers, profile, map, w, h2);
+      }
       const side = l.role.side === "bottom" ? "bottom" : "top";
       const colour = type === "copper" ? COPPER : type === "soldermask" ? lookupMaterial("mask", st.mask?.[side] ?? st.mask).value : type === "legend" ? lookupMaterial("silk", st.silk?.[side] ?? st.silk).value : type === "paste" ? MISC.paste : type === "drill" || type === "profile" ? null : { rgb: roleColour(l.role) };
       if (colour) {
@@ -5794,7 +5795,7 @@
         if (k === "f") this.viewer.fit();
         else if (k === "s") this.#toggleSolo();
         else if (k === "b") this.#setView({ background: this.view.background === "light" ? "dark" : "light" });
-        else if (k === "i" && this.activeLayerId) {
+        else if (k === "i" && this.activeLayerId && this.view.mode !== "realistic") {
           this.#setLayer(this.activeLayerId, { invert: !this.layerById(this.activeLayerId)?.invert });
           this.#refreshLayers();
         } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
@@ -6171,7 +6172,8 @@
                 onclick: (e) => e.stopPropagation(),
                 oninput: (e) => this.#setLayer(l.id, { opacity: Number(e.target.value) })
               }),
-              h(
+              // invert is an analysis tool: not offered in the realistic view
+              this.view.mode === "realistic" ? null : h(
                 "label",
                 {
                   class: "invert",

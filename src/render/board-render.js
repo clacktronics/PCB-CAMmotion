@@ -109,7 +109,8 @@ export class BoardRenderer {
   /**
    * One layer as a slice through the board, in real materials: substrate plus the layer's
    * material (bare copper for any copper layer, inner ones included; mask, silkscreen or paste
-   * otherwise), plated hole barrels through copper, and the holes cut out.
+   * otherwise), plated hole barrels through copper, and the holes cut out. Per-layer invert
+   * (an analysis-view setting) is ignored here.
    */
   renderSlice(ctx, l, { layers, profile, drills, board, substrate, st, map, w, h }) {
     const out = this.workCanvas(2, w, h);
@@ -120,8 +121,9 @@ export class BoardRenderer {
     if (type === 'soldermask') {
       // the mask image shows openings (negative polarity): the material is the rest
       const openings = (l.role.polarity || 'negative') !== 'positive';
-      if (openings !== !!l.invert) m = this.inverted(m, layers, profile, map, w, h);
-    } else if (l.invert) m = this.inverted(m, layers, profile, map, w, h);
+      if (openings) m = this.inverted(m, layers, profile, map, w, h);
+    }
+    // (invert is an analysis-view setting: the realistic slice always shows the real material)
     const side = l.role.side === 'bottom' ? 'bottom' : 'top';
     const colour =
       type === 'copper'

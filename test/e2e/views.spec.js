@@ -223,3 +223,22 @@ test('per-layer S button solos like a mixer: press again and every layer comes b
   expect(near(await pixelAt(page, 30, 8), MISC.background.rgb, 10)).toBe(false);
   await expect(page.locator('.layer.hidden-layer')).toHaveCount(0);
 });
+
+test('invert is offered in the analysis views only, and kept while in realistic', async ({ page }) => {
+  await openApp(page);
+  await loadBoard(page);
+  const inv = row(page, 'synthetic-board-F_Mask.gbr').locator('[data-testid=invert]');
+  await expect(page.locator('[data-testid=invert]')).toHaveCount(0); // realistic
+  await mode(page, 'debug');
+  await expect(page.locator('[data-testid=invert]')).toHaveCount(10);
+  await inv.check();
+  await mode(page, 'realistic');
+  await expect(page.locator('[data-testid=invert]')).toHaveCount(0);
+  // the realistic picture ignores it: mask still drawn as real mask (pad opening shows the finish)
+  const pad = await pixelAt(page, 30, 40.3);
+  expect(pad[0]).toBeGreaterThan(pad[2] + 60);
+  await page.locator('body').click({ position: { x: 5, y: 840 } });
+  await page.keyboard.press('i'); // no effect in realistic
+  await mode(page, 'debug');
+  await expect(inv).toBeChecked();
+});

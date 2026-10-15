@@ -224,7 +224,7 @@ export class App {
       if (k === 'f') this.viewer.fit();
       else if (k === 's') this.#toggleSolo();
       else if (k === 'b') this.#setView({ background: this.view.background === 'light' ? 'dark' : 'light' });
-      else if (k === 'i' && this.activeLayerId) {
+      else if (k === 'i' && this.activeLayerId && this.view.mode !== 'realistic') {
         this.#setLayer(this.activeLayerId, { invert: !this.layerById(this.activeLayerId)?.invert });
         this.#refreshLayers();
       } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -636,23 +636,26 @@ export class App {
               onclick: (e) => e.stopPropagation(),
               oninput: (e) => this.#setLayer(l.id, { opacity: Number(e.target.value) }),
             }),
-            h(
-              'label',
-              {
-                class: 'invert',
-                title: 'Invert: show what is not drawn, e.g. the solder mask material instead of its openings (I)',
-                onclick: (e) => e.stopPropagation(),
-              },
-              [
-                h('input', {
-                  type: 'checkbox',
-                  checked: !!l.invert,
-                  'data-testid': 'invert',
-                  onchange: (e) => this.#setLayer(l.id, { invert: e.target.checked }),
-                }),
-                'inv',
-              ],
-            ),
+            // invert is an analysis tool: not offered in the realistic view
+            this.view.mode === 'realistic'
+              ? null
+              : h(
+                  'label',
+                  {
+                    class: 'invert',
+                    title: 'Invert: show what is not drawn, e.g. the solder mask material instead of its openings (I)',
+                    onclick: (e) => e.stopPropagation(),
+                  },
+                  [
+                    h('input', {
+                      type: 'checkbox',
+                      checked: !!l.invert,
+                      'data-testid': 'invert',
+                      onchange: (e) => this.#setLayer(l.id, { invert: e.target.checked }),
+                    }),
+                    'inv',
+                  ],
+                ),
             h(
               'button',
               {
