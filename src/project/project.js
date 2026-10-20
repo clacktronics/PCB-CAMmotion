@@ -24,6 +24,9 @@
 //                    step = commands run (null = playback off, whole image shown), by =
 //                    command | object (object steps skip commands that draw nothing),
 //                    speed = commands per second while playing
+// `edits` (model/edits.json, schema 2): per source file the edit ops of milestone 4
+// ({ base, ops, redo }, src/edit/session.js); buildLayers replays them, so layers show the
+// edited commands and image while sources/ keeps the original bytes.
 // `stackup` is null until set; it is filled from a .gbrjob (source: 'gbrjob') unless the user
 // edited it (source: 'user'). Everything derived (parsed images, layers) is rebuilt on load.
 // Pure data + functions (no DOM).
@@ -31,6 +34,7 @@
 import { createEmptyProject } from './schema.js';
 import { safeSourceName } from './pcam.js';
 import { loadFile } from '../model/load-file.js';
+import { LayerEditor } from '../edit/session.js';
 import { identifyLayer, detectFileKind, layerSortKey } from '../model/layers.js';
 import { extractOutline } from '../model/outline.js';
 import { resolveJobFiles } from '../parse/gbrjob.js';
@@ -73,6 +77,7 @@ export function createProject(name = 'untitled', now = new Date()) {
 
 /** Fill in the viewer's settings (works on projects loaded from any schema-1 file). */
 export function ensureSettings(project) {
+  project.edits ??= {};
   const s = (project.settings ??= {});
   s.layers ??= {};
   s.view = { ...DEFAULT_VIEW, ...(s.view || {}) };
@@ -142,12 +147,14 @@ function touch(project, now) {
 /**
  * Add an original file to the project (mutates it). ZIP archives are expanded; a file with
  * the same name as an existing source replaces it (re-import). Unknown files are skipped.
- * @returns {{added: string[], skipped: string[]}} added source names, skip reasons
+ * @returns {{added: string[], skipped: string[], notes: string[]}} added source names, skip
+ *   reasons, other things to tell the user (edits discarded by a re-import)
  */
 export function addSourceFile(project, name, bytes, now = new Date()) {
   ensureSettings(project);
   const added = [];
   const skipped = [];
+  const notes = [];
   const base = String(name).split(/[\\/]/).pop();
   const kind = detectFileKind(base, bytes);
   if (kind === 'zip') {
@@ -156,32 +163,39 @@ export function addSourceFile(project, name, bytes, now = new Date()) {
       entries = unzipSync(bytes);
     } catch (e) {
       skipped.push(`${base}: not a readable ZIP (${e.message})`);
-      return { added, skipped };
+      return { added, skipped, notes };
     }
     for (const [path, data] of Object.entries(entries)) {
       if (path.endsWith('/') || /(^|\/)(__MACOSX|\.)/.test(path)) continue;
       const r = addSourceFile(project, path, data, now);
       added.push(...r.added);
       skipped.push(...r.skipped);
+      notes.push(...r.notes);
     }
-    return { added, skipped };
+    return { added, skipped, notes };
   }
   if (kind === 'unknown' || kind === 'pcam') {
     skipped.push(`${base}: not a Gerber, Excellon or .gbrjob file`);
-    return { added, skipped };
+    return { added, skipped, notes };
   }
   const clean = safeSourceName(base);
+  // edits refer to the commands of the file they were made on: a re-import drops them
+  if (project.edits[clean] && project.sources.some((s) => s.name === clean)) {
+    delete project.edits[clean];
+    notes.push(`${clean} replaced: its edits were discarded`);
+  }
   project.sources = project.sources.filter((s) => s.name !== clean);
   project.sources.push({ name: clean, bytes });
   project.settings.layers[clean] ??= defaultLayerSettings();
   touch(project, now);
   added.push(clean);
-  return { added, skipped };
+  return { added, skipped, notes };
 }
 
 export function removeSource(project, name, now = new Date()) {
   project.sources = project.sources.filter((s) => s.name !== name);
   delete project.settings?.layers?.[name];
+  if (project.edits) delete project.edits[name];
   if (project.settings?.view?.solo) project.settings.view.solo = project.settings.view.solo.filter((n) => n !== name);
   const a = project.settings?.analyze;
   if (a?.highlight?.layer === name) a.highlight = null;
@@ -196,7 +210,10 @@ export function removeSource(project, name, now = new Date()) {
  */
 export function buildLayers(project, opts = {}) {
   ensureSettings(project);
-  const loaded = project.sources.map((src) => ({ src, file: loadFile(src.name, src.bytes, opts) }));
+  const loaded = project.sources.map((src) => ({
+    src,
+    file: loadFile(src.name, src.bytes, { ...opts, edits: project.edits[src.name] }),
+  }));
   const jobEntry = loaded.find((l) => l.file.kind === 'gbrjob' && l.file.job?.job);
   const job = jobEntry ? jobEntry.file.job : null;
   if (job) {
@@ -229,6 +246,8 @@ export function buildLayers(project, opts = {}) {
       image: file.image,
       commands: file.commands,
       diagnostics: file.diagnostics,
+      parsed: file.parsed,
+      editor: file.editor ?? null,
       visible: true, // what is shown is chosen by soloing (settings.view.solo)
       opacity: settings.opacity ?? 1,
       colour: settings.colour ?? null,
@@ -265,4 +284,33 @@ export function applyJobStackup(project, job) {
   if (st.boardThicknessMm) s.boardThicknessMm = st.boardThicknessMm;
   if (st.layers?.length) s.layers = st.layers;
   project.stackup = s;
+}
+
+/** The layer's editor (src/edit/session.js), created on first use. */
+export function layerEditor(layer) {
+  layer.editor ??= new LayerEditor(layer.kind, layer.parsed);
+  return layer.editor;
+}
+
+/**
+ * After an edit (or undo/redo): store the layer's edit ops in the project and show the edited
+ * commands and image. A layer back at its original state keeps no record (redo is kept).
+ */
+export function commitEdit(project, layer, now = new Date()) {
+  const ed = layer.editor;
+  const src = project.sources.find((s) => s.name === layer.id);
+  if (ed.ops.length || ed.redoOps.length) project.edits[layer.id] = ed.record(src.bytes);
+  else delete project.edits[layer.id];
+  layer.commands = ed.commands;
+  layer.image = ed.image;
+  layer.diagnostics = ed.diagnostics;
+  if (layer.role.type === 'profile') layer.outline = extractOutline(layer.image);
+  touch(project, now);
+}
+
+/** Drop every edit of a layer: back to the source file. */
+export function revertEdits(project, layer, now = new Date()) {
+  delete project.edits[layer.id];
+  layer.editor = new LayerEditor(layer.kind, layer.parsed);
+  commitEdit(project, layer, now);
 }

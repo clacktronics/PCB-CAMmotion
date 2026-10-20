@@ -2,6 +2,7 @@
 // app loads, files can be dropped, an empty .pcam saves and reloads, no network is used.
 import { test, expect } from '@playwright/test';
 import { readFileSync, writeFileSync } from 'node:fs';
+import { SCHEMA_VERSION } from '../../src/project/schema.js';
 import { loadProject } from '../../src/project/pcam.js';
 import { MODES, TEST_BOARD, appUrl, dropFiles, failOnErrors, guardNetwork, openApp } from './helpers.js';
 
@@ -38,7 +39,7 @@ for (const mode of MODES) {
     test('loads with an empty project', async ({ page }) => {
       await expect(page.locator('#empty')).toBeVisible();
       await expect(page.locator('#project-name')).toHaveValue('untitled');
-      await expect(page.locator('#project-info')).toContainText('schema 1');
+      await expect(page.locator('#project-info')).toContainText(`schema ${SCHEMA_VERSION}`);
     });
 
     test('empty .pcam saves and reloads', async ({ page }, testInfo) => {

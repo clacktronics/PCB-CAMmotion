@@ -75,7 +75,8 @@ test('settings, stackup, tools and unknown data survive a round trip', () => {
 
 test('fixture v1-empty.pcam loads', () => {
   const p = loadProject(fixture('v1-empty.pcam'));
-  assert.equal(p.manifest.schemaVersion, 1);
+  assert.equal(p.manifest.schemaVersion, 2, 'migrated to schema 2');
+  assert.deepEqual(p.edits, {});
   assert.equal(p.manifest.name, 'empty');
   assert.equal(p.manifest.units, 'mm');
   assert.deepEqual(p.sources, []);
@@ -92,9 +93,30 @@ test('fixture v1-with-source.pcam loads, and unknown fields/entries survive load
 });
 
 test('every .pcam fixture loads and migrates to the current schema', () => {
-  for (const name of ['v1-empty.pcam', 'v1-with-source.pcam']) {
+  for (const name of ['v1-empty.pcam', 'v1-with-source.pcam', 'v2-with-edits.pcam']) {
     assert.equal(loadProject(fixture(name)).manifest.schemaVersion, SCHEMA_VERSION, name);
   }
+});
+
+test('edits survive a round trip in model/edits.json; projects without edits have no entry', () => {
+  const p = createEmptyProject({ now: NOW });
+  assert.ok(!('model/edits.json' in unzipSync(saveProject(p))));
+  p.edits = { 'top.gbr': { base: 'abc', ops: [{ type: 'delete', targets: [5] }], redo: [] } };
+  const bytes = saveProject(p);
+  assert.ok('model/edits.json' in unzipSync(bytes));
+  assert.deepEqual(loadProject(bytes), p);
+});
+
+test('fixture v2-with-edits.pcam loads with its edits', () => {
+  const p = loadProject(fixture('v2-with-edits.pcam'));
+  assert.equal(p.manifest.schemaVersion, 2);
+  assert.deepEqual(Object.keys(p.edits), ['board-F_Cu.gbr']);
+  assert.deepEqual(
+    p.edits['board-F_Cu.gbr'].ops.map((o) => o.type),
+    ['move', 'addFlash', 'delete'],
+  );
+  assert.equal(p.edits['board-F_Cu.gbr'].redo.length, 1);
+  assert.deepEqual(loadProject(saveProject(p)), p);
 });
 
 test('migrate() steps through every version and keeps unknown data', () => {

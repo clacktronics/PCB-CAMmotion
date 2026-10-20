@@ -1,6 +1,6 @@
 {
   "format": "pcam",
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "appVersion": "<app version>",
   "name": "empty",
   "created": "2026-10-15T00:00:00.000Z",

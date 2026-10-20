@@ -1,13 +1,14 @@
 // .pcam project schema: the in-memory project shape, its version and the migrations that
 // bring older files forward. See PROJECT_PLAN.md → "Project file — .pcam".
 //
-// In-memory project (schema 1):
+// In-memory project (schema 2):
 //   {
 //     manifest: { format, schemaVersion, appVersion, name, created, modified, units, ...unknown },
 //     sources:  [{ name, bytes: Uint8Array }]   original files, byte-for-byte untouched
 //     settings: {}                              project settings (settings/project.json)
 //     stackup:  null | {}                       stackup.json (null = not set yet)
 //     tools:    {}                              tools.json
+//     edits:    { [sourceName]: { base, ops, redo } }   model/edits.json (src/edit/session.js)
 //     extra:    { [zipPath]: Uint8Array }       entries this version does not understand, kept verbatim
 //   }
 //
@@ -17,7 +18,7 @@
 import { APP_VERSION } from '../version.js';
 
 export const PCAM_FORMAT = 'pcam';
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 export const PROJECT_UNITS = 'mm';
 
 /**
@@ -40,6 +41,7 @@ export function createEmptyProject({ name = 'untitled', now = new Date() } = {})
     settings: {},
     stackup: null,
     tools: {},
+    edits: {},
     extra: {},
   };
 }
@@ -50,7 +52,12 @@ export function createEmptyProject({ name = 'untitled', now = new Date() } = {})
  * rewrite any entry. Never drop data a migration does not understand.
  * @type {Record<number, (raw: {manifest: object, entries: Record<string, Uint8Array>}) => {manifest: object, entries: Record<string, Uint8Array>}>}
  */
-export const MIGRATIONS = {};
+export const MIGRATIONS = {
+  // 1 → 2: editing (milestone 4) adds model/edits.json. A schema-1 file has no edits, so only
+  // the version changes; the bump makes older apps refuse files whose geometry they would
+  // show unedited.
+  1: (raw) => ({ ...raw, manifest: { ...raw.manifest, schemaVersion: 2 } }),
+};
 
 /**
  * Apply migrations until the raw file is at SCHEMA_VERSION.

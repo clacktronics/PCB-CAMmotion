@@ -15,8 +15,9 @@ const MANIFEST = 'project.json';
 const SETTINGS = 'settings/project.json';
 const STACKUP = 'stackup.json';
 const TOOLS = 'tools.json';
+const EDITS = 'model/edits.json';
 const SOURCES = 'sources/';
-const KNOWN = new Set([MANIFEST, SETTINGS, STACKUP, TOOLS]);
+const KNOWN = new Set([MANIFEST, SETTINGS, STACKUP, TOOLS, EDITS]);
 
 /** True for names ending in .pcam, any case. */
 export function isPcamFileName(name) {
@@ -61,6 +62,7 @@ export function saveProject(project) {
   put(SETTINGS, json(project.settings ?? {}));
   if (project.stackup != null) put(STACKUP, json(project.stackup));
   put(TOOLS, json(project.tools ?? {}));
+  if (project.edits && Object.keys(project.edits).length) put(EDITS, json(project.edits));
   for (const { name, bytes } of project.sources ?? []) put(SOURCES + safeSourceName(name), bytes);
   for (const [path, bytes] of Object.entries(project.extra ?? {})) put(path, bytes);
   return zipSync(entries);
@@ -117,6 +119,7 @@ function fromEntries(manifest, entries) {
     settings: parseJson(entries, SETTINGS, false) ?? {},
     stackup: parseJson(entries, STACKUP, false) ?? null,
     tools: parseJson(entries, TOOLS, false) ?? {},
+    edits: parseJson(entries, EDITS, false) ?? {},
     extra: {},
   };
   for (const [path, bytes] of Object.entries(entries)) {
