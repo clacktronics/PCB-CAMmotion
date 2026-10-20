@@ -11,6 +11,7 @@ import {
   layerEditor,
   commitEdit,
   revertEdits,
+  normaliseEdit,
 } from '../../../src/project/project.js';
 import { saveProject, loadProject } from '../../../src/project/pcam.js';
 import { g } from '../../helpers.js';
@@ -98,4 +99,34 @@ test('the v2 fixture rebuilds with its edits applied', () => {
     ],
   );
   assert.equal(l.editor.redoOps.length, 1);
+});
+
+test('editor settings: defaults filled in, nonsense replaced, saved in the project', () => {
+  const p = createProject('s', NOW);
+  assert.deepEqual(p.settings.edit, {
+    on: false,
+    tool: 'select',
+    gridMm: 0.05,
+    aperture: { code: null, template: 'C', sizesMm: [0.25, 0.25] },
+    holeDiaMm: 0.8,
+  });
+  assert.deepEqual(
+    normaliseEdit({
+      on: true,
+      tool: 'lasso',
+      gridMm: -1,
+      aperture: { code: 12, template: 'X', sizesMm: [0, 2] },
+      keep: 1,
+    }),
+    {
+      on: true,
+      tool: 'select',
+      gridMm: 0.05,
+      aperture: { code: 12, template: 'C', sizesMm: [0.25, 2] },
+      holeDiaMm: 0.8,
+      keep: 1,
+    },
+  );
+  p.settings.edit = normaliseEdit({ on: true, tool: 'track', gridMm: 0 });
+  assert.deepEqual(loadProject(saveProject(p)).settings.edit, p.settings.edit);
 });

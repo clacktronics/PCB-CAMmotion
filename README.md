@@ -4,7 +4,7 @@ Local-only, in-browser PCB CAM: Gerber + Excellon in; analysis, editing, machine
 toolpaths, manufacturability DRC and UV film negatives out. Nothing is uploaded — the app
 runs entirely on your computer, and the whole project is one `.pcam` file.
 
-**Status:** milestones 0–3 (harness, parsers, viewer, analyser). See [`PROJECT_PLAN.md`](PROJECT_PLAN.md).
+**Status:** milestones 0–4 (harness, parsers, viewer, analyser, editor). See [`PROJECT_PLAN.md`](PROJECT_PLAN.md).
 
 ## Use
 
@@ -47,6 +47,25 @@ continue where you left off.
     forward). ⏭ ends playback and shows the whole layer again.
   - Hovering a feature shows its aperture, kind, polarity and source line in the status bar.
     Highlight, playback position and the dock's tab are saved in the `.pcam`.
+- **Editor** (the **Edit** toolbar button or **E**; works on the selected layer):
+  - *Select* (**V**): click an object, **Shift**+click to add/remove, **Shift**+drag a box,
+    **Ctrl+A** for all. Drag a selected object to move the selection; the arrow keys nudge it
+    one grid step (**Shift**: ten); **Move by** takes exact X/Y in mm. **Del** deletes.
+  - *Pad* (**P**) places a flash with an existing aperture or a new circle / rectangle /
+    obround; on a drill layer it is *Hole* and places a hole of the given diameter (reusing
+    the tool of that size, or defining a new one). *Track* (**T**): click the points,
+    double-click or **Enter** to finish. *Region* (**R**): click the corners, close on the
+    first point. Everything snaps to the grid (0 = off).
+  - **To region** turns the selected pads, tracks and fills into G36/G37 regions: a single
+    object exactly (arcs kept as G02/G03), overlapping objects unified into one outline.
+    **Unify layer → regions** does it to the whole layer: every track, pad, fill, step and
+    repeat copy and clear-polarity cut-out becomes non-overlapping regions (holes are joined
+    to their outline by cut-ins; arcs within 0.5 µm).
+  - **Undo / Redo** (**Ctrl+Z**, **Ctrl+Shift+Z** / **Ctrl+Y**), **Revert** (back to the
+    original file), **Export file** (the edited Gerber or Excellon, same file name). Edited
+    layers show ✎ with the number of edits. The edits (and the undo history) are saved in the
+    `.pcam`; the original files stay untouched in it. Objects made by step and repeat, and
+    routed drill paths, cannot be edited one by one yet.
 - **Save as…** (Chrome/Edge) writes back to the chosen file on later saves. A crash-recovery
   copy is kept in the browser and offered on the next start.
 

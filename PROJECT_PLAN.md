@@ -79,9 +79,9 @@ so edits round-trip to valid files and analysis can point back to source lines.
 Every milestone is only done when its tests (see **Testing & QA → Tests per milestone**) are
 written, passing in CI, and the previous milestones' tests still pass.
 
-**Status (2026-10):** milestones 0 (skeleton + harness), 1 (parsers), 2 (viewer) and
-3 (analyser) are implemented with their tests; the machine-run part of the test board QA is
-still to do.
+**Status (2026-10):** milestones 0 (skeleton + harness), 1 (parsers), 2 (viewer),
+3 (analyser) and 4 (editor) are implemented with their tests; the machine-run part of the
+test board QA is still to do.
 A first part of milestone 8 was brought forward: the 3D view (stackup in real colours from
 the `.gbrjob` thicknesses, plated barrels, orbit/pan/zoom, exploded-view slider, saved in the
 `.pcam`). Cross-section, X-ray and the as-milled preview are still to come.
@@ -108,6 +108,22 @@ Decisions made on the way:
   apertures, rasterised for macros and blocks. The dock's state lives in
   `settings.analyze` of the schema-1 `.pcam` (no schema change). Connected-copper highlight
   and the measure tool (viewer extras) are not built yet.
+- Editor (milestone 4): edits are ops on the command model, never on pixels. A layer's
+  commands are first made explicit (absolute coordinates, explicit D-codes, 6 decimals;
+  `src/edit/gerber-normalize.js`, `src/edit/excellon.js`) so one command can be moved,
+  deleted or inserted; wherever an edit changes where the current point ends up, a D02
+  restores it for the commands after. The ops (JSON) are saved in `model/edits.json` with
+  the source's MD5 and replayed on load; undo/redo pops/pushes ops (recent states cached).
+  `.pcam` schema 2 (migration 1 → 2 only bumps the version, so older apps refuse files whose
+  geometry they would show unedited). Writers for Gerber and Excellon round-trip every
+  fixture, sample and synthetic file to the same image (object by object, plus XOR).
+  Bonus request done with it: converting tracks/pads/fills to G36/G37 regions — one object
+  exactly (arcs kept), overlapping ones unified, or a whole layer (polarity resolved, holes
+  by cut-ins). Polygon booleans: the open question is settled with **Clipper 6.4.2** (JS
+  port, Boost licence) vendored in `vendor/clipper/`; `src/model/polygons.js` builds object
+  polygons from the renderer's own outlines, ready for CAM offsetting (milestone 6).
+  Not yet editable: single copies of step and repeat, objects inside aperture blocks,
+  routed drill paths.
 
 ### Project file — `.pcam` (from milestone 0, extended by every milestone)
 
@@ -301,7 +317,9 @@ Tests are built with the feature, not afterwards. For every piece of work:
 - LPKF E44: which input format does it accept outside CircuitPro (LMD/HPGL-style vs G-code)?
   Need sample files and the tool/head-change conventions.
 - Makera: confirm model (Carvera / Carvera Air), ATC tool numbering, probing/auto-level commands.
-- Geometry library for polygon offset/boolean (e.g. Clipper2 JS) vs writing our own.
+- ~~Geometry library for polygon offset/boolean (e.g. Clipper2 JS) vs writing our own.~~
+  Decided in milestone 4: vendored Clipper 6.4.2 (the Clipper2 JS port still had failing
+  polygon tests); it also offsets, for the isolation paths.
 - Exact KiCad `.gbrjob` colour names → RGB/opacity values; collect real board photos to tune them.
 - Should `.pcam` also embed rendered previews (thumbnail PNG) for file browsers?
 - ~~Framework or vanilla JS?~~ Decided in milestone 0: vanilla ES modules, bundled by esbuild

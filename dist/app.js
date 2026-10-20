@@ -4851,6 +4851,9 @@
       this.highlight = null;
       this.playhead = null;
       this.hlCache = null;
+      this.editSelection = null;
+      this.overlayHook = null;
+      this.edit = null;
       this.pending = 0;
       this.snapshot = null;
       this.lastRenderMs = 0;
@@ -5031,12 +5034,29 @@
       }
       for (const [hit, colour, fillAlpha] of [
         [this.hover, MISC.hover, 0.15],
-        [this.selected, MISC.selection, 0.3]
+        [this.edit ? null : this.selected, MISC.selection, 0.3]
       ]) {
         if (!hit) continue;
         const layer = this.layers.find((l) => l.id === hit.layerId);
         if (layer?.image?.objects[hit.index]) this.#outline(ctx, map, layer, [hit.index], colour, fillAlpha);
       }
+      const es3 = this.editSelection;
+      if (es3?.indices.length) {
+        const layer = this.layers.find((l) => l.id === es3.layerId);
+        if (layer?.image) this.#outline(ctx, map, layer, es3.indices, MISC.selection, 0.3);
+      }
+      this.overlayHook?.(ctx, map);
+    }
+    /** Draw some objects of a layer outlined, optionally moved by (dx, dy) mm (edit previews). */
+    outlineObjects(ctx, map, layerId, indices, colour, fillAlpha, dx = 0, dy = 0) {
+      const layer = this.layers.find((l) => l.id === layerId);
+      if (!layer?.image) return;
+      const m = dx || dy ? { ...map, ox: map.ox + (map.mirror ? -map.s : map.s) * dx, oy: map.oy - map.s * dy } : map;
+      this.#outline(ctx, m, layer, indices, colour, fillAlpha);
+    }
+    /** Device pixel position of a board point (mm). */
+    toPx(map, x2, y2) {
+      return [map.ox + (map.mirror ? -map.s : map.s) * x2, map.oy - map.s * y2];
     }
     /** Fill and outline some objects of a layer; objects outside the view are skipped. */
     #outline(ctx, map, layer, indices, colour, fillAlpha) {
@@ -5093,10 +5113,16 @@
     /** Topmost visible object under a client point. */
     pick(clientX, clientY) {
       const [x2, y2] = this.toMm(clientX, clientY);
+      return this.pickAt(x2, y2);
+    }
+    /** Topmost visible object at a board point (mm). */
+    pickAt(x2, y2) {
       const tol = 3 / this.view.scale;
-      const order = this.#pickOrder();
+      const only = this.settings.pickLayerId;
+      const order = only ? this.layers.filter((l) => l.id === only && l.image) : this.#pickOrder();
       for (const l of order) {
-        const i = hitTest(l.image, x2, y2, tol);
+        let i = only ? hitTest(l.image, x2, y2, 0) : -1;
+        if (i < 0) i = hitTest(l.image, x2, y2, tol);
         if (i >= 0) return { layerId: l.id, index: i, object: l.image.objects[i], x: x2, y: y2 };
       }
       return null;
@@ -5132,9 +5158,13 @@
         { passive: false }
       );
       c.addEventListener("pointerdown", (e) => {
-        drag = { x: e.clientX, y: e.clientY, cx: this.view.cx, cy: this.view.cy, moved: false, id: e.pointerId };
+        if (e.button !== 0 && e.button !== 1) return;
+        const mm2 = this.toMm(e.clientX, e.clientY);
+        const edit = e.button === 0 && !!this.edit?.down?.(mm2, e);
+        drag = { x: e.clientX, y: e.clientY, cx: this.view.cx, cy: this.view.cy, moved: false, id: e.pointerId, edit };
         c.setPointerCapture(e.pointerId);
       });
+      c.addEventListener("dblclick", (e) => this.edit?.dblclick?.(this.toMm(e.clientX, e.clientY), e));
       c.addEventListener("pointermove", (e) => {
         const [x2, y2] = this.toMm(e.clientX, e.clientY);
         this.cb.onCursor?.(x2, y2);
@@ -5143,12 +5173,17 @@
           const dy = e.clientY - drag.y;
           if (!drag.moved && Math.hypot(dx, dy) < 3) return;
           drag.moved = true;
+          if (drag.edit) {
+            this.edit?.move?.([x2, y2], e);
+            return;
+          }
           const sx = this.settings.side === "bottom" ? -1 : 1;
           this.view.cx = drag.cx - sx * dx / this.view.scale;
           this.view.cy = drag.cy + dy / this.view.scale;
           this.requestRender(false);
           return;
         }
+        this.edit?.hover?.([x2, y2], e);
         clearTimeout(this.hoverTimer);
         this.hoverTimer = setTimeout(() => {
           const hit = this.pick(e.clientX, e.clientY);
@@ -5165,6 +5200,16 @@
         const d = drag;
         drag = null;
         if (c.hasPointerCapture?.(e.pointerId)) c.releasePointerCapture(e.pointerId);
+        if (d.edit) {
+          const mm2 = this.toMm(e.clientX, e.clientY);
+          if (!d.moved && e.type === "pointerup") this.edit?.click?.(mm2, e);
+          else this.edit?.up?.(mm2, e, d.moved && e.type === "pointerup");
+          return;
+        }
+        if (!d.moved && e.type === "pointerup" && this.edit?.click) {
+          this.edit.click(this.toMm(e.clientX, e.clientY), e);
+          return;
+        }
         if (d.moved) {
           this.requestRender(true);
           this.cb.onView?.(this.getView());
@@ -23414,14 +23459,14 @@ void main() {
         this.diag.error("BAD_COORDINATE", `Invalid number "${trunc2(t)}"`, line);
         return null;
       }
-      let fmt3 = this.format;
-      if (!fmt3 || !fmt3.explicit) {
-        fmt3 = this.units === "INCH" ? { int: 2, dec: 4 } : { int: 3, dec: 3 };
+      let fmt4 = this.format;
+      if (!fmt4 || !fmt4.explicit) {
+        fmt4 = this.units === "INCH" ? { int: 2, dec: 4 } : { int: 3, dec: 3 };
         if (!this.formatWarned) {
           this.formatWarned = true;
           this.diag.warn(
             "FORMAT_ASSUMED",
-            `Coordinates without decimal point and no explicit number format: assuming ${fmt3.int}.${fmt3.dec}${this.zeros ? ` ${this.zeros}` : ""}`,
+            `Coordinates without decimal point and no explicit number format: assuming ${fmt4.int}.${fmt4.dec}${this.zeros ? ` ${this.zeros}` : ""}`,
             line
           );
         }
@@ -23436,8 +23481,8 @@ void main() {
           this.diag.warn("ZEROS_ASSUMED", "No LZ/TZ zero suppression given: assuming leading zeros are omitted", line);
         }
       }
-      if (zeros === "LZ" && digits.length < fmt3.int + fmt3.dec) digits = digits.padEnd(fmt3.int + fmt3.dec, "0");
-      const v = Number(digits) / 10 ** fmt3.dec;
+      if (zeros === "LZ" && digits.length < fmt4.int + fmt4.dec) digits = digits.padEnd(fmt4.int + fmt4.dec, "0");
+      const v = Number(digits) / 10 ** fmt4.dec;
       return (neg ? -v : v) * this.mmPerUnit;
     }
     guessUnitsEarly(line) {
@@ -26025,6 +26070,14 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     explodeStyle: "sheets",
     camera3d: null
   };
+  var EDIT_TOOLS = ["select", "pad", "track", "region"];
+  var DEFAULT_EDIT = {
+    on: false,
+    tool: "select",
+    gridMm: 0.05,
+    aperture: { code: null, template: "C", sizesMm: [0.25, 0.25] },
+    holeDiaMm: 0.8
+  };
   var ANALYZE_TABS = ["apertures", "shapes", "commands"];
   var PLAYBACK_SPEEDS = [1, 5, 20, 100, 1e3, 1e4];
   var DEFAULT_ANALYZE = {
@@ -26051,6 +26104,7 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     s.view.view3d = s.view.view3d === true;
     if (!EXPLODE_STYLES.includes(s.view.explodeStyle)) s.view.explodeStyle = DEFAULT_VIEW.explodeStyle;
     s.analyze = normaliseAnalyze(s.analyze);
+    s.edit = normaliseEdit(s.edit);
     for (const src of project.sources) s.layers[src.name] ??= defaultLayerSettings();
     return project;
   }
@@ -26072,6 +26126,25 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
         by: pb.by === "object" ? "object" : "command",
         speed: PLAYBACK_SPEEDS.includes(pb.speed) ? pb.speed : d.playback.speed
       }
+    };
+  }
+  function normaliseEdit(e) {
+    const d = DEFAULT_EDIT;
+    const src = e && typeof e === "object" ? e : {};
+    const a2 = src.aperture && typeof src.aperture === "object" ? src.aperture : {};
+    const pos = (v, dv) => Number.isFinite(v) && v > 0 ? v : dv;
+    const sizes = Array.isArray(a2.sizesMm) ? a2.sizesMm : [];
+    return {
+      ...src,
+      on: src.on === true,
+      tool: EDIT_TOOLS.includes(src.tool) ? src.tool : d.tool,
+      gridMm: Number.isFinite(src.gridMm) && src.gridMm >= 0 ? src.gridMm : d.gridMm,
+      aperture: {
+        code: Number.isInteger(a2.code) ? a2.code : null,
+        template: ["C", "R", "O"].includes(a2.template) ? a2.template : d.aperture.template,
+        sizesMm: [pos(sizes[0], d.aperture.sizesMm[0]), pos(sizes[1], d.aperture.sizesMm[1])]
+      },
+      holeDiaMm: pos(src.holeDiaMm, d.holeDiaMm)
     };
   }
   function defaultLayerSettings() {
@@ -26216,6 +26289,26 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     if (st2.boardThicknessMm) s.boardThicknessMm = st2.boardThicknessMm;
     if (st2.layers?.length) s.layers = st2.layers;
     project.stackup = s;
+  }
+  function layerEditor(layer) {
+    layer.editor ??= new LayerEditor(layer.kind, layer.parsed);
+    return layer.editor;
+  }
+  function commitEdit(project, layer, now = /* @__PURE__ */ new Date()) {
+    const ed3 = layer.editor;
+    const src = project.sources.find((s) => s.name === layer.id);
+    if (ed3.ops.length || ed3.redoOps.length) project.edits[layer.id] = ed3.record(src.bytes);
+    else delete project.edits[layer.id];
+    layer.commands = ed3.commands;
+    layer.image = ed3.image;
+    layer.diagnostics = ed3.diagnostics;
+    if (layer.role.type === "profile") layer.outline = extractOutline(layer.image);
+    touch(project, now);
+  }
+  function revertEdits(project, layer, now = /* @__PURE__ */ new Date()) {
+    delete project.edits[layer.id];
+    layer.editor = new LayerEditor(layer.kind, layer.parsed);
+    commitEdit(project, layer, now);
   }
 
   // src/ui/autosave.js
@@ -26954,6 +27047,661 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     return c;
   }
 
+  // src/ui/editor.js
+  var TOOL_LABEL = { select: "Select", pad: "Pad", track: "Track", region: "Region" };
+  var TOOL_KEY = { v: "select", p: "pad", t: "track", r: "region" };
+  var TOOL_TITLE = {
+    select: "Select (V): click an object, Shift+click to add or remove, Shift+drag a box; drag a selected object to move it",
+    pad: "Pad (P): click to place a pad with the chosen aperture (on a drill layer: a hole)",
+    track: "Track (T): click the points, double-click or Enter to finish, Backspace removes the last point",
+    region: "Region (R): click the corners, click the first point, double-click or Enter to close it"
+  };
+  var CLOSE_PX = 8;
+  var EditorPanel = class {
+    /**
+     * @param {{settings:()=>object, layer:()=>object|null, project:()=>object, viewer:object,
+     *   commit:(layer:object)=>void, inspect:(hit:object|null)=>void, message:(t:string, err?:boolean)=>void,
+     *   download:(text:string, name:string)=>void, touch:()=>void, changed:()=>void}} host
+     */
+    constructor(host) {
+      this.host = host;
+      this.sel = [];
+      this.sketch = [];
+      this.cursor = null;
+      this.drag = null;
+      this.busy = false;
+      this.el = h("section", { class: "editor hidden", "data-testid": "editor" });
+      this.toolbarButton = h(
+        "button",
+        {
+          "data-testid": "edit-toggle",
+          title: "Edit mode (E): select, move, delete and add pads, tracks, regions and holes on the selected layer",
+          onclick: () => this.setOn(!this.s.on)
+        },
+        "Edit"
+      );
+    }
+    get s() {
+      return this.host.settings();
+    }
+    get on() {
+      return !!this.s.on;
+    }
+    layer() {
+      const l = this.host.layer();
+      return l && (l.kind === "gerber" || l.kind === "excellon") ? l : null;
+    }
+    setOn(on3) {
+      this.s.on = on3;
+      this.cancelSketch();
+      this.#setSelection([]);
+      this.host.touch();
+      this.refresh();
+    }
+    setTool(tool) {
+      if (!EDIT_TOOLS.includes(tool)) return;
+      this.s.tool = tool;
+      this.cancelSketch();
+      this.host.touch();
+      this.refresh();
+    }
+    /** The edited layer changed (another layer selected, or the layers were rebuilt). */
+    layerChanged() {
+      this.cancelSketch();
+      this.#setSelection([]);
+      this.refresh();
+    }
+    cancelSketch() {
+      this.sketch = [];
+      this.drag = null;
+      this.host.viewer.drawOverlay();
+    }
+    // ---------------------------------------------------------------- panel
+    refresh() {
+      const v = this.host.viewer;
+      const on3 = this.on;
+      const layer = this.layer();
+      this.toolbarButton.classList.toggle("on", on3);
+      this.toolbarButton.setAttribute("aria-pressed", on3 ? "true" : "false");
+      this.el.classList.toggle("hidden", !on3);
+      v.edit = on3 ? this.#handler() : null;
+      v.overlayHook = on3 ? (ctx, map) => this.#drawOverlay(ctx, map) : null;
+      v.settings.pickLayerId = on3 && layer ? layer.id : null;
+      v.editSelection = on3 && layer ? { layerId: layer.id, indices: this.sel } : null;
+      v.canvas.classList.toggle("editing", on3);
+      v.canvas.dataset.tool = on3 ? this.s.tool : "";
+      v.drawOverlay();
+      clear(this.el);
+      if (!on3) return;
+      this.el.append(h("h2", {}, "Edit"));
+      if (!layer) {
+        this.el.append(h("p", { class: "muted pad" }, "Select a Gerber or drill layer to edit it."));
+        return;
+      }
+      const ed3 = layer.editor;
+      const drill = layer.kind === "excellon";
+      const problems = ed3 ? ed3.problems : [];
+      const tools = drill ? ["select", "pad"] : EDIT_TOOLS;
+      if (!tools.includes(this.s.tool)) this.s.tool = "select";
+      const btn = (label, attrs) => h("button", attrs, label);
+      this.el.append(
+        h("div", { class: "edit-row" }, [
+          h(
+            "span",
+            { class: "seg" },
+            tools.map(
+              (t) => btn(drill && t === "pad" ? "Hole" : TOOL_LABEL[t], {
+                class: this.s.tool === t ? "on" : "",
+                "data-testid": `tool-${t}`,
+                title: TOOL_TITLE[t],
+                onclick: () => this.setTool(t)
+              })
+            )
+          )
+        ])
+      );
+      if (this.s.tool === "pad" || this.s.tool === "track") this.el.append(this.#apertureRow(layer));
+      this.el.append(
+        h("div", { class: "edit-row" }, [
+          h("label", { title: "Positions and moves snap to this grid (0 = no snapping)" }, [
+            "Grid ",
+            numInput(this.s.gridMm, "grid", (v2) => {
+              this.s.gridMm = Math.max(0, v2);
+              this.host.touch();
+            }),
+            " mm"
+          ])
+        ])
+      );
+      const n2 = this.sel.length;
+      const dx = numInput(0, "move-dx");
+      const dy = numInput(0, "move-dy");
+      this.el.append(
+        h("div", { class: "edit-row" }, [
+          h("span", { class: "muted", "data-testid": "edit-selection" }, n2 ? `${n2} selected` : "Nothing selected"),
+          btn("Select all", { onclick: () => this.selectAll(), title: "Select every object on this layer (Ctrl+A)" })
+        ]),
+        h("div", { class: "edit-row" }, [
+          btn("Delete", {
+            disabled: !n2,
+            "data-testid": "edit-delete",
+            title: "Delete the selection (Del)",
+            onclick: () => this.deleteSelection()
+          }),
+          drill ? null : btn("To region", {
+            disabled: !n2,
+            "data-testid": "edit-to-region",
+            title: "Turn the selected pads, tracks and fills into G36/G37 regions; overlapping ones are unified into one outline",
+            onclick: () => this.toRegion()
+          })
+        ]),
+        h("div", { class: "edit-row" }, [
+          "Move by ",
+          dx,
+          " ",
+          dy,
+          " mm ",
+          btn("Move", {
+            disabled: !n2,
+            "data-testid": "edit-move",
+            title: "Move the selection by X, Y mm (arrow keys: one grid step, Shift: ten)",
+            onclick: () => this.moveSelection(Number(dx.value), Number(dy.value))
+          })
+        ])
+      );
+      if (!drill)
+        this.el.append(
+          h("div", { class: "edit-row" }, [
+            btn("Unify layer → regions", {
+              "data-testid": "edit-unify",
+              title: "Replace everything on this layer with non-overlapping G36/G37 regions: tracks, pads, fills and clear polarity merged into outlines (arcs within 0.5 µm)",
+              onclick: () => this.unifyLayer()
+            })
+          ])
+        );
+      this.el.append(
+        h("div", { class: "edit-row" }, [
+          btn("Undo", {
+            disabled: !ed3?.canUndo,
+            "data-testid": "edit-undo",
+            title: "Undo (Ctrl+Z)",
+            onclick: () => this.undo()
+          }),
+          btn("Redo", {
+            disabled: !ed3?.canRedo,
+            "data-testid": "edit-redo",
+            title: "Redo (Ctrl+Shift+Z or Ctrl+Y)",
+            onclick: () => this.redo()
+          }),
+          btn("Export file", {
+            "data-testid": "edit-export",
+            title: `Download ${layer.name} with the edits (${drill ? "Excellon" : "Gerber RS-274X"})`,
+            onclick: () => this.exportFile()
+          }),
+          btn("Revert", {
+            disabled: !ed3?.ops.length,
+            title: "Drop every edit of this layer: back to the original file",
+            onclick: () => this.revert()
+          })
+        ]),
+        h(
+          "p",
+          { class: `muted pad${problems.length ? " error" : ""}`, "data-testid": "edit-status" },
+          problems.length ? `This file cannot be edited: ${problems.join("; ")}` : ed3?.ops.length ? `${ed3.ops.length} edit${ed3.ops.length === 1 ? "" : "s"} on ${layer.name}, saved in the project; the original file is kept` : `${layer.name}: no edits`
+        )
+      );
+    }
+    #apertureRow(layer) {
+      if (layer.kind === "excellon") {
+        return h("div", { class: "edit-row" }, [
+          h("label", {}, [
+            "Hole ⌀ ",
+            numInput(this.s.holeDiaMm, "hole-dia", (v) => {
+              this.s.holeDiaMm = v;
+              this.host.touch();
+            }),
+            " mm"
+          ])
+        ]);
+      }
+      const a2 = this.s.aperture;
+      const usable = [...layer.image.apertures.values()].filter(
+        (ap2) => this.s.tool === "track" ? ap2.kind === "C" || ap2.kind === "R" : ap2.kind !== "block" && ap2.shape
+      );
+      const current = usable.some((ap2) => ap2.code === a2.code) ? String(a2.code) : "new";
+      const sel = h(
+        "select",
+        {
+          "data-testid": "edit-aperture",
+          onchange: (e) => {
+            a2.code = e.target.value === "new" ? null : Number(e.target.value);
+            this.host.touch();
+            this.refresh();
+          }
+        },
+        [
+          ...usable.map(
+            (ap2) => h(
+              "option",
+              { value: String(ap2.code), selected: current === String(ap2.code) },
+              `D${ap2.code} · ${describeAperture(ap2)}`
+            )
+          ),
+          h("option", { value: "new", selected: current === "new" }, "New aperture…")
+        ]
+      );
+      const row = [h("label", {}, ["Aperture ", sel])];
+      if (current === "new") {
+        const templates = this.s.tool === "track" ? ["C", "R"] : ["C", "R", "O"];
+        if (!templates.includes(a2.template)) a2.template = "C";
+        row.push(
+          h(
+            "select",
+            {
+              "data-testid": "edit-template",
+              onchange: (e) => {
+                a2.template = e.target.value;
+                this.host.touch();
+                this.refresh();
+              }
+            },
+            templates.map(
+              (t) => h("option", { value: t, selected: a2.template === t }, { C: "Circle", R: "Rectangle", O: "Obround" }[t])
+            )
+          ),
+          numInput(a2.sizesMm[0], "edit-size-w", (v) => {
+            a2.sizesMm[0] = v;
+            this.host.touch();
+          })
+        );
+        if (a2.template !== "C")
+          row.push(
+            "×",
+            numInput(a2.sizesMm[1], "edit-size-h", (v) => {
+              a2.sizesMm[1] = v;
+              this.host.touch();
+            })
+          );
+        row.push(" mm");
+      }
+      return h("div", { class: "edit-row" }, row);
+    }
+    /** The aperture reference for new pads and tracks (an op's `aperture`). */
+    #apertureRef(layer) {
+      const a2 = this.s.aperture;
+      if (a2.code !== null && layer.image.apertures.get(a2.code)?.shape) return { code: a2.code };
+      return { template: a2.template, paramsMm: a2.template === "C" ? [a2.sizesMm[0]] : [a2.sizesMm[0], a2.sizesMm[1]] };
+    }
+    /** Half sizes (mm) of the aperture new objects use, for the previews. */
+    #apertureHalf(layer) {
+      if (layer.kind === "excellon") return { round: true, w: this.s.holeDiaMm / 2, h: this.s.holeDiaMm / 2 };
+      const ref = this.#apertureRef(layer);
+      if (ref.code !== void 0) {
+        const ap2 = layer.image.apertures.get(ref.code);
+        const b3 = ap2.shape.bbox;
+        return { round: ap2.kind === "C", w: (b3[2] - b3[0]) / 2, h: (b3[3] - b3[1]) / 2 };
+      }
+      const [w2, hh2 = w2] = ref.paramsMm;
+      return { round: ref.template === "C", w: w2 / 2, h: hh2 / 2 };
+    }
+    // ---------------------------------------------------------------- actions
+    #setSelection(indices) {
+      this.sel = [...new Set(indices)].sort((a2, b3) => a2 - b3);
+      const v = this.host.viewer;
+      const layer = this.layer();
+      v.editSelection = layer ? { layerId: layer.id, indices: this.sel } : null;
+      v.drawOverlay();
+      const o2 = layer && this.sel.length === 1 ? layer.image.objects[this.sel[0]] : null;
+      this.host.inspect(o2 ? { layerId: layer.id, index: this.sel[0], object: o2, x: null, y: null } : null);
+    }
+    /** Select objects of the edited layer (e.g. from the analyser's command list). */
+    select(indices) {
+      this.#setSelection(indices);
+      this.refresh();
+    }
+    selectAll() {
+      const layer = this.layer();
+      if (!layer) return;
+      this.#setSelection(layer.image.objects.map((_, i) => i));
+      this.refresh();
+    }
+    /** Command targets of the selection, or null (with a message) if one cannot be edited. */
+    #targets(layer) {
+      const ed3 = layerEditor(layer);
+      const out = /* @__PURE__ */ new Set();
+      for (const i of this.sel) {
+        const t = ed3.target(i);
+        if (t.error) {
+          this.host.message(t.error, true);
+          return null;
+        }
+        out.add(t.ci);
+      }
+      return [...out];
+    }
+    /** Run one op on the active layer; on success the objects it made or moved are selected. */
+    apply(op2, done) {
+      const layer = this.layer();
+      if (!layer || this.busy) return false;
+      const ed3 = layerEditor(layer);
+      try {
+        const sel = ed3.apply(op2);
+        this.host.commit(layer);
+        this.#setSelection(op2.type === "unifyLayer" ? [] : sel);
+        this.refresh();
+        if (done) this.host.message(typeof done === "function" ? done() : done);
+        return true;
+      } catch (e) {
+        if (!(e instanceof EditError)) throw e;
+        this.host.message(e.message, true);
+        return false;
+      }
+    }
+    deleteSelection() {
+      const layer = this.layer();
+      const targets = layer && this.sel.length && this.#targets(layer);
+      if (!targets) return;
+      const n2 = this.sel.length;
+      if (this.apply({ type: "delete", targets })) this.host.message(`Deleted ${n2} object${n2 === 1 ? "" : "s"}`);
+    }
+    moveSelection(dxMm, dyMm) {
+      const layer = this.layer();
+      if (!layer || !this.sel.length || !Number.isFinite(dxMm) || !Number.isFinite(dyMm) || !dxMm && !dyMm) return;
+      const targets = this.#targets(layer);
+      if (targets) this.apply({ type: "move", targets, dxMm, dyMm }, `Moved by ${fmt2(dxMm)}, ${fmt2(dyMm)} mm`);
+    }
+    toRegion() {
+      const layer = this.layer();
+      const targets = layer && this.sel.length && this.#targets(layer);
+      if (targets)
+        this.#slow("Converting to regions…", () => this.apply({ type: "toRegion", targets }, "Converted to regions"));
+    }
+    unifyLayer() {
+      const layer = this.layer();
+      if (!layer) return;
+      this.#slow(
+        `Unifying ${layer.name}…`,
+        () => this.apply({ type: "unifyLayer" }, () => `${layer.name}: unified into ${layer.image.objects.length} regions`)
+      );
+    }
+    /** Let the status message paint before a long computation. */
+    #slow(text, fn2) {
+      this.host.message(text);
+      this.busy = true;
+      setTimeout(() => {
+        this.busy = false;
+        fn2();
+      }, 30);
+    }
+    undo() {
+      const layer = this.layer();
+      if (!layer?.editor?.undo()) return;
+      this.host.commit(layer);
+      this.#setSelection([]);
+      this.refresh();
+      this.host.message("Undone");
+    }
+    redo() {
+      const layer = this.layer();
+      if (!layer?.editor?.canRedo) return;
+      try {
+        const sel = layer.editor.redo();
+        this.host.commit(layer);
+        this.#setSelection(sel);
+        this.refresh();
+        this.host.message("Redone");
+      } catch (e) {
+        if (!(e instanceof EditError)) throw e;
+        this.host.message(e.message, true);
+      }
+    }
+    revert() {
+      const layer = this.layer();
+      if (!layer?.editor?.ops.length || !window.confirm(`Drop every edit of ${layer.name}?`)) return;
+      revertEdits(this.host.project(), layer);
+      this.host.commit(layer);
+      this.#setSelection([]);
+      this.refresh();
+      this.host.message(`${layer.name}: back to the original file`);
+    }
+    exportFile() {
+      const layer = this.layer();
+      if (!layer) return;
+      try {
+        this.host.download(layerEditor(layer).write(), layer.name);
+        this.host.message(`Exported ${layer.name}`);
+      } catch (e) {
+        this.host.message(`Export failed: ${e.message}`, true);
+      }
+    }
+    #finishSketch() {
+      const layer = this.layer();
+      const pts = dedupe(this.sketch);
+      const tool = this.s.tool;
+      this.sketch = [];
+      if (!layer) return;
+      if (tool === "track" && pts.length >= 2)
+        this.apply({ type: "addTrack", aperture: this.#apertureRef(layer), pointsMm: pts.flat() }, "Track added");
+      else if (tool === "region" && pts.length >= 3)
+        this.apply({ type: "addRegion", pointsMm: pts.flat() }, "Region added");
+      this.host.viewer.drawOverlay();
+    }
+    // ---------------------------------------------------------------- input
+    snap(v) {
+      const g = this.s.gridMm;
+      return g > 0 ? Math.round(v / g) * g : v;
+    }
+    #snapPt([x2, y2]) {
+      return [round6(this.snap(x2)), round6(this.snap(y2))];
+    }
+    /** Keyboard in edit mode; returns true when the key was used. */
+    keydown(e) {
+      if (!this.on) return false;
+      const k2 = e.key;
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && k2.toLowerCase() === "z") {
+        if (e.shiftKey) this.redo();
+        else this.undo();
+        return true;
+      }
+      if (mod && k2.toLowerCase() === "y") return this.redo(), true;
+      if (mod && k2.toLowerCase() === "a") return this.selectAll(), true;
+      if (mod || e.altKey) return false;
+      if (k2 === "Escape") {
+        if (this.sketch.length || this.drag) this.cancelSketch();
+        else this.#setSelection([]), this.refresh();
+        return true;
+      }
+      if (k2 === "Enter" && this.sketch.length) return this.#finishSketch(), true;
+      if (k2 === "Delete" || k2 === "Backspace") {
+        if (this.sketch.length) {
+          this.sketch.pop();
+          this.host.viewer.drawOverlay();
+        } else this.deleteSelection();
+        return true;
+      }
+      if (k2.startsWith("Arrow") && this.sel.length) {
+        const step = (this.s.gridMm || 0.01) * (e.shiftKey ? 10 : 1);
+        const d = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] }[k2];
+        if (this.host.viewer.settings.side === "bottom") d[0] = -d[0];
+        this.moveSelection(round6(d[0]), round6(d[1]));
+        return true;
+      }
+      const tool = TOOL_KEY[k2.toLowerCase()];
+      if (tool && (tool === "select" || tool === "pad" || this.layer()?.kind === "gerber")) {
+        this.setTool(tool);
+        return true;
+      }
+      return false;
+    }
+    #handler() {
+      const v = this.host.viewer;
+      return {
+        down: (mm2, e) => {
+          const layer = this.layer();
+          if (!layer || this.s.tool !== "select") return false;
+          const hit = v.pickAt(mm2[0], mm2[1]);
+          if (hit && (!e.shiftKey || this.sel.includes(hit.index))) {
+            this.drag = { kind: "move", start: mm2, dx: 0, dy: 0, hit: hit.index };
+            return true;
+          }
+          if (!hit && e.shiftKey) {
+            this.drag = { kind: "box", start: mm2, end: mm2 };
+            return true;
+          }
+          return false;
+        },
+        move: (mm2) => {
+          const d = this.drag;
+          if (!d) return;
+          if (d.kind === "move") {
+            if (!this.sel.includes(d.hit)) this.#setSelection([d.hit]);
+            d.dx = round6(this.snap(mm2[0] - d.start[0]));
+            d.dy = round6(this.snap(mm2[1] - d.start[1]));
+          } else d.end = mm2;
+          v.drawOverlay();
+        },
+        up: (mm2, e, moved2) => {
+          const d = this.drag;
+          this.drag = null;
+          if (!d || !moved2) return v.drawOverlay();
+          if (d.kind === "move") {
+            if (d.dx || d.dy) this.moveSelection(d.dx, d.dy);
+            else v.drawOverlay();
+            return;
+          }
+          const layer = this.layer();
+          const ob = layer.image.objBounds;
+          const [x0, x1] = [Math.min(d.start[0], d.end[0]), Math.max(d.start[0], d.end[0])];
+          const [y0, y1] = [Math.min(d.start[1], d.end[1]), Math.max(d.start[1], d.end[1])];
+          const inside = [];
+          for (let i = 0; i < layer.image.objects.length; i++)
+            if (ob[i * 4] >= x0 && ob[i * 4 + 2] <= x1 && ob[i * 4 + 1] >= y0 && ob[i * 4 + 3] <= y1) inside.push(i);
+          this.#setSelection([...this.sel, ...inside]);
+          this.refresh();
+        },
+        click: (mm2, e) => {
+          const layer = this.layer();
+          if (!layer) return;
+          const tool = this.s.tool;
+          if (tool === "select") {
+            const hit = v.pickAt(mm2[0], mm2[1]);
+            if (e.shiftKey || e.ctrlKey || e.metaKey) {
+              if (hit)
+                this.#setSelection(
+                  this.sel.includes(hit.index) ? this.sel.filter((i) => i !== hit.index) : [...this.sel, hit.index]
+                );
+            } else this.#setSelection(hit ? [hit.index] : []);
+            this.refresh();
+            return;
+          }
+          const p = this.#snapPt(mm2);
+          if (tool === "pad") {
+            if (layer.kind === "excellon")
+              this.apply({ type: "addHit", diaMm: this.s.holeDiaMm, xMm: p[0], yMm: p[1] }, "Hole added");
+            else this.apply({ type: "addFlash", aperture: this.#apertureRef(layer), xMm: p[0], yMm: p[1] }, "Pad added");
+            return;
+          }
+          if (tool === "region" && this.sketch.length >= 3) {
+            const m = v.map();
+            const [ax, ay] = v.toPx(m, ...this.sketch[0]);
+            const [bx, by] = v.toPx(m, ...p);
+            if (Math.hypot(ax - bx, ay - by) <= CLOSE_PX * v.dpr) return this.#finishSketch();
+          }
+          this.sketch.push(p);
+          v.drawOverlay();
+        },
+        dblclick: () => {
+          if (this.sketch.length) this.#finishSketch();
+        },
+        hover: (mm2) => {
+          this.cursor = this.#snapPt(mm2);
+          if (this.s.tool !== "select") v.drawOverlay();
+        }
+      };
+    }
+    // ---------------------------------------------------------------- previews
+    #drawOverlay(ctx, map) {
+      const v = this.host.viewer;
+      const layer = this.layer();
+      if (!layer) return;
+      const d = this.drag;
+      const colour = rgba(MISC.selection, 1);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      if (d?.kind === "move" && (d.dx || d.dy)) {
+        v.outlineObjects(ctx, map, layer.id, this.sel, MISC.selection, 0.15, d.dx, d.dy);
+      }
+      if (d?.kind === "box") {
+        const [ax, ay] = v.toPx(map, ...d.start);
+        const [bx, by] = v.toPx(map, ...d.end);
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.setLineDash([4 * v.dpr, 4 * v.dpr]);
+        ctx.strokeStyle = colour;
+        ctx.lineWidth = v.dpr;
+        ctx.strokeRect(Math.min(ax, bx), Math.min(ay, by), Math.abs(bx - ax), Math.abs(by - ay));
+        ctx.setLineDash([]);
+      }
+      const tool = this.s.tool;
+      if (tool === "select") return;
+      const half = this.#apertureHalf(layer);
+      const pts = this.cursor ? [...this.sketch, this.cursor] : [...this.sketch];
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.strokeStyle = colour;
+      ctx.fillStyle = rgba(MISC.selection, 0.3);
+      ctx.lineWidth = Math.max(1, v.dpr);
+      if (tool === "pad" && this.cursor) {
+        const [x2, y2] = v.toPx(map, ...this.cursor);
+        ctx.beginPath();
+        if (half.round) ctx.arc(x2, y2, Math.max(2, half.w * map.s), 0, Math.PI * 2);
+        else ctx.rect(x2 - half.w * map.s, y2 - half.h * map.s, 2 * half.w * map.s, 2 * half.h * map.s);
+        ctx.fill();
+        ctx.stroke();
+      }
+      if ((tool === "track" || tool === "region") && pts.length) {
+        ctx.beginPath();
+        pts.forEach((p, i) => {
+          const [x2, y2] = v.toPx(map, ...p);
+          if (i) ctx.lineTo(x2, y2);
+          else ctx.moveTo(x2, y2);
+        });
+        if (tool === "track") {
+          ctx.lineCap = half.round ? "round" : "square";
+          ctx.lineJoin = "round";
+          ctx.strokeStyle = rgba(MISC.selection, 0.45);
+          ctx.lineWidth = Math.max(2, 2 * half.w * map.s);
+          ctx.stroke();
+        } else {
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+        }
+        ctx.strokeStyle = colour;
+        ctx.lineWidth = Math.max(1, v.dpr);
+        for (const p of this.sketch) {
+          const [x2, y2] = v.toPx(map, ...p);
+          ctx.strokeRect(x2 - 3 * v.dpr, y2 - 3 * v.dpr, 6 * v.dpr, 6 * v.dpr);
+        }
+      }
+    }
+  };
+  function numInput(value, testid, onchange) {
+    return h("input", {
+      type: "number",
+      step: "any",
+      value: String(value),
+      class: "num",
+      "data-testid": testid,
+      onchange: onchange ? (e) => Number.isFinite(Number(e.target.value)) && onchange(Number(e.target.value)) : void 0
+    });
+  }
+  function dedupe(pts) {
+    return pts.filter((p, i) => !i || p[0] !== pts[i - 1][0] || p[1] !== pts[i - 1][1]);
+  }
+  var round6 = (v) => Math.round(v * 1e6) / 1e6;
+  function fmt2(v) {
+    return String(round6(v));
+  }
+
   // src/ui/app.js
   var SIDES = ["top", "bottom", "inner", "all"];
   var KIND_LABEL = { F: "Flash (D03)", L: "Draw (D01, linear)", A: "Arc (D01, G02/G03)", R: "Region (G36/G37)" };
@@ -27126,6 +27874,19 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
         touch: () => app.#touch(),
         message: (text) => app.#message(text)
       });
+      this.editor = new EditorPanel({
+        settings: () => app.project.settings.edit,
+        layer: () => app.layerById(app.activeLayerId) || null,
+        project: () => app.project,
+        get viewer() {
+          return app.viewer;
+        },
+        commit: (layer) => app.#afterEdit(layer),
+        inspect: (hit) => app.#inspect(hit),
+        message: (text, err2) => app.#message(text, err2),
+        download: (text, name) => downloadBytes(new TextEncoder().encode(text), name, "application/octet-stream"),
+        touch: () => app.#touch()
+      });
       const toolbar = h("header", { class: "toolbar" }, [
         h("span", { class: "title" }, "PCB-CAMmotion"),
         h("button", { id: "new", onclick: () => this.newProject(), title: "Start an empty project" }, "New"),
@@ -27147,6 +27908,7 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
         h("span", { class: "seg" }, Object.values(this.btnMode)),
         this.btnBg,
         this.dock.toolbarButton,
+        this.editor.toolbarButton,
         h("span", { class: "spacer" }),
         this.nameInput
       ]);
@@ -27176,6 +27938,7 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
       this.inspector = h("div", { "data-testid": "inspector" });
       this.diagPanel = h("div", { "data-testid": "diagnostics" });
       const right = h("aside", { class: "panel right" }, [
+        this.editor.el,
         h("h2", {}, "Inspector"),
         this.inspector,
         h("h2", {}, "File messages"),
@@ -27220,9 +27983,14 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
           this.save();
           return;
         }
+        if (!isTyping(e.target) && this.editor.keydown(e)) {
+          e.preventDefault();
+          return;
+        }
         if (e.key === "Escape") return this.viewer.select(null);
         if (e.ctrlKey || e.metaKey || e.altKey || isTyping(e.target)) return;
         const k2 = e.key.toLowerCase();
+        if (k2 === "e") return this.editor.setOn(!this.editor.on);
         if (k2 === "," || k2 === ".") this.dock.step(k2 === "." ? 1 : -1);
         else if (k2 === "f") this.#fit();
         else if (k2 === "s") this.#toggleSolo();
@@ -27313,11 +28081,13 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
         return;
       }
       const skipped = [];
+      const notes = [];
       let added = 0;
       for (const f2 of files) {
         const r2 = addSourceFile(this.project, f2.name, f2.bytes);
         added += r2.added.length;
         skipped.push(...r2.skipped);
+        notes.push(...r2.notes);
       }
       if (this.project.manifest.name === "untitled" && added) {
         const guess = guessProjectName(this.project.sources.map((s) => s.name));
@@ -27326,7 +28096,7 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
       this.#rebuild({ fit: true });
       if (added) this.#touch();
       this.#message(
-        `Loaded ${added} file${added === 1 ? "" : "s"}${skipped.length ? ` · skipped: ${skipped.join("; ")}` : ""}`,
+        `Loaded ${added} file${added === 1 ? "" : "s"}${notes.length ? ` · ${notes.join("; ")}` : ""}${skipped.length ? ` · skipped: ${skipped.join("; ")}` : ""}`,
         !!skipped.length && !added
       );
     }
@@ -27364,7 +28134,32 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
       this.#showDimension();
       this.selection = null;
       this.dock.layersChanged();
+      this.editor.layerChanged();
       this.#refresh();
+    }
+    /** A layer was edited (or undone/redone): show its new image everywhere and save the ops. */
+    #afterEdit(layer) {
+      commitEdit(this.project, layer);
+      delete layer._analysis;
+      this.selection = null;
+      this.viewer.hover = null;
+      this.viewer.selected = null;
+      this.viewer.renderer.invalidate(layer.id);
+      this.viewer.renderer.invalidate(layer.id + ":inflate");
+      this.viewer.renderer.invalidate(layer.id + ":outline");
+      this.viewer.layersChanged();
+      this.viewer3d.layersChanged();
+      this.dock.layersChanged();
+      this.#refreshLayers();
+      this.#refreshInspector();
+      this.#refreshDiagnostics();
+      this.#touch();
+    }
+    /** The editor's selection: one object shows in the inspector. */
+    #inspect(hit) {
+      this.selection = hit;
+      this.#refreshInspector();
+      this.dock.onSelection();
     }
     /** The layers to draw: every layer whose group (silkscreen, mask, …) is switched on. */
     #renderLayers() {
@@ -27406,6 +28201,7 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
       this.viewer.settings.activeLayerId = id3;
       const solo = this.view.solo;
       this.dock.refresh();
+      this.editor.layerChanged();
       if (solo.length === 1 && solo[0] !== id3) return this.#setView({ solo: [id3] });
       this.#refreshLayers();
       this.#refreshDiagnostics();
@@ -27662,6 +28458,15 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
                 },
                 "S"
               ),
+              l.editor?.ops.length ? h(
+                "span",
+                {
+                  class: "badge edited",
+                  "data-testid": "edited",
+                  title: `${l.editor.ops.length} edits (Edit panel)`
+                },
+                `✎${l.editor.ops.length}`
+              ) : null,
               errs ? h("span", { class: "badge error", title: "errors" }, String(errs)) : null,
               warns ? h("span", { class: "badge warning", title: "warnings" }, String(warns)) : null
             ]),
@@ -27778,6 +28583,7 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
       const l = this.layerById(layerId);
       const o2 = l?.image.objects[index];
       if (!o2) return;
+      if (this.editor.on && layerId === this.activeLayerId) return this.editor.select([index]);
       this.viewer.select({ layerId, index, object: o2, x: null, y: null });
     }
     #sourceLine(layer, line) {
@@ -27813,14 +28619,14 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
         rows.push([l.kind === "excellon" ? "Tool" : "Aperture", `${label} · ${describeAperture(ap2)}`]);
         if (ap2.attributes?.[".AperFunction"]) rows.push(["Function", ap2.attributes[".AperFunction"].join(", ")]);
       }
-      if (o2.k === "F") rows.push(["Position", `${fmt2(o2.x)}, ${fmt2(o2.y)} mm`]);
+      if (o2.k === "F") rows.push(["Position", `${fmt3(o2.x)}, ${fmt3(o2.y)} mm`]);
       if (o2.k === "L" || o2.k === "A") {
-        rows.push(["From", `${fmt2(o2.x1)}, ${fmt2(o2.y1)} mm`], ["To", `${fmt2(o2.x2)}, ${fmt2(o2.y2)} mm`]);
-        if (o2.k === "L") rows.push(["Length", `${fmt2(Math.hypot(o2.x2 - o2.x1, o2.y2 - o2.y1))} mm`]);
+        rows.push(["From", `${fmt3(o2.x1)}, ${fmt3(o2.y1)} mm`], ["To", `${fmt3(o2.x2)}, ${fmt3(o2.y2)} mm`]);
+        if (o2.k === "L") rows.push(["Length", `${fmt3(Math.hypot(o2.x2 - o2.x1, o2.y2 - o2.y1))} mm`]);
         else
           rows.push(
-            ["Centre", `${fmt2(o2.cx)}, ${fmt2(o2.cy)} mm`],
-            ["Radius", `${fmt2(o2.r)} mm`],
+            ["Centre", `${fmt3(o2.cx)}, ${fmt3(o2.cy)} mm`],
+            ["Radius", `${fmt3(o2.r)} mm`],
             ["Sweep", `${(o2.sw * 180 / Math.PI).toFixed(2)}° ${o2.sw > 0 ? "CCW" : "CW"}`]
           );
       }
@@ -27832,7 +28638,7 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
       if (o2.m) rows.push(["Transform", "mirrored/rotated/scaled (LM/LR/LS or block)"]);
       const attrs = l.image.objectAttributes?.[o2.at];
       if (attrs) for (const [k2, v] of Object.entries(attrs)) rows.push([k2, v.join(", ")]);
-      rows.push(["Source line", String(o2.ln)]);
+      rows.push(["Source line", o2.ln ? String(o2.ln) : "none: added by an edit"]);
       const ci2 = objectCommand(l.image, hit.index);
       if (ci2 >= 0 && l.commands[ci2].line !== o2.ln)
         rows.push(["Drawn by", `command ${ci2 + 1} on line ${l.commands[ci2].line}`]);
@@ -27844,7 +28650,11 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
         )
       );
       this.inspector.append(
-        h("div", { class: "code", "data-testid": "source-line" }, `${o2.ln}: ${this.#sourceLine(l, o2.ln)}`),
+        h(
+          "div",
+          { class: "code", "data-testid": "source-line" },
+          o2.ln ? `${o2.ln}: ${this.#sourceLine(l, o2.ln)}` : "Added by an edit (not in the source file)"
+        ),
         h("div", { class: "inspector-actions" }, [
           h(
             "button",
@@ -27883,7 +28693,7 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
           ],
           ["Objects", l.image.objects.length.toLocaleString("en")],
           ...Object.entries(st2).map(([k2, v]) => [k2, v.toLocaleString("en")]),
-          ["Size", b3 ? `${fmt2(b3[2] - b3[0])} × ${fmt2(b3[3] - b3[1])} mm` : "—"]
+          ["Size", b3 ? `${fmt3(b3[2] - b3[0])} × ${fmt3(b3[3] - b3[1])} mm` : "—"]
         ];
         this.diagPanel.append(
           h(
@@ -27930,9 +28740,9 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
   function describeShort(hit, layer) {
     const o2 = hit.object;
     const ap2 = o2.ap ? `${layer.kind === "excellon" ? "T" : "D"}${o2.ap.code} ${describeAperture(o2.ap)} · ` : "";
-    return `${layer.name} · ${ap2}${KIND_LABEL[o2.k]} · ${o2.dark ? "dark" : "clear"} · line ${o2.ln}`;
+    return `${layer.name} · ${ap2}${KIND_LABEL[o2.k]} · ${o2.dark ? "dark" : "clear"} · ${o2.ln ? `line ${o2.ln}` : "added"}`;
   }
-  function fmt2(v) {
+  function fmt3(v) {
     return Number.isFinite(v) ? Math.abs(v) >= 1e3 ? v.toFixed(2) : v.toFixed(4).replace(/\.?0+$/, "") : "—";
   }
   function titleCase(s) {
@@ -27946,8 +28756,8 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     const stems = names.map((n2) => n2.replace(/\.[^.]+$/, ""));
     return stems.length && stems.every((s) => s === stems[0]) ? stems[0] : null;
   }
-  function downloadBytes(bytes, name) {
-    const url = URL.createObjectURL(new Blob([bytes], { type: "application/zip" }));
+  function downloadBytes(bytes, name, type = "application/zip") {
+    const url = URL.createObjectURL(new Blob([bytes], { type }));
     const a2 = h("a", { href: url, download: name });
     document.body.append(a2);
     a2.click();

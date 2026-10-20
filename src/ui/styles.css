@@ -658,3 +658,43 @@ table.apt tr.on td {
   gap: 6px;
   margin: 0 10px;
 }
+
+/* editor panel (milestone 4) */
+.editor .edit-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  margin: 0 10px 6px;
+}
+.editor input.num {
+  width: 64px;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 3px 4px;
+  font: inherit;
+}
+.editor select {
+  max-width: 190px;
+}
+.editor .pad {
+  margin: 0 10px 8px;
+  font-size: 12px;
+}
+.editor .pad.error {
+  color: var(--err);
+}
+.badge.edited {
+  background: rgba(63, 180, 230, 0.25);
+  color: var(--accent);
+}
+.main canvas.editing {
+  cursor: default;
+}
+.main canvas.editing[data-tool='pad'],
+.main canvas.editing[data-tool='track'],
+.main canvas.editing[data-tool='region'] {
+  cursor: crosshair;
+}

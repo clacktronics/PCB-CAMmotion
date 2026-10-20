@@ -38,6 +38,14 @@ export class Viewer {
     this.highlight = null; // { layerId, indices: number[] } every use of an aperture
     this.playhead = null; // { layerId, current: [start, end), head: [x, y] | null }
     this.hlCache = null;
+    this.editSelection = null; // { layerId, indices } objects selected in the editor
+    this.overlayHook = null; // (ctx, map) => void: the editor's previews (src/ui/editor.js)
+    /**
+     * Edit mode pointer handler, or null. down(mm, e) returns true to take the drag (else the
+     * view pans); move(mm, e) and up(mm, e, moved) follow it; click(mm, e) replaces selection
+     * by picking; hover(mm, e) on every move without a drag.
+     */
+    this.edit = null;
     this.pending = 0;
     this.snapshot = null; // last rendered frame + its map, used while gestures are in flight
     this.lastRenderMs = 0;
@@ -239,12 +247,31 @@ export class Viewer {
     }
     for (const [hit, colour, fillAlpha] of [
       [this.hover, MISC.hover, 0.15],
-      [this.selected, MISC.selection, 0.3],
+      [this.edit ? null : this.selected, MISC.selection, 0.3],
     ]) {
       if (!hit) continue;
       const layer = this.layers.find((l) => l.id === hit.layerId);
       if (layer?.image?.objects[hit.index]) this.#outline(ctx, map, layer, [hit.index], colour, fillAlpha);
     }
+    const es = this.editSelection;
+    if (es?.indices.length) {
+      const layer = this.layers.find((l) => l.id === es.layerId);
+      if (layer?.image) this.#outline(ctx, map, layer, es.indices, MISC.selection, 0.3);
+    }
+    this.overlayHook?.(ctx, map);
+  }
+
+  /** Draw some objects of a layer outlined, optionally moved by (dx, dy) mm (edit previews). */
+  outlineObjects(ctx, map, layerId, indices, colour, fillAlpha, dx = 0, dy = 0) {
+    const layer = this.layers.find((l) => l.id === layerId);
+    if (!layer?.image) return;
+    const m = dx || dy ? { ...map, ox: map.ox + (map.mirror ? -map.s : map.s) * dx, oy: map.oy - map.s * dy } : map;
+    this.#outline(ctx, m, layer, indices, colour, fillAlpha);
+  }
+
+  /** Device pixel position of a board point (mm). */
+  toPx(map, x, y) {
+    return [map.ox + (map.mirror ? -map.s : map.s) * x, map.oy - map.s * y];
   }
 
   /** Fill and outline some objects of a layer; objects outside the view are skipped. */
@@ -306,10 +333,19 @@ export class Viewer {
   /** Topmost visible object under a client point. */
   pick(clientX, clientY) {
     const [x, y] = this.toMm(clientX, clientY);
+    return this.pickAt(x, y);
+  }
+
+  /** Topmost visible object at a board point (mm). */
+  pickAt(x, y) {
     const tol = 3 / this.view.scale; // 3 CSS px
-    const order = this.#pickOrder();
+    // in edit mode only the layer being edited can be picked
+    const only = this.settings.pickLayerId;
+    const order = only ? this.layers.filter((l) => l.id === only && l.image) : this.#pickOrder();
     for (const l of order) {
-      const i = hitTest(l.image, x, y, tol);
+      // editing: an object under the point wins over a near miss on a neighbour (fine pitch)
+      let i = only ? hitTest(l.image, x, y, 0) : -1;
+      if (i < 0) i = hitTest(l.image, x, y, tol);
       if (i >= 0) return { layerId: l.id, index: i, object: l.image.objects[i], x, y };
     }
     return null;
@@ -348,9 +384,13 @@ export class Viewer {
       { passive: false },
     );
     c.addEventListener('pointerdown', (e) => {
-      drag = { x: e.clientX, y: e.clientY, cx: this.view.cx, cy: this.view.cy, moved: false, id: e.pointerId };
+      if (e.button !== 0 && e.button !== 1) return;
+      const mm = this.toMm(e.clientX, e.clientY);
+      const edit = e.button === 0 && !!this.edit?.down?.(mm, e);
+      drag = { x: e.clientX, y: e.clientY, cx: this.view.cx, cy: this.view.cy, moved: false, id: e.pointerId, edit };
       c.setPointerCapture(e.pointerId);
     });
+    c.addEventListener('dblclick', (e) => this.edit?.dblclick?.(this.toMm(e.clientX, e.clientY), e));
     c.addEventListener('pointermove', (e) => {
       const [x, y] = this.toMm(e.clientX, e.clientY);
       this.cb.onCursor?.(x, y);
@@ -359,12 +399,17 @@ export class Viewer {
         const dy = e.clientY - drag.y;
         if (!drag.moved && Math.hypot(dx, dy) < 3) return;
         drag.moved = true;
+        if (drag.edit) {
+          this.edit?.move?.([x, y], e);
+          return;
+        }
         const sx = this.settings.side === 'bottom' ? -1 : 1;
         this.view.cx = drag.cx - (sx * dx) / this.view.scale;
         this.view.cy = drag.cy + dy / this.view.scale;
         this.requestRender(false);
         return;
       }
+      this.edit?.hover?.([x, y], e);
       clearTimeout(this.hoverTimer);
       this.hoverTimer = setTimeout(() => {
         const hit = this.pick(e.clientX, e.clientY);
@@ -381,6 +426,16 @@ export class Viewer {
       const d = drag;
       drag = null;
       if (c.hasPointerCapture?.(e.pointerId)) c.releasePointerCapture(e.pointerId);
+      if (d.edit) {
+        const mm = this.toMm(e.clientX, e.clientY);
+        if (!d.moved && e.type === 'pointerup') this.edit?.click?.(mm, e);
+        else this.edit?.up?.(mm, e, d.moved && e.type === 'pointerup');
+        return;
+      }
+      if (!d.moved && e.type === 'pointerup' && this.edit?.click) {
+        this.edit.click(this.toMm(e.clientX, e.clientY), e);
+        return;
+      }
       if (d.moved) {
         this.requestRender(true);
         this.cb.onView?.(this.getView());

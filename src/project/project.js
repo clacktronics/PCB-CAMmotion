@@ -17,6 +17,9 @@
 //                    view3d: show the 3D view; explode: 0..1 how far the 3D layers are spread;
 //                    explodeStyle: sheets (apart by copper layer, each on its substrate) | layers;
 //                    camera3d: null | { position: [x, y, z], target: [x, y, z] } in mm
+//   settings.edit:   { on, tool, gridMm, aperture: { code, template, sizesMm }, holeDiaMm }
+//                    the editor (milestone 4): tool = select | pad | track | region; aperture =
+//                    an existing D-code for new pads/tracks, or (code null) a new C/R/O aperture
 //   settings.analyze: { open, tab, highlight, playback }   the analyser dock (milestone 3)
 //                    tab: apertures | shapes | commands; highlight: null | { layer, code }
 //                    (code = aperture/tool number, or null for regions) marks every use;
@@ -59,6 +62,16 @@ export const DEFAULT_VIEW = {
   camera3d: null,
 };
 
+export const EDIT_TOOLS = ['select', 'pad', 'track', 'region'];
+
+export const DEFAULT_EDIT = {
+  on: false,
+  tool: 'select',
+  gridMm: 0.05,
+  aperture: { code: null, template: 'C', sizesMm: [0.25, 0.25] },
+  holeDiaMm: 0.8,
+};
+
 export const ANALYZE_TABS = ['apertures', 'shapes', 'commands'];
 export const PLAYBACK_SPEEDS = [1, 5, 20, 100, 1000, 10000];
 
@@ -89,6 +102,7 @@ export function ensureSettings(project) {
   s.view.view3d = s.view.view3d === true;
   if (!EXPLODE_STYLES.includes(s.view.explodeStyle)) s.view.explodeStyle = DEFAULT_VIEW.explodeStyle;
   s.analyze = normaliseAnalyze(s.analyze);
+  s.edit = normaliseEdit(s.edit);
   for (const src of project.sources) s.layers[src.name] ??= defaultLayerSettings();
   return project;
 }
@@ -115,6 +129,27 @@ export function normaliseAnalyze(a) {
       by: pb.by === 'object' ? 'object' : 'command',
       speed: PLAYBACK_SPEEDS.includes(pb.speed) ? pb.speed : d.playback.speed,
     },
+  };
+}
+
+/** Editor settings (src/ui/editor.js) with defaults filled in and nonsense values replaced. */
+export function normaliseEdit(e) {
+  const d = DEFAULT_EDIT;
+  const src = e && typeof e === 'object' ? e : {};
+  const a = src.aperture && typeof src.aperture === 'object' ? src.aperture : {};
+  const pos = (v, dv) => (Number.isFinite(v) && v > 0 ? v : dv);
+  const sizes = Array.isArray(a.sizesMm) ? a.sizesMm : [];
+  return {
+    ...src,
+    on: src.on === true,
+    tool: EDIT_TOOLS.includes(src.tool) ? src.tool : d.tool,
+    gridMm: Number.isFinite(src.gridMm) && src.gridMm >= 0 ? src.gridMm : d.gridMm,
+    aperture: {
+      code: Number.isInteger(a.code) ? a.code : null,
+      template: ['C', 'R', 'O'].includes(a.template) ? a.template : d.aperture.template,
+      sizesMm: [pos(sizes[0], d.aperture.sizesMm[0]), pos(sizes[1], d.aperture.sizesMm[1])],
+    },
+    holeDiaMm: pos(src.holeDiaMm, d.holeDiaMm),
   };
 }
 

@@ -1,5 +1,5 @@
-// Application shell: toolbar, layer list, inspector, analyser dock, file drop, .pcam
-// open/save, autosave.
+// Application shell: toolbar, layer list, inspector, editor panel, analyser dock, file drop,
+// .pcam open/save, autosave.
 
 import { Viewer } from '../render/viewer.js';
 import { Viewer3D } from '../render3d/viewer3d.js';
@@ -11,6 +11,7 @@ import {
   removeSource,
   ensureSettings,
   effectiveStackup,
+  commitEdit,
 } from '../project/project.js';
 import { saveProject, loadProject, isPcamFileName, pcamFileName } from '../project/pcam.js';
 import { SCHEMA_VERSION } from '../project/schema.js';
@@ -22,6 +23,7 @@ import { SOLDER_MASK, SILKSCREEN, FINISH, SUBSTRATE, DEBUG, MISC, lookupMaterial
 import { h, clear } from './dom.js';
 import { VIEW_MODES, VIEW_MODE_LABELS, layerColour, toHex, parseHex } from '../model/view-modes.js';
 import { AnalyserDock } from './analyser.js';
+import { EditorPanel } from './editor.js';
 import { describeAperture } from '../analyze/apertures.js';
 import { objectCommand } from '../analyze/commands.js';
 
@@ -203,6 +205,20 @@ export class App {
       message: (text) => app.#message(text),
     });
 
+    this.editor = new EditorPanel({
+      settings: () => app.project.settings.edit,
+      layer: () => app.layerById(app.activeLayerId) || null,
+      project: () => app.project,
+      get viewer() {
+        return app.viewer;
+      },
+      commit: (layer) => app.#afterEdit(layer),
+      inspect: (hit) => app.#inspect(hit),
+      message: (text, err) => app.#message(text, err),
+      download: (text, name) => downloadBytes(new TextEncoder().encode(text), name, 'application/octet-stream'),
+      touch: () => app.#touch(),
+    });
+
     const toolbar = h('header', { class: 'toolbar' }, [
       h('span', { class: 'title' }, 'PCB-CAMmotion'),
       h('button', { id: 'new', onclick: () => this.newProject(), title: 'Start an empty project' }, 'New'),
@@ -224,6 +240,7 @@ export class App {
       h('span', { class: 'seg' }, Object.values(this.btnMode)),
       this.btnBg,
       this.dock.toolbarButton,
+      this.editor.toolbarButton,
       h('span', { class: 'spacer' }),
       this.nameInput,
     ]);
@@ -255,6 +272,7 @@ export class App {
     this.inspector = h('div', { 'data-testid': 'inspector' });
     this.diagPanel = h('div', { 'data-testid': 'diagnostics' });
     const right = h('aside', { class: 'panel right' }, [
+      this.editor.el,
       h('h2', {}, 'Inspector'),
       this.inspector,
       h('h2', {}, 'File messages'),
@@ -302,9 +320,14 @@ export class App {
         this.save();
         return;
       }
+      if (!isTyping(e.target) && this.editor.keydown(e)) {
+        e.preventDefault();
+        return;
+      }
       if (e.key === 'Escape') return this.viewer.select(null);
       if (e.ctrlKey || e.metaKey || e.altKey || isTyping(e.target)) return;
       const k = e.key.toLowerCase();
+      if (k === 'e') return this.editor.setOn(!this.editor.on);
       if (k === ',' || k === '.') this.dock.step(k === '.' ? 1 : -1);
       else if (k === 'f') this.#fit();
       else if (k === 's') this.#toggleSolo();
@@ -402,11 +425,13 @@ export class App {
       return;
     }
     const skipped = [];
+    const notes = [];
     let added = 0;
     for (const f of files) {
       const r = addSourceFile(this.project, f.name, f.bytes);
       added += r.added.length;
       skipped.push(...r.skipped);
+      notes.push(...r.notes);
     }
     if (this.project.manifest.name === 'untitled' && added) {
       const guess = guessProjectName(this.project.sources.map((s) => s.name));
@@ -415,7 +440,7 @@ export class App {
     this.#rebuild({ fit: true });
     if (added) this.#touch();
     this.#message(
-      `Loaded ${added} file${added === 1 ? '' : 's'}${skipped.length ? ` · skipped: ${skipped.join('; ')}` : ''}`,
+      `Loaded ${added} file${added === 1 ? '' : 's'}${notes.length ? ` · ${notes.join('; ')}` : ''}${skipped.length ? ` · skipped: ${skipped.join('; ')}` : ''}`,
       !!skipped.length && !added,
     );
   }
@@ -454,7 +479,34 @@ export class App {
     this.#showDimension();
     this.selection = null;
     this.dock.layersChanged();
+    this.editor.layerChanged();
     this.#refresh();
+  }
+
+  /** A layer was edited (or undone/redone): show its new image everywhere and save the ops. */
+  #afterEdit(layer) {
+    commitEdit(this.project, layer);
+    delete layer._analysis;
+    this.selection = null;
+    this.viewer.hover = null;
+    this.viewer.selected = null;
+    this.viewer.renderer.invalidate(layer.id);
+    this.viewer.renderer.invalidate(layer.id + ':inflate');
+    this.viewer.renderer.invalidate(layer.id + ':outline');
+    this.viewer.layersChanged();
+    this.viewer3d.layersChanged();
+    this.dock.layersChanged();
+    this.#refreshLayers();
+    this.#refreshInspector();
+    this.#refreshDiagnostics();
+    this.#touch();
+  }
+
+  /** The editor's selection: one object shows in the inspector. */
+  #inspect(hit) {
+    this.selection = hit;
+    this.#refreshInspector();
+    this.dock.onSelection();
   }
 
   /** The layers to draw: every layer whose group (silkscreen, mask, …) is switched on. */
@@ -501,6 +553,7 @@ export class App {
     this.viewer.settings.activeLayerId = id;
     const solo = this.view.solo;
     this.dock.refresh();
+    this.editor.layerChanged();
     if (solo.length === 1 && solo[0] !== id) return this.#setView({ solo: [id] });
     this.#refreshLayers();
     this.#refreshDiagnostics();
@@ -788,6 +841,17 @@ export class App {
               },
               'S',
             ),
+            l.editor?.ops.length
+              ? h(
+                  'span',
+                  {
+                    class: 'badge edited',
+                    'data-testid': 'edited',
+                    title: `${l.editor.ops.length} edits (Edit panel)`,
+                  },
+                  `✎${l.editor.ops.length}`,
+                )
+              : null,
             errs ? h('span', { class: 'badge error', title: 'errors' }, String(errs)) : null,
             warns ? h('span', { class: 'badge warning', title: 'warnings' }, String(warns)) : null,
           ]),
@@ -906,6 +970,7 @@ export class App {
     const l = this.layerById(layerId);
     const o = l?.image.objects[index];
     if (!o) return;
+    if (this.editor.on && layerId === this.activeLayerId) return this.editor.select([index]);
     this.viewer.select({ layerId, index, object: o, x: null, y: null });
   }
 
@@ -962,7 +1027,7 @@ export class App {
     if (o.m) rows.push(['Transform', 'mirrored/rotated/scaled (LM/LR/LS or block)']);
     const attrs = l.image.objectAttributes?.[o.at];
     if (attrs) for (const [k, v] of Object.entries(attrs)) rows.push([k, v.join(', ')]);
-    rows.push(['Source line', String(o.ln)]);
+    rows.push(['Source line', o.ln ? String(o.ln) : 'none: added by an edit']);
     const ci = objectCommand(l.image, hit.index);
     if (ci >= 0 && l.commands[ci].line !== o.ln)
       rows.push(['Drawn by', `command ${ci + 1} on line ${l.commands[ci].line}`]);
@@ -974,7 +1039,11 @@ export class App {
       ),
     );
     this.inspector.append(
-      h('div', { class: 'code', 'data-testid': 'source-line' }, `${o.ln}: ${this.#sourceLine(l, o.ln)}`),
+      h(
+        'div',
+        { class: 'code', 'data-testid': 'source-line' },
+        o.ln ? `${o.ln}: ${this.#sourceLine(l, o.ln)}` : 'Added by an edit (not in the source file)',
+      ),
       h('div', { class: 'inspector-actions' }, [
         h(
           'button',
@@ -1065,7 +1134,7 @@ function swatchColour(l, project) {
 function describeShort(hit, layer) {
   const o = hit.object;
   const ap = o.ap ? `${layer.kind === 'excellon' ? 'T' : 'D'}${o.ap.code} ${describeAperture(o.ap)} · ` : '';
-  return `${layer.name} · ${ap}${KIND_LABEL[o.k]} · ${o.dark ? 'dark' : 'clear'} · line ${o.ln}`;
+  return `${layer.name} · ${ap}${KIND_LABEL[o.k]} · ${o.dark ? 'dark' : 'clear'} · ${o.ln ? `line ${o.ln}` : 'added'}`;
 }
 
 function fmt(v) {
@@ -1085,8 +1154,8 @@ function guessProjectName(names) {
   return stems.length && stems.every((s) => s === stems[0]) ? stems[0] : null;
 }
 
-function downloadBytes(bytes, name) {
-  const url = URL.createObjectURL(new Blob([bytes], { type: 'application/zip' }));
+function downloadBytes(bytes, name, type = 'application/zip') {
+  const url = URL.createObjectURL(new Blob([bytes], { type }));
   const a = h('a', { href: url, download: name });
   document.body.append(a);
   a.click();

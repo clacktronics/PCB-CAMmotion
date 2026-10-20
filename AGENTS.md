@@ -43,14 +43,18 @@ test/      samples/   tools/     vendor/     dist/
   is **committed**; after changing anything under `src/` run `npm run build` and commit
   `dist/app.js` too (`npm run lint` fails if it is stale). Never edit `dist/` by hand.
 - Third-party code used at runtime is copied into `vendor/<name>/` with its LICENSE
-  (currently fflate for the `.pcam` ZIP container and three.js for the 3D view;
-  the build minifies three.js into the bundle and aliases its `three` import).
+  (currently fflate for the `.pcam` ZIP container, three.js for the 3D view and Clipper
+  for polygon booleans/offsets; the build minifies three.js and Clipper into the bundle and
+  aliases three.js's `three` import).
 
 - Parsers produce a command list that keeps source line numbers.
 - Stackup and layer roles come from the KiCad `.gbrjob` first, then Gerber X2 attributes,
   then filename guesses. Material colours live in one data table — never hard-code colours
   in render code.
-- `edit/` operates on the command model, not on rendered pixels.
+- `edit/` operates on the command model, not on rendered pixels. Edits are JSON ops on the
+  normalised command list, saved in `model/edits.json` and replayed on load; every op must
+  keep the current point for the commands after it, and the edited file must write back to
+  exactly the image shown (`test/unit/edit/`).
 - `drc/` checks use the same tool library and toolpaths as `cam/` — don't duplicate
   offsetting logic. Every finding should carry a location and source line ref.
 - Each machine post-processor lives in its own file in `src/post/` and implements the
