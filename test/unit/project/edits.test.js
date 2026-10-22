@@ -106,6 +106,7 @@ test('editor settings: defaults filled in, nonsense replaced, saved in the proje
   assert.deepEqual(p.settings.edit, {
     on: false,
     tool: 'select',
+    selectMode: 'enclose',
     gridMm: 0.05,
     aperture: { code: null, template: 'C', sizesMm: [0.25, 0.25] },
     holeDiaMm: 0.8,
@@ -113,7 +114,8 @@ test('editor settings: defaults filled in, nonsense replaced, saved in the proje
   assert.deepEqual(
     normaliseEdit({
       on: true,
-      tool: 'lasso',
+      tool: 'brush',
+      selectMode: 'greedy',
       gridMm: -1,
       aperture: { code: 12, template: 'X', sizesMm: [0, 2] },
       keep: 1,
@@ -121,6 +123,7 @@ test('editor settings: defaults filled in, nonsense replaced, saved in the proje
     {
       on: true,
       tool: 'select',
+      selectMode: 'enclose',
       gridMm: 0.05,
       aperture: { code: 12, template: 'C', sizesMm: [0.25, 2] },
       holeDiaMm: 0.8,
@@ -128,5 +131,10 @@ test('editor settings: defaults filled in, nonsense replaced, saved in the proje
     },
   );
   p.settings.edit = normaliseEdit({ on: true, tool: 'track', gridMm: 0 });
+  assert.deepEqual(loadProject(saveProject(p)).settings.edit, p.settings.edit);
+  // the toolbar's tools and the box/lasso mode
+  p.settings.edit = normaliseEdit({ on: true, tool: 'lasso', selectMode: 'touch' });
+  assert.equal(p.settings.edit.tool, 'lasso');
+  assert.equal(p.settings.edit.selectMode, 'touch');
   assert.deepEqual(loadProject(saveProject(p)).settings.edit, p.settings.edit);
 });

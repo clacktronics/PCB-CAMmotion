@@ -1,6 +1,8 @@
-// Editor panel (milestone 4): edit mode, tools (select / pad or hole / track / region),
-// selection with drag-move and box select, the edit actions (delete, move by, convert to
-// regions, unify the layer), undo/redo, export of the edited file.
+// Editor (milestone 4): edit mode, a Photoshop-style tool strip on the board (select, lasso,
+// hand, pad or hole, track, region), selection with drag-move, box and lasso select (objects
+// entirely inside, or anything touched), a right-click menu (same shape, same aperture,
+// connected, …), the edit actions (delete, move by, convert to regions, unify the layer),
+// undo/redo, export of the edited file.
 // The edits themselves are DOM-free (src/edit/); this file turns pointer and key input into
 // edit ops. Its settings live in settings.edit of the .pcam (src/project/project.js).
 
@@ -9,17 +11,42 @@ import { layerEditor, revertEdits, EDIT_TOOLS } from '../project/project.js';
 import { EditError } from '../edit/session.js';
 import { describeAperture } from '../analyze/apertures.js';
 import { MISC, rgba } from '../model/materials.js';
+import { objectsInPolygon, boxPolygon, sameShape, sameAperture, connected } from '../edit/selection.js';
+import { openMenu } from './context-menu.js';
 
-const TOOL_LABEL = { select: 'Select', pad: 'Pad', track: 'Track', region: 'Region' };
-const TOOL_KEY = { v: 'select', p: 'pad', t: 'track', r: 'region' };
+const TOOL_LABEL = { select: 'Select', lasso: 'Lasso', hand: 'Hand', pad: 'Pad', track: 'Track', region: 'Region' };
+const TOOL_KEY = { v: 'select', l: 'lasso', h: 'hand', p: 'pad', t: 'track', r: 'region' };
+const PICK_HELP = 'Shift adds to the selection, Alt or Ctrl takes away';
 const TOOL_TITLE = {
-  select:
-    'Select (V): click an object, Shift+click to add or remove, Shift+drag a box; drag a selected object to move it',
+  select: `Select (V): click an object, drag a box around objects (${PICK_HELP}); drag a selected object to move it`,
+  lasso: `Lasso (L): draw round the objects to select (${PICK_HELP})`,
+  hand: 'Hand (H): drag to pan the board (any tool: hold Space or drag with the middle button)',
   pad: 'Pad (P): click to place a pad with the chosen aperture (on a drill layer: a hole)',
-  track: 'Track (T): click the points, double-click or Enter to finish, Backspace removes the last point',
-  region: 'Region (R): click the corners, click the first point, double-click or Enter to close it',
+  track:
+    'Track (T): click the points, double-click or Enter to finish, Backspace removes the last point, Shift keeps to 45°',
+  region:
+    'Region (R): click the corners like a pen tool, click the first point, double-click or Enter to close it; Shift keeps to 45°',
+};
+const MODE_TITLE = {
+  enclose: 'Box and lasso select objects entirely inside (non-greedy). G: switch to touching',
+  touch: 'Box and lasso select everything they touch (greedy). G: switch to entirely inside',
+};
+// tool strip icons: 24×24 line drawings (currentColor)
+const ICON = {
+  select: '<path d="M6 3l12 9-5.5 1 3.2 6.3-2.4 1.2-3.2-6.4L6 18z"/>',
+  lasso: '<ellipse cx="12" cy="9" rx="8" ry="5" stroke-dasharray="3 2"/><path d="M7 13c-2 2-1 4 1 4s2 2 0 4"/>',
+  hand: '<path d="M8 12V5.5a1.5 1.5 0 013 0V11m0-6.5V4a1.5 1.5 0 013 0v7m0-6a1.5 1.5 0 013 0v7m0-3a1.5 1.5 0 013 0v4c0 4-3 7-7 7h-1c-3 0-4.5-1.5-6-4l-2.6-4.4a1.5 1.5 0 012.6-1.5L8 15"/>',
+  pad: '<circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
+  track: '<path d="M4 18h6l8-8h3" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>',
+  region:
+    '<path d="M4 20l3-11 10-4 3 10-9 6z"/><circle cx="4" cy="20" r="1.6"/><circle cx="7" cy="9" r="1.6"/><circle cx="17" cy="5" r="1.6"/><circle cx="20" cy="15" r="1.6"/><circle cx="11" cy="21" r="1.6"/>',
+  enclose:
+    '<rect x="3" y="3" width="18" height="18" stroke-dasharray="3 2"/><rect x="8" y="8" width="8" height="8" fill="currentColor"/>',
+  touch:
+    '<rect x="3" y="3" width="13" height="13" stroke-dasharray="3 2"/><rect x="11" y="11" width="10" height="10" fill="currentColor"/>',
 };
 const CLOSE_PX = 8;
+const LASSO_STEP_PX = 3;
 
 export class EditorPanel {
   /**
@@ -34,7 +61,13 @@ export class EditorPanel {
     this.cursor = null;
     this.drag = null; // { kind: 'move'|'box', start, dx, dy, end }
     this.busy = false;
+    this.space = false; // Space held: drags pan, whatever the tool
     this.el = h('section', { class: 'editor hidden', 'data-testid': 'editor' });
+    this.strip = h('nav', { class: 'tool-strip hidden', 'data-testid': 'tool-strip', 'aria-label': 'Edit tools' });
+    window.addEventListener('keyup', (e) => {
+      if (e.key === ' ') this.space = false;
+    });
+    window.addEventListener('blur', () => (this.space = false));
     this.toolbarButton = h(
       'button',
       {
@@ -63,6 +96,12 @@ export class EditorPanel {
     this.s.on = on;
     this.cancelSketch();
     this.#setSelection([]);
+    this.host.touch();
+    this.refresh();
+  }
+
+  setSelectMode(mode) {
+    this.s.selectMode = mode === 'touch' ? 'touch' : 'enclose';
     this.host.touch();
     this.refresh();
   }
@@ -104,6 +143,7 @@ export class EditorPanel {
     v.canvas.classList.toggle('editing', on);
     v.canvas.dataset.tool = on ? this.s.tool : '';
     v.drawOverlay();
+    this.#refreshStrip();
     clear(this.el);
     if (!on) return;
     this.el.append(h('h2', {}, 'Edit'));
@@ -114,26 +154,32 @@ export class EditorPanel {
     const ed = layer.editor;
     const drill = layer.kind === 'excellon';
     const problems = ed ? ed.problems : [];
-    const tools = drill ? ['select', 'pad'] : EDIT_TOOLS;
-    if (!tools.includes(this.s.tool)) this.s.tool = 'select';
     const btn = (label, attrs) => h('button', attrs, label);
+    const tool = this.s.tool;
     this.el.append(
       h('div', { class: 'edit-row' }, [
-        h(
-          'span',
-          { class: 'seg' },
-          tools.map((t) =>
-            btn(drill && t === 'pad' ? 'Hole' : TOOL_LABEL[t], {
-              class: this.s.tool === t ? 'on' : '',
-              'data-testid': `tool-${t}`,
-              title: TOOL_TITLE[t],
-              onclick: () => this.setTool(t),
-            }),
-          ),
-        ),
+        h('span', { class: 'muted', 'data-testid': 'edit-tool' }, `${this.#toolLabel(tool)} tool`),
       ]),
     );
-    if (this.s.tool === 'pad' || this.s.tool === 'track') this.el.append(this.#apertureRow(layer));
+    if (tool === 'select' || tool === 'lasso')
+      this.el.append(
+        h('div', { class: 'edit-row' }, [
+          'Box/lasso picks ',
+          h(
+            'span',
+            { class: 'seg' },
+            ['enclose', 'touch'].map((m) =>
+              btn(m === 'enclose' ? 'Inside only' : 'Touching', {
+                class: this.s.selectMode === m ? 'on' : '',
+                'data-testid': `select-mode-${m}`,
+                title: MODE_TITLE[m],
+                onclick: () => this.setSelectMode(m),
+              }),
+            ),
+          ),
+        ]),
+      );
+    if (tool === 'pad' || tool === 'track') this.el.append(this.#apertureRow(layer));
     this.el.append(
       h('div', { class: 'edit-row' }, [
         h('label', { title: 'Positions and moves snap to this grid (0 = no snapping)' }, [
@@ -230,6 +276,65 @@ export class EditorPanel {
             ? `${ed.ops.length} edit${ed.ops.length === 1 ? '' : 's'} on ${layer.name}, saved in the project; the original file is kept`
             : `${layer.name}: no edits`,
       ),
+    );
+  }
+
+  /** Tools of the edited layer: drill layers have no tracks or regions. */
+  #tools(layer) {
+    return layer?.kind === 'excellon' ? EDIT_TOOLS.filter((t) => t !== 'track' && t !== 'region') : EDIT_TOOLS;
+  }
+
+  #toolLabel(tool) {
+    return tool === 'pad' && this.layer()?.kind === 'excellon' ? 'Hole' : TOOL_LABEL[tool];
+  }
+
+  /** The tool strip on the board's left edge (Photoshop-style): tools, then the box/lasso mode. */
+  #refreshStrip() {
+    const layer = this.layer();
+    const on = this.on;
+    clear(this.strip);
+    this.strip.classList.toggle('hidden', !on);
+    if (!on) return;
+    const tools = this.#tools(layer);
+    if (!tools.includes(this.s.tool)) this.s.tool = 'select';
+    const icon = (name) => {
+      const s = h('span', { class: 'icon', 'aria-hidden': 'true' });
+      // fixed markup from ICON above, never user data
+      s.innerHTML = `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.6">${ICON[name]}</svg>`;
+      return s;
+    };
+    const button = (name, label, attrs) => h('button', { ...attrs, 'aria-label': label }, [icon(name)]);
+    const groups = [
+      ['select', 'lasso', 'hand'],
+      ['pad', 'track', 'region'],
+    ];
+    for (const g of groups) {
+      const shown = g.filter((t) => tools.includes(t));
+      if (!shown.length) continue;
+      if (this.strip.childElementCount) this.strip.append(h('span', { class: 'strip-sep' }));
+      for (const t of shown) {
+        this.strip.append(
+          button(t, this.#toolLabel(t), {
+            class: this.s.tool === t ? 'on' : '',
+            'aria-pressed': this.s.tool === t ? 'true' : 'false',
+            'data-testid': `tool-${t}`,
+            title: TOOL_TITLE[t],
+            disabled: !layer,
+            onclick: () => this.setTool(t),
+          }),
+        );
+      }
+    }
+    const mode = this.s.selectMode;
+    this.strip.append(
+      h('span', { class: 'strip-sep' }),
+      button(mode, mode === 'enclose' ? 'Select inside only' : 'Select touching', {
+        class: 'mode',
+        'data-testid': 'select-mode',
+        'data-mode': mode,
+        title: MODE_TITLE[mode],
+        onclick: () => this.setSelectMode(mode === 'enclose' ? 'touch' : 'enclose'),
+      }),
     );
   }
 
@@ -352,6 +457,107 @@ export class EditorPanel {
     if (!layer) return;
     this.#setSelection(layer.image.objects.map((_, i) => i));
     this.refresh();
+  }
+
+  invertSelection() {
+    const layer = this.layer();
+    if (!layer) return;
+    const sel = new Set(this.sel);
+    this.#setSelection(layer.image.objects.map((_, i) => i).filter((i) => !sel.has(i)));
+    this.refresh();
+  }
+
+  /**
+   * Select by a query on the selection (src/edit/selection.js): same shape, same aperture,
+   * connected. The result replaces the selection and is reported in the status bar.
+   */
+  selectBy(kind) {
+    const layer = this.layer();
+    if (!layer || !this.sel.length) return;
+    const query = { shape: sameShape, aperture: sameAperture, connected }[kind];
+    const found = query(layer.image, this.sel);
+    this.#setSelection(found);
+    this.refresh();
+    const what = { shape: 'with the same shape', aperture: 'with the same aperture', connected: 'connected' }[kind];
+    this.host.message(`${found.length} object${found.length === 1 ? '' : 's'} ${what}`);
+  }
+
+  /** Box or lasso: combine what the polygon picks with the selection (Shift adds, Alt/Ctrl removes). */
+  #pickPolygon(poly, e) {
+    const layer = this.layer();
+    if (!layer) return;
+    const picked = objectsInPolygon(layer.image, poly, this.s.selectMode);
+    if (e.altKey || e.ctrlKey || e.metaKey) {
+      const drop = new Set(picked);
+      this.#setSelection(this.sel.filter((i) => !drop.has(i)));
+    } else this.#setSelection(e.shiftKey ? [...this.sel, ...picked] : picked);
+    this.refresh();
+  }
+
+  /**
+   * Right-click on the board. In edit mode: a menu for the object under the pointer (it is
+   * selected first unless already part of the selection) or for the selection. Outside edit
+   * mode: the same selection queries, which switch to editing that object's layer.
+   */
+  contextMenu(mm, clientX, clientY) {
+    const v = this.host.viewer;
+    const hit = v.pickAt(mm[0], mm[1]);
+    if (!this.on) {
+      const l = hit && this.host.layers().find((x) => x.id === hit.layerId);
+      if (!l || (l.kind !== 'gerber' && l.kind !== 'excellon')) return false;
+      const edit = (then) => () => {
+        this.host.editLayer(l.id);
+        if (!this.on) this.setOn(true);
+        this.select([hit.index]);
+        then?.();
+      };
+      openMenu(clientX, clientY, [
+        { label: `Edit ${l.name}`, hint: 'E', testid: 'ctx-edit', action: edit() },
+        null,
+        { label: 'Select same shape', testid: 'ctx-same-shape', action: edit(() => this.selectBy('shape')) },
+        {
+          label: 'Select same aperture',
+          testid: 'ctx-same-aperture',
+          disabled: !hit.object.ap,
+          action: edit(() => this.selectBy('aperture')),
+        },
+        { label: 'Select connected', testid: 'ctx-connected', action: edit(() => this.selectBy('connected')) },
+      ]);
+      return true;
+    }
+    const layer = this.layer();
+    if (!layer) return false;
+    if (this.sketch.length) this.cancelSketch();
+    if (hit && !this.sel.includes(hit.index)) this.select([hit.index]);
+    const objs = this.sel.map((i) => layer.image.objects[i]);
+    const n = this.sel.length;
+    const codes = [...new Set(objs.filter((o) => o.ap).map((o) => o.ap.code))];
+    const drill = layer.kind === 'excellon';
+    openMenu(clientX, clientY, [
+      { label: 'Select same shape', testid: 'ctx-same-shape', disabled: !n, action: () => this.selectBy('shape') },
+      {
+        label: 'Select same aperture',
+        hint: codes.length === 1 ? `${drill ? 'T' : 'D'}${codes[0]}` : '',
+        testid: 'ctx-same-aperture',
+        disabled: !codes.length,
+        action: () => this.selectBy('aperture'),
+      },
+      { label: 'Select connected', testid: 'ctx-connected', disabled: !n, action: () => this.selectBy('connected') },
+      null,
+      { label: 'Select all', hint: 'Ctrl+A', testid: 'ctx-select-all', action: () => this.selectAll() },
+      { label: 'Invert selection', hint: 'Ctrl+I', testid: 'ctx-invert', action: () => this.invertSelection() },
+      {
+        label: 'Deselect',
+        hint: 'Esc',
+        testid: 'ctx-deselect',
+        disabled: !n,
+        action: () => (this.#setSelection([]), this.refresh()),
+      },
+      null,
+      ...(drill ? [] : [{ label: 'To region', testid: 'ctx-to-region', disabled: !n, action: () => this.toRegion() }]),
+      { label: 'Delete', hint: 'Del', testid: 'ctx-delete', disabled: !n, action: () => this.deleteSelection() },
+    ]);
+    return true;
   }
 
   /** Command targets of the selection, or null (with a message) if one cannot be edited. */
@@ -509,7 +715,16 @@ export class EditorPanel {
     }
     if (mod && k.toLowerCase() === 'y') return (this.redo(), true);
     if (mod && k.toLowerCase() === 'a') return (this.selectAll(), true);
+    if (mod && k.toLowerCase() === 'i') return (this.invertSelection(), true);
     if (mod || e.altKey) return false;
+    if (k === ' ') {
+      this.space = true;
+      return e.target?.tagName !== 'BUTTON'; // Space still presses a focused button
+    }
+    if (k.toLowerCase() === 'g') {
+      this.setSelectMode(this.s.selectMode === 'enclose' ? 'touch' : 'enclose');
+      return true;
+    }
     if (k === 'Escape') {
       if (this.sketch.length || this.drag) this.cancelSketch();
       else (this.#setSelection([]), this.refresh());
@@ -532,11 +747,31 @@ export class EditorPanel {
       return true;
     }
     const tool = TOOL_KEY[k.toLowerCase()];
-    if (tool && (tool === 'select' || tool === 'pad' || this.layer()?.kind === 'gerber')) {
+    if (tool && this.#tools(this.layer()).includes(tool)) {
       this.setTool(tool);
       return true;
     }
     return false;
+  }
+
+  /**
+   * Snap a new track or region point to the grid; with Shift, keep the segment from the last
+   * point to a multiple of 45°.
+   */
+  #placePt(mm, e) {
+    const last = this.sketch.at(-1);
+    if (!e?.shiftKey || !last) return this.#snapPt(mm);
+    const dx = mm[0] - last[0];
+    const dy = mm[1] - last[1];
+    const a = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4);
+    // direction as whole steps (-1, 0, 1): a 45° step moves X and Y by the same amount, so
+    // a grid-snapped step count keeps the point on the grid
+    const ux = Math.round(Math.cos(a));
+    const uy = Math.round(Math.sin(a));
+    const t = (dx * ux + dy * uy) / (ux * ux + uy * uy);
+    const g = this.s.gridMm;
+    const k = g > 0 ? Math.round(t / g) * g : t;
+    return [round6(last[0] + ux * k), round6(last[1] + uy * k)];
   }
 
   #handler() {
@@ -544,17 +779,19 @@ export class EditorPanel {
     return {
       down: (mm, e) => {
         const layer = this.layer();
-        if (!layer || this.s.tool !== 'select') return false;
+        const tool = this.s.tool;
+        if (!layer || this.space || (tool !== 'select' && tool !== 'lasso')) return false;
+        if (tool === 'lasso') {
+          this.drag = { kind: 'lasso', points: [mm] };
+          return true;
+        }
         const hit = v.pickAt(mm[0], mm[1]);
-        if (hit && (!e.shiftKey || this.sel.includes(hit.index))) {
+        if (hit && !e.altKey && (!e.shiftKey || this.sel.includes(hit.index))) {
           this.drag = { kind: 'move', start: mm, dx: 0, dy: 0, hit: hit.index };
           return true;
         }
-        if (!hit && e.shiftKey) {
-          this.drag = { kind: 'box', start: mm, end: mm };
-          return true;
-        }
-        return false;
+        this.drag = { kind: 'box', start: mm, end: mm };
+        return true;
       },
       move: (mm) => {
         const d = this.drag;
@@ -563,6 +800,9 @@ export class EditorPanel {
           if (!this.sel.includes(d.hit)) this.#setSelection([d.hit]);
           d.dx = round6(this.snap(mm[0] - d.start[0]));
           d.dy = round6(this.snap(mm[1] - d.start[1]));
+        } else if (d.kind === 'lasso') {
+          const last = d.points.at(-1);
+          if (Math.hypot(mm[0] - last[0], mm[1] - last[1]) * v.view.scale >= LASSO_STEP_PX) d.points.push(mm);
         } else d.end = mm;
         v.drawOverlay();
       },
@@ -575,32 +815,31 @@ export class EditorPanel {
           else v.drawOverlay();
           return;
         }
-        const layer = this.layer();
-        const ob = layer.image.objBounds;
-        const [x0, x1] = [Math.min(d.start[0], d.end[0]), Math.max(d.start[0], d.end[0])];
-        const [y0, y1] = [Math.min(d.start[1], d.end[1]), Math.max(d.start[1], d.end[1])];
-        const inside = [];
-        for (let i = 0; i < layer.image.objects.length; i++)
-          if (ob[i * 4] >= x0 && ob[i * 4 + 2] <= x1 && ob[i * 4 + 1] >= y0 && ob[i * 4 + 3] <= y1) inside.push(i);
-        this.#setSelection([...this.sel, ...inside]);
-        this.refresh();
+        if (d.kind === 'lasso') {
+          d.points.push(mm);
+          this.#pickPolygon(d.points.flat(), e);
+        } else this.#pickPolygon(boxPolygon(d.start, d.end), e);
+        v.drawOverlay();
       },
       click: (mm, e) => {
         const layer = this.layer();
         if (!layer) return;
         const tool = this.s.tool;
-        if (tool === 'select') {
+        if (tool === 'hand') return;
+        if (tool === 'select' || tool === 'lasso') {
           const hit = v.pickAt(mm[0], mm[1]);
           if (e.shiftKey || e.ctrlKey || e.metaKey) {
             if (hit)
               this.#setSelection(
                 this.sel.includes(hit.index) ? this.sel.filter((i) => i !== hit.index) : [...this.sel, hit.index],
               );
+          } else if (e.altKey) {
+            if (hit) this.#setSelection(this.sel.filter((i) => i !== hit.index));
           } else this.#setSelection(hit ? [hit.index] : []);
           this.refresh();
           return;
         }
-        const p = this.#snapPt(mm);
+        const p = tool === 'pad' ? this.#snapPt(mm) : this.#placePt(mm, e);
         if (tool === 'pad') {
           if (layer.kind === 'excellon')
             this.apply({ type: 'addHit', diaMm: this.s.holeDiaMm, xMm: p[0], yMm: p[1] }, 'Hole added');
@@ -619,9 +858,9 @@ export class EditorPanel {
       dblclick: () => {
         if (this.sketch.length) this.#finishSketch();
       },
-      hover: (mm) => {
-        this.cursor = this.#snapPt(mm);
-        if (this.s.tool !== 'select') v.drawOverlay();
+      hover: (mm, e) => {
+        this.cursor = this.s.tool === 'pad' ? this.#snapPt(mm) : this.#placePt(mm, e);
+        if (this.s.tool === 'pad' || this.s.tool === 'track' || this.s.tool === 'region') v.drawOverlay();
       },
     };
   }
@@ -638,18 +877,27 @@ export class EditorPanel {
     if (d?.kind === 'move' && (d.dx || d.dy)) {
       v.outlineObjects(ctx, map, layer.id, this.sel, MISC.selection, 0.15, d.dx, d.dy);
     }
-    if (d?.kind === 'box') {
-      const [ax, ay] = v.toPx(map, ...d.start);
-      const [bx, by] = v.toPx(map, ...d.end);
+    if (d?.kind === 'box' || d?.kind === 'lasso') {
+      // inside-only picks draw a solid outline, touching picks a dashed one (as in CAD tools)
+      const pts = d.kind === 'box' ? [d.start, [d.end[0], d.start[1]], d.end, [d.start[0], d.end[1]]] : d.points;
       ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.setLineDash([4 * v.dpr, 4 * v.dpr]);
+      ctx.beginPath();
+      pts.forEach((p, i) => {
+        const [x, y] = v.toPx(map, ...p);
+        if (i) ctx.lineTo(x, y);
+        else ctx.moveTo(x, y);
+      });
+      ctx.closePath();
+      ctx.fillStyle = rgba(MISC.selection, 0.08);
+      ctx.fill();
+      if (this.s.selectMode === 'touch') ctx.setLineDash([4 * v.dpr, 4 * v.dpr]);
       ctx.strokeStyle = colour;
       ctx.lineWidth = v.dpr;
-      ctx.strokeRect(Math.min(ax, bx), Math.min(ay, by), Math.abs(bx - ax), Math.abs(by - ay));
+      ctx.stroke();
       ctx.setLineDash([]);
     }
     const tool = this.s.tool;
-    if (tool === 'select') return;
+    if (tool !== 'pad' && tool !== 'track' && tool !== 'region') return;
     const half = this.#apertureHalf(layer);
     const pts = this.cursor ? [...this.sketch, this.cursor] : [...this.sketch];
     ctx.setTransform(1, 0, 0, 1, 0, 0);

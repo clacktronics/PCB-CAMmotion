@@ -3985,16 +3985,16 @@
   function convexHull(points2) {
     const pts = points2.slice().sort((a2, b3) => a2[0] - b3[0] || a2[1] - b3[1]);
     if (pts.length < 3) return pts;
-    const cross2 = (o2, a2, b3) => (a2[0] - o2[0]) * (b3[1] - o2[1]) - (a2[1] - o2[1]) * (b3[0] - o2[0]);
+    const cross3 = (o2, a2, b3) => (a2[0] - o2[0]) * (b3[1] - o2[1]) - (a2[1] - o2[1]) * (b3[0] - o2[0]);
     const lower = [];
     for (const p of pts) {
-      while (lower.length >= 2 && cross2(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop();
+      while (lower.length >= 2 && cross3(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop();
       lower.push(p);
     }
     const upper = [];
     for (let i = pts.length - 1; i >= 0; i--) {
       const p = pts[i];
-      while (upper.length >= 2 && cross2(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop();
+      while (upper.length >= 2 && cross3(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop();
       upper.push(p);
     }
     upper.pop();
@@ -4783,13 +4783,13 @@
   }
   function inShape(ap2, x2, y2) {
     ap2._flat ??= ap2.shape.parts.map((p) => ({ dark: p.dark, contours: flattenPath(p.path, 1e-3) }));
-    let inside = false;
+    let inside2 = false;
     for (const p of ap2._flat) {
       let w2 = 0;
       for (const c of p.contours) w2 += winding(c, x2, y2);
-      if (w2 !== 0) inside = p.dark;
+      if (w2 !== 0) inside2 = p.dark;
     }
-    return inside;
+    return inside2;
   }
   function winding(c, x2, y2) {
     let w2 = 0;
@@ -4827,7 +4827,7 @@
   var Viewer = class {
     /**
      * @param {HTMLCanvasElement} canvas
-     * @param {{onCursor?:(x:number,y:number)=>void, onSelect?:(hit:object|null)=>void, onHover?:(hit:object|null)=>void, onView?:(v:object)=>void}} cb
+     * @param {{onCursor?:(x:number,y:number)=>void, onSelect?:(hit:object|null)=>void, onHover?:(hit:object|null)=>void, onView?:(v:object)=>void, onContextMenu?:(mm:number[], e:MouseEvent)=>boolean}} cb
      */
     constructor(canvas, overlay, cb = {}) {
       this.canvas = canvas;
@@ -5165,6 +5165,9 @@
         c.setPointerCapture(e.pointerId);
       });
       c.addEventListener("dblclick", (e) => this.edit?.dblclick?.(this.toMm(e.clientX, e.clientY), e));
+      c.addEventListener("contextmenu", (e) => {
+        if (this.cb.onContextMenu?.(this.toMm(e.clientX, e.clientY), e)) e.preventDefault();
+      });
       c.addEventListener("pointermove", (e) => {
         const [x2, y2] = this.toMm(e.clientX, e.clientY);
         this.cb.onCursor?.(x2, y2);
@@ -20927,13 +20930,13 @@ void main() {
   }
 
   // src/render3d/layer-pictures.js
-  function pictureFrame(bounds, maxPx = 2048, maxPxPerMm = 25) {
-    const wMm = Math.max(bounds[2] - bounds[0], 1e-3);
-    const hMm = Math.max(bounds[3] - bounds[1], 1e-3);
+  function pictureFrame(bounds2, maxPx = 2048, maxPxPerMm = 25) {
+    const wMm = Math.max(bounds2[2] - bounds2[0], 1e-3);
+    const hMm = Math.max(bounds2[3] - bounds2[1], 1e-3);
     const s = Math.min(maxPxPerMm, maxPx / Math.max(wMm, hMm));
     const w2 = Math.max(1, Math.ceil(wMm * s));
     const h2 = Math.max(1, Math.ceil(hMm * s));
-    return { bounds, w: w2, h: h2, map: { s, mirror: false, ox: -bounds[0] * s, oy: bounds[3] * s } };
+    return { bounds: bounds2, w: w2, h: h2, map: { s, mirror: false, ox: -bounds2[0] * s, oy: bounds2[3] * s } };
   }
   function loopsBounds(loops) {
     const b3 = [Infinity, Infinity, -Infinity, -Infinity];
@@ -21212,19 +21215,19 @@ void main() {
       const layers = this.layers.filter((l) => l.image);
       const profile = layers.find((l) => l.role.type === "profile");
       const loops = boardArea(layers, profile);
-      const bounds = loops && loopsBounds(loops);
+      const bounds2 = loops && loopsBounds(loops);
       this.items = [];
       this.frame = null;
-      if (!bounds) return this.requestRender();
+      if (!bounds2) return this.requestRender();
       const st2 = this.settings.stackup || {};
       const { items } = buildStack3d(layers, st2, { showPaste: true });
       this.items = items;
       const maxTex = Math.min(4096, this.gl.capabilities.maxTextureSize || 2048);
-      this.frame = pictureFrame(bounds, Math.min(maxTex, 3072));
+      this.frame = pictureFrame(bounds2, Math.min(maxTex, 3072));
       const pictures = new LayerPictures(layers, st2, this.frame);
       const solo = this.settings.solo || [];
       const anisotropy = Math.min(8, this.gl.capabilities.getMaxAnisotropy());
-      const [x0, y0, x1, y1] = bounds;
+      const [x0, y0, x1, y1] = bounds2;
       const cx = (x0 + x1) / 2;
       const cy = (y0 + y1) / 2;
       const plane = new Wn(x1 - x0, y1 - y0);
@@ -21508,17 +21511,17 @@ void main() {
     1: (raw) => ({ ...raw, manifest: { ...raw.manifest, schemaVersion: 2 } })
   };
   function migrate(raw, migrations = MIGRATIONS, target = SCHEMA_VERSION) {
-    let current = raw;
-    while (current.manifest.schemaVersion < target) {
-      const from = current.manifest.schemaVersion;
+    let current2 = raw;
+    while (current2.manifest.schemaVersion < target) {
+      const from = current2.manifest.schemaVersion;
       const step = migrations[from];
       if (!step) throw new Error(`No migration from .pcam schema ${from} to ${from + 1}`);
-      current = step(current);
-      if (current.manifest.schemaVersion !== from + 1) {
+      current2 = step(current2);
+      if (current2.manifest.schemaVersion !== from + 1) {
         throw new Error(`Migration from schema ${from} did not set schemaVersion to ${from + 1}`);
       }
     }
-    return current;
+    return current2;
   }
 
   // vendor/fflate/fflate.js
@@ -25127,8 +25130,8 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     for (let i = 0; i < n2; i++) {
       const p = ring[i];
       if (hx >= p[0] && p[0] >= mx && hx !== p[0]) {
-        const inside = hy < my ? pointInTriangle(hx, hy, mx, my, qx, hy, p[0], p[1]) : pointInTriangle(qx, hy, mx, my, hx, hy, p[0], p[1]);
-        if (!inside) continue;
+        const inside2 = hy < my ? pointInTriangle(hx, hy, mx, my, qx, hy, p[0], p[1]) : pointInTriangle(qx, hy, mx, my, hx, hy, p[0], p[1]);
+        if (!inside2) continue;
         const tan = Math.abs(hy - p[1]) / (hx - p[0]);
         if (locallyInside(ring, i, h2) && (tan < tanMin || tan === tanMin && (p[0] > ring[best][0] || p[0] === ring[best][0] && i > best))) {
           best = i;
@@ -25959,6 +25962,228 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     return { name, kind, diagnostics: null };
   }
 
+  // src/edit/selection.js
+  var TOL_MM = 2e-3;
+  var EPS = 1e-9;
+  var SELECT_MODES = ["enclose", "touch"];
+  var cache = /* @__PURE__ */ new WeakMap();
+  function contoursOf(image, i) {
+    let c = cache.get(image);
+    if (!c) cache.set(image, c = []);
+    if (!c[i]) {
+      const o2 = image.objects[i];
+      const cs3 = objectContours(o2, TOL_MM);
+      c[i] = cs3.length ? cs3 : centreLine(o2);
+    }
+    return c[i];
+  }
+  function centreLine(o2) {
+    switch (o2.k) {
+      case "F":
+        return [[o2.x, o2.y]];
+      case "L":
+        return [[o2.x1, o2.y1, o2.x2, o2.y2]];
+      case "A": {
+        const n2 = Math.max(2, Math.ceil(Math.abs(o2.sw) / (Math.PI / 32)));
+        const pts = [];
+        for (let k2 = 0; k2 <= n2; k2++) {
+          const a2 = o2.a0 + o2.sw * k2 / n2;
+          pts.push(o2.cx + o2.r * Math.cos(a2), o2.cy + o2.r * Math.sin(a2));
+        }
+        for (let k2 = pts.length - 4; k2 >= 2; k2 -= 2) pts.push(pts[k2], pts[k2 + 1]);
+        return [pts];
+      }
+    }
+    return [];
+  }
+  function boxPolygon([ax, ay], [bx, by]) {
+    return [ax, ay, bx, ay, bx, by, ax, by];
+  }
+  function objectsInPolygon(image, poly, mode = "enclose") {
+    if (poly.length < 6) return [];
+    const pb = bounds(poly);
+    const ob = image.objBounds;
+    const out = [];
+    for (let i = 0; i < image.objects.length; i++) {
+      const b3 = [ob[i * 4], ob[i * 4 + 1], ob[i * 4 + 2], ob[i * 4 + 3]];
+      if (mode === "enclose") {
+        if (b3[0] < pb[0] || b3[1] < pb[1] || b3[2] > pb[2] || b3[3] > pb[3]) continue;
+        if (enclosed(contoursOf(image, i), poly)) out.push(i);
+      } else {
+        if (!overlap(b3, pb)) continue;
+        if (touches(contoursOf(image, i), [poly])) out.push(i);
+      }
+    }
+    return out;
+  }
+  function apertureKey(ap2) {
+    if (!ap2) return null;
+    if (ap2.kind === "block") return `block:${ap2.code}`;
+    const p = (ap2.mm ?? ap2.params ?? []).map((v) => typeof v === "number" ? r6(v) : v);
+    return `${ap2.kind}:${ap2.template}:${p.join(",")}`;
+  }
+  function shapeKey(o2) {
+    const m = o2.m ? `|${o2.m.map(r6).join(",")}` : "";
+    const pol = o2.dark ? "" : "|clear";
+    switch (o2.k) {
+      case "F":
+        return `F|${apertureKey(o2.ap)}${m}${pol}`;
+      case "L": {
+        let dx = r6(o2.x2 - o2.x1);
+        let dy = r6(o2.y2 - o2.y1);
+        if (dx < 0 || dx === 0 && dy < 0) [dx, dy] = [-dx, -dy];
+        return `L|${apertureKey(o2.ap)}|${dx},${dy}${m}${pol}`;
+      }
+      case "A":
+        return `A|${apertureKey(o2.ap)}|${r6(o2.r)},${r6(o2.a0)},${r6(o2.sw)}${m}${pol}`;
+      case "R": {
+        let x0 = Infinity;
+        let y0 = Infinity;
+        for (const c of o2.contours)
+          for (let i = 0; i < c.length; i += 2) {
+            x0 = Math.min(x0, c[i]);
+            y0 = Math.min(y0, c[i + 1]);
+          }
+        const rel = o2.contours.map((c) => c.map((v, i) => r6(v - (i % 2 ? y0 : x0))).join(","));
+        return `R|${rel.join(";")}${pol}`;
+      }
+    }
+    return null;
+  }
+  function sameShape(image, seeds) {
+    const keys = new Set(seeds.map((i) => shapeKey(image.objects[i])));
+    const out = [];
+    image.objects.forEach((o2, i) => keys.has(shapeKey(o2)) && out.push(i));
+    return out;
+  }
+  function sameAperture(image, seeds) {
+    const keys = new Set(seeds.map((i) => apertureKey(image.objects[i].ap)).filter(Boolean));
+    const out = [];
+    image.objects.forEach((o2, i) => o2.ap && keys.has(apertureKey(o2.ap)) && out.push(i));
+    return out;
+  }
+  function connected(image, seeds) {
+    const objs = image.objects;
+    const ob = image.objBounds;
+    const grid = boundsGrid(image);
+    const seen = new Set(seeds);
+    const queue = seeds.filter((i) => objs[i]?.dark);
+    while (queue.length) {
+      const i = queue.pop();
+      const b3 = [ob[i * 4], ob[i * 4 + 1], ob[i * 4 + 2], ob[i * 4 + 3]];
+      const ci2 = contoursOf(image, i);
+      for (const j2 of grid.query(b3)) {
+        if (seen.has(j2) || !objs[j2].dark) continue;
+        if (!touches(contoursOf(image, j2), ci2)) continue;
+        seen.add(j2);
+        queue.push(j2);
+      }
+    }
+    return [...seen].sort((a2, b3) => a2 - b3);
+  }
+  function boundsGrid(image) {
+    const ob = image.objBounds;
+    const n2 = image.objects.length;
+    const b3 = image.bounds ?? [0, 0, 1, 1];
+    const w2 = Math.max(b3[2] - b3[0], 1e-6);
+    const h2 = Math.max(b3[3] - b3[1], 1e-6);
+    const cell = Math.max(Math.sqrt(w2 * h2 / Math.max(1, n2)), 1e-3);
+    const cols = Math.max(1, Math.ceil(w2 / cell));
+    const rows = Math.max(1, Math.ceil(h2 / cell));
+    const cells = /* @__PURE__ */ new Map();
+    const big = [];
+    const range2 = (i0, i1, j0, j1) => [
+      Math.max(0, Math.floor((i0 - b3[0]) / cell)),
+      Math.min(cols - 1, Math.floor((i1 - b3[0]) / cell)),
+      Math.max(0, Math.floor((j0 - b3[1]) / cell)),
+      Math.min(rows - 1, Math.floor((j1 - b3[1]) / cell))
+    ];
+    for (let i = 0; i < n2; i++) {
+      const [c0, c1, r0, r1] = range2(ob[i * 4], ob[i * 4 + 2], ob[i * 4 + 1], ob[i * 4 + 3]);
+      if ((c1 - c0 + 1) * (r1 - r0 + 1) > 64) {
+        big.push(i);
+        continue;
+      }
+      for (let r2 = r0; r2 <= r1; r2++)
+        for (let c = c0; c <= c1; c++) {
+          const k2 = r2 * cols + c;
+          let l = cells.get(k2);
+          if (!l) cells.set(k2, l = []);
+          l.push(i);
+        }
+    }
+    return {
+      query(q) {
+        const out = new Set(big);
+        const [c0, c1, r0, r1] = range2(q[0] - EPS, q[2] + EPS, q[1] - EPS, q[3] + EPS);
+        for (let r2 = r0; r2 <= r1; r2++)
+          for (let c = c0; c <= c1; c++) for (const i of cells.get(r2 * cols + c) ?? []) out.add(i);
+        return [...out].filter((i) => overlap([ob[i * 4], ob[i * 4 + 1], ob[i * 4 + 2], ob[i * 4 + 3]], q));
+      }
+    };
+  }
+  function inside(contours, x2, y2) {
+    let w2 = 0;
+    for (const c of contours) w2 += winding(c, x2, y2);
+    return w2 !== 0;
+  }
+  function enclosed(contours, poly) {
+    if (!contours.length) return false;
+    for (const c of contours) for (let i = 0; i < c.length; i += 2) if (!inside([poly], c[i], c[i + 1])) return false;
+    return !edgesCross(contours, [poly]);
+  }
+  function touches(a2, b3) {
+    if (!a2.length || !b3.length) return false;
+    for (const c of a2) if (inside(b3, c[0], c[1])) return true;
+    for (const c of b3) if (inside(a2, c[0], c[1])) return true;
+    return edgesCross(a2, b3);
+  }
+  function edgesCross(a2, b3) {
+    for (const ca2 of a2) {
+      const ba = bounds(ca2);
+      for (const cb of b3) {
+        if (!overlap(ba, bounds(cb))) continue;
+        for (let i = 0, pi2 = ca2.length - 2; i < ca2.length; pi2 = i, i += 2) {
+          const sx0 = Math.min(ca2[pi2], ca2[i]);
+          const sx1 = Math.max(ca2[pi2], ca2[i]);
+          const sy0 = Math.min(ca2[pi2 + 1], ca2[i + 1]);
+          const sy1 = Math.max(ca2[pi2 + 1], ca2[i + 1]);
+          for (let j2 = 0, pj = cb.length - 2; j2 < cb.length; pj = j2, j2 += 2) {
+            if (Math.max(cb[pj], cb[j2]) < sx0 - EPS || Math.min(cb[pj], cb[j2]) > sx1 + EPS) continue;
+            if (Math.max(cb[pj + 1], cb[j2 + 1]) < sy0 - EPS || Math.min(cb[pj + 1], cb[j2 + 1]) > sy1 + EPS) continue;
+            if (segmentsMeet(ca2[pi2], ca2[pi2 + 1], ca2[i], ca2[i + 1], cb[pj], cb[pj + 1], cb[j2], cb[j2 + 1])) return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+  function segmentsMeet(x1, y1, x2, y2, x3, y3, x4, y4) {
+    const d1 = cross2(x3, y3, x4, y4, x1, y1);
+    const d2 = cross2(x3, y3, x4, y4, x2, y2);
+    const d3 = cross2(x1, y1, x2, y2, x3, y3);
+    const d4 = cross2(x1, y1, x2, y2, x4, y4);
+    if ((d1 > EPS && d2 < -EPS || d1 < -EPS && d2 > EPS) && (d3 > EPS && d4 < -EPS || d3 < -EPS && d4 > EPS))
+      return true;
+    return Math.abs(d1) <= EPS && onSegment(x3, y3, x4, y4, x1, y1) || Math.abs(d2) <= EPS && onSegment(x3, y3, x4, y4, x2, y2) || Math.abs(d3) <= EPS && onSegment(x1, y1, x2, y2, x3, y3) || Math.abs(d4) <= EPS && onSegment(x1, y1, x2, y2, x4, y4);
+  }
+  var cross2 = (ax, ay, bx, by, px, py) => (bx - ax) * (py - ay) - (by - ay) * (px - ax);
+  function onSegment(ax, ay, bx, by, px, py) {
+    return px >= Math.min(ax, bx) - EPS && px <= Math.max(ax, bx) + EPS && py >= Math.min(ay, by) - EPS && py <= Math.max(ay, by) + EPS;
+  }
+  function bounds(c) {
+    const b3 = [Infinity, Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < c.length; i += 2) {
+      if (c[i] < b3[0]) b3[0] = c[i];
+      if (c[i] > b3[2]) b3[2] = c[i];
+      if (c[i + 1] < b3[1]) b3[1] = c[i + 1];
+      if (c[i + 1] > b3[3]) b3[3] = c[i + 1];
+    }
+    return b3;
+  }
+  var overlap = (a2, b3) => a2[0] <= b3[2] + EPS && a2[2] >= b3[0] - EPS && a2[1] <= b3[3] + EPS && a2[3] >= b3[1] - EPS;
+  var r6 = (v) => Math.round(v * 1e6) / 1e6 || 0;
+
   // src/model/outline.js
   var JOIN_TOL_MM = 0.01;
   var ARC_TOL_MM = 2e-3;
@@ -26070,10 +26295,11 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     explodeStyle: "sheets",
     camera3d: null
   };
-  var EDIT_TOOLS = ["select", "pad", "track", "region"];
+  var EDIT_TOOLS = ["select", "lasso", "hand", "pad", "track", "region"];
   var DEFAULT_EDIT = {
     on: false,
     tool: "select",
+    selectMode: "enclose",
     gridMm: 0.05,
     aperture: { code: null, template: "C", sizesMm: [0.25, 0.25] },
     holeDiaMm: 0.8
@@ -26138,6 +26364,7 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
       ...src,
       on: src.on === true,
       tool: EDIT_TOOLS.includes(src.tool) ? src.tool : d.tool,
+      selectMode: SELECT_MODES.includes(src.selectMode) ? src.selectMode : d.selectMode,
       gridMm: Number.isFinite(src.gridMm) && src.gridMm >= 0 ? src.gridMm : d.gridMm,
       aperture: {
         code: Number.isInteger(a2.code) ? a2.code : null,
@@ -26374,9 +26601,9 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     const s = clampStep(step, total);
     const objects = visibleObjects(image, s);
     const command = s - 1;
-    const current = command >= 0 ? commandObjectRange(image, command) : [0, 0];
+    const current2 = command >= 0 ? commandObjectRange(image, command) : [0, 0];
     const last = objects > 0 ? image.objects[objects - 1] : null;
-    return { step: s, total, command, objects, current, head: last ? endPoint(last) : null };
+    return { step: s, total, command, objects, current: current2, head: last ? endPoint(last) : null };
   }
   function endPoint(o2) {
     if (o2.k === "F") return [o2.x, o2.y];
@@ -27047,16 +27274,103 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     return c;
   }
 
+  // src/ui/context-menu.js
+  var current = null;
+  function closeMenu() {
+    if (!current) return;
+    const c = current;
+    current = null;
+    c.el.remove();
+    for (const [type, fn2, opts] of c.listeners) window.removeEventListener(type, fn2, opts);
+  }
+  function openMenu(x2, y2, items) {
+    closeMenu();
+    const buttons = [];
+    const el3 = h(
+      "div",
+      { class: "ctx-menu", role: "menu", "data-testid": "context-menu" },
+      items.map((it) => {
+        if (!it) return h("div", { class: "ctx-sep", role: "separator" });
+        const b3 = h(
+          "button",
+          {
+            role: "menuitem",
+            disabled: !!it.disabled,
+            "data-testid": it.testid,
+            onclick: () => {
+              closeMenu();
+              it.action();
+            }
+          },
+          [h("span", {}, it.label), it.hint ? h("span", { class: "ctx-hint" }, it.hint) : null]
+        );
+        if (!it.disabled) buttons.push(b3);
+        return b3;
+      })
+    );
+    document.body.append(el3);
+    const r2 = el3.getBoundingClientRect();
+    const left = Math.max(4, Math.min(x2, window.innerWidth - r2.width - 4));
+    const top = Math.max(4, Math.min(y2, window.innerHeight - r2.height - 4));
+    el3.style.left = `${left}px`;
+    el3.style.top = `${top}px`;
+    const outside = (e) => {
+      if (!el3.contains(e.target)) closeMenu();
+    };
+    const key2 = (e) => {
+      if (e.key === "Escape") closeMenu();
+      else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        const i = buttons.indexOf(document.activeElement);
+        const n2 = buttons.length;
+        if (n2) buttons[(i + (e.key === "ArrowDown" ? 1 : n2 - 1) + (i < 0 && e.key === "ArrowUp" ? 1 : 0)) % n2].focus();
+      } else if (e.key === "Enter" && buttons.includes(document.activeElement)) return;
+      else return;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    const close = () => closeMenu();
+    current = {
+      el: el3,
+      listeners: [
+        ["pointerdown", outside, true],
+        ["keydown", key2, true],
+        ["wheel", close, true],
+        ["resize", close, false],
+        ["blur", close, false]
+      ]
+    };
+    for (const [type, fn2, opts] of current.listeners) window.addEventListener(type, fn2, opts);
+    return el3;
+  }
+
   // src/ui/editor.js
-  var TOOL_LABEL = { select: "Select", pad: "Pad", track: "Track", region: "Region" };
-  var TOOL_KEY = { v: "select", p: "pad", t: "track", r: "region" };
+  var TOOL_LABEL = { select: "Select", lasso: "Lasso", hand: "Hand", pad: "Pad", track: "Track", region: "Region" };
+  var TOOL_KEY = { v: "select", l: "lasso", h: "hand", p: "pad", t: "track", r: "region" };
+  var PICK_HELP = "Shift adds to the selection, Alt or Ctrl takes away";
   var TOOL_TITLE = {
-    select: "Select (V): click an object, Shift+click to add or remove, Shift+drag a box; drag a selected object to move it",
+    select: `Select (V): click an object, drag a box around objects (${PICK_HELP}); drag a selected object to move it`,
+    lasso: `Lasso (L): draw round the objects to select (${PICK_HELP})`,
+    hand: "Hand (H): drag to pan the board (any tool: hold Space or drag with the middle button)",
     pad: "Pad (P): click to place a pad with the chosen aperture (on a drill layer: a hole)",
-    track: "Track (T): click the points, double-click or Enter to finish, Backspace removes the last point",
-    region: "Region (R): click the corners, click the first point, double-click or Enter to close it"
+    track: "Track (T): click the points, double-click or Enter to finish, Backspace removes the last point, Shift keeps to 45°",
+    region: "Region (R): click the corners like a pen tool, click the first point, double-click or Enter to close it; Shift keeps to 45°"
+  };
+  var MODE_TITLE = {
+    enclose: "Box and lasso select objects entirely inside (non-greedy). G: switch to touching",
+    touch: "Box and lasso select everything they touch (greedy). G: switch to entirely inside"
+  };
+  var ICON = {
+    select: '<path d="M6 3l12 9-5.5 1 3.2 6.3-2.4 1.2-3.2-6.4L6 18z"/>',
+    lasso: '<ellipse cx="12" cy="9" rx="8" ry="5" stroke-dasharray="3 2"/><path d="M7 13c-2 2-1 4 1 4s2 2 0 4"/>',
+    hand: '<path d="M8 12V5.5a1.5 1.5 0 013 0V11m0-6.5V4a1.5 1.5 0 013 0v7m0-6a1.5 1.5 0 013 0v7m0-3a1.5 1.5 0 013 0v4c0 4-3 7-7 7h-1c-3 0-4.5-1.5-6-4l-2.6-4.4a1.5 1.5 0 012.6-1.5L8 15"/>',
+    pad: '<circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
+    track: '<path d="M4 18h6l8-8h3" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>',
+    region: '<path d="M4 20l3-11 10-4 3 10-9 6z"/><circle cx="4" cy="20" r="1.6"/><circle cx="7" cy="9" r="1.6"/><circle cx="17" cy="5" r="1.6"/><circle cx="20" cy="15" r="1.6"/><circle cx="11" cy="21" r="1.6"/>',
+    enclose: '<rect x="3" y="3" width="18" height="18" stroke-dasharray="3 2"/><rect x="8" y="8" width="8" height="8" fill="currentColor"/>',
+    touch: '<rect x="3" y="3" width="13" height="13" stroke-dasharray="3 2"/><rect x="11" y="11" width="10" height="10" fill="currentColor"/>'
   };
   var CLOSE_PX = 8;
+  var LASSO_STEP_PX = 3;
   var EditorPanel = class {
     /**
      * @param {{settings:()=>object, layer:()=>object|null, project:()=>object, viewer:object,
@@ -27070,7 +27384,13 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
       this.cursor = null;
       this.drag = null;
       this.busy = false;
+      this.space = false;
       this.el = h("section", { class: "editor hidden", "data-testid": "editor" });
+      this.strip = h("nav", { class: "tool-strip hidden", "data-testid": "tool-strip", "aria-label": "Edit tools" });
+      window.addEventListener("keyup", (e) => {
+        if (e.key === " ") this.space = false;
+      });
+      window.addEventListener("blur", () => this.space = false);
       this.toolbarButton = h(
         "button",
         {
@@ -27095,6 +27415,11 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
       this.s.on = on3;
       this.cancelSketch();
       this.#setSelection([]);
+      this.host.touch();
+      this.refresh();
+    }
+    setSelectMode(mode) {
+      this.s.selectMode = mode === "touch" ? "touch" : "enclose";
       this.host.touch();
       this.refresh();
     }
@@ -27131,6 +27456,7 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
       v.canvas.classList.toggle("editing", on3);
       v.canvas.dataset.tool = on3 ? this.s.tool : "";
       v.drawOverlay();
+      this.#refreshStrip();
       clear(this.el);
       if (!on3) return;
       this.el.append(h("h2", {}, "Edit"));
@@ -27141,26 +27467,32 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
       const ed3 = layer.editor;
       const drill = layer.kind === "excellon";
       const problems = ed3 ? ed3.problems : [];
-      const tools = drill ? ["select", "pad"] : EDIT_TOOLS;
-      if (!tools.includes(this.s.tool)) this.s.tool = "select";
       const btn = (label, attrs) => h("button", attrs, label);
+      const tool = this.s.tool;
       this.el.append(
         h("div", { class: "edit-row" }, [
-          h(
-            "span",
-            { class: "seg" },
-            tools.map(
-              (t) => btn(drill && t === "pad" ? "Hole" : TOOL_LABEL[t], {
-                class: this.s.tool === t ? "on" : "",
-                "data-testid": `tool-${t}`,
-                title: TOOL_TITLE[t],
-                onclick: () => this.setTool(t)
-              })
-            )
-          )
+          h("span", { class: "muted", "data-testid": "edit-tool" }, `${this.#toolLabel(tool)} tool`)
         ])
       );
-      if (this.s.tool === "pad" || this.s.tool === "track") this.el.append(this.#apertureRow(layer));
+      if (tool === "select" || tool === "lasso")
+        this.el.append(
+          h("div", { class: "edit-row" }, [
+            "Box/lasso picks ",
+            h(
+              "span",
+              { class: "seg" },
+              ["enclose", "touch"].map(
+                (m) => btn(m === "enclose" ? "Inside only" : "Touching", {
+                  class: this.s.selectMode === m ? "on" : "",
+                  "data-testid": `select-mode-${m}`,
+                  title: MODE_TITLE[m],
+                  onclick: () => this.setSelectMode(m)
+                })
+              )
+            )
+          ])
+        );
+      if (tool === "pad" || tool === "track") this.el.append(this.#apertureRow(layer));
       this.el.append(
         h("div", { class: "edit-row" }, [
           h("label", { title: "Positions and moves snap to this grid (0 = no snapping)" }, [
@@ -27251,6 +27583,61 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
         )
       );
     }
+    /** Tools of the edited layer: drill layers have no tracks or regions. */
+    #tools(layer) {
+      return layer?.kind === "excellon" ? EDIT_TOOLS.filter((t) => t !== "track" && t !== "region") : EDIT_TOOLS;
+    }
+    #toolLabel(tool) {
+      return tool === "pad" && this.layer()?.kind === "excellon" ? "Hole" : TOOL_LABEL[tool];
+    }
+    /** The tool strip on the board's left edge (Photoshop-style): tools, then the box/lasso mode. */
+    #refreshStrip() {
+      const layer = this.layer();
+      const on3 = this.on;
+      clear(this.strip);
+      this.strip.classList.toggle("hidden", !on3);
+      if (!on3) return;
+      const tools = this.#tools(layer);
+      if (!tools.includes(this.s.tool)) this.s.tool = "select";
+      const icon = (name) => {
+        const s = h("span", { class: "icon", "aria-hidden": "true" });
+        s.innerHTML = `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.6">${ICON[name]}</svg>`;
+        return s;
+      };
+      const button = (name, label, attrs) => h("button", { ...attrs, "aria-label": label }, [icon(name)]);
+      const groups = [
+        ["select", "lasso", "hand"],
+        ["pad", "track", "region"]
+      ];
+      for (const g of groups) {
+        const shown = g.filter((t) => tools.includes(t));
+        if (!shown.length) continue;
+        if (this.strip.childElementCount) this.strip.append(h("span", { class: "strip-sep" }));
+        for (const t of shown) {
+          this.strip.append(
+            button(t, this.#toolLabel(t), {
+              class: this.s.tool === t ? "on" : "",
+              "aria-pressed": this.s.tool === t ? "true" : "false",
+              "data-testid": `tool-${t}`,
+              title: TOOL_TITLE[t],
+              disabled: !layer,
+              onclick: () => this.setTool(t)
+            })
+          );
+        }
+      }
+      const mode = this.s.selectMode;
+      this.strip.append(
+        h("span", { class: "strip-sep" }),
+        button(mode, mode === "enclose" ? "Select inside only" : "Select touching", {
+          class: "mode",
+          "data-testid": "select-mode",
+          "data-mode": mode,
+          title: MODE_TITLE[mode],
+          onclick: () => this.setSelectMode(mode === "enclose" ? "touch" : "enclose")
+        })
+      );
+    }
     #apertureRow(layer) {
       if (layer.kind === "excellon") {
         return h("div", { class: "edit-row" }, [
@@ -27268,7 +27655,7 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
       const usable = [...layer.image.apertures.values()].filter(
         (ap2) => this.s.tool === "track" ? ap2.kind === "C" || ap2.kind === "R" : ap2.kind !== "block" && ap2.shape
       );
-      const current = usable.some((ap2) => ap2.code === a2.code) ? String(a2.code) : "new";
+      const current2 = usable.some((ap2) => ap2.code === a2.code) ? String(a2.code) : "new";
       const sel = h(
         "select",
         {
@@ -27283,15 +27670,15 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
           ...usable.map(
             (ap2) => h(
               "option",
-              { value: String(ap2.code), selected: current === String(ap2.code) },
+              { value: String(ap2.code), selected: current2 === String(ap2.code) },
               `D${ap2.code} · ${describeAperture(ap2)}`
             )
           ),
-          h("option", { value: "new", selected: current === "new" }, "New aperture…")
+          h("option", { value: "new", selected: current2 === "new" }, "New aperture…")
         ]
       );
       const row = [h("label", {}, ["Aperture ", sel])];
-      if (current === "new") {
+      if (current2 === "new") {
         const templates = this.s.tool === "track" ? ["C", "R"] : ["C", "R", "O"];
         if (!templates.includes(a2.template)) a2.template = "C";
         row.push(
@@ -27364,6 +27751,103 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
       if (!layer) return;
       this.#setSelection(layer.image.objects.map((_, i) => i));
       this.refresh();
+    }
+    invertSelection() {
+      const layer = this.layer();
+      if (!layer) return;
+      const sel = new Set(this.sel);
+      this.#setSelection(layer.image.objects.map((_, i) => i).filter((i) => !sel.has(i)));
+      this.refresh();
+    }
+    /**
+     * Select by a query on the selection (src/edit/selection.js): same shape, same aperture,
+     * connected. The result replaces the selection and is reported in the status bar.
+     */
+    selectBy(kind) {
+      const layer = this.layer();
+      if (!layer || !this.sel.length) return;
+      const query = { shape: sameShape, aperture: sameAperture, connected }[kind];
+      const found = query(layer.image, this.sel);
+      this.#setSelection(found);
+      this.refresh();
+      const what = { shape: "with the same shape", aperture: "with the same aperture", connected: "connected" }[kind];
+      this.host.message(`${found.length} object${found.length === 1 ? "" : "s"} ${what}`);
+    }
+    /** Box or lasso: combine what the polygon picks with the selection (Shift adds, Alt/Ctrl removes). */
+    #pickPolygon(poly, e) {
+      const layer = this.layer();
+      if (!layer) return;
+      const picked = objectsInPolygon(layer.image, poly, this.s.selectMode);
+      if (e.altKey || e.ctrlKey || e.metaKey) {
+        const drop = new Set(picked);
+        this.#setSelection(this.sel.filter((i) => !drop.has(i)));
+      } else this.#setSelection(e.shiftKey ? [...this.sel, ...picked] : picked);
+      this.refresh();
+    }
+    /**
+     * Right-click on the board. In edit mode: a menu for the object under the pointer (it is
+     * selected first unless already part of the selection) or for the selection. Outside edit
+     * mode: the same selection queries, which switch to editing that object's layer.
+     */
+    contextMenu(mm2, clientX, clientY) {
+      const v = this.host.viewer;
+      const hit = v.pickAt(mm2[0], mm2[1]);
+      if (!this.on) {
+        const l = hit && this.host.layers().find((x2) => x2.id === hit.layerId);
+        if (!l || l.kind !== "gerber" && l.kind !== "excellon") return false;
+        const edit = (then) => () => {
+          this.host.editLayer(l.id);
+          if (!this.on) this.setOn(true);
+          this.select([hit.index]);
+          then?.();
+        };
+        openMenu(clientX, clientY, [
+          { label: `Edit ${l.name}`, hint: "E", testid: "ctx-edit", action: edit() },
+          null,
+          { label: "Select same shape", testid: "ctx-same-shape", action: edit(() => this.selectBy("shape")) },
+          {
+            label: "Select same aperture",
+            testid: "ctx-same-aperture",
+            disabled: !hit.object.ap,
+            action: edit(() => this.selectBy("aperture"))
+          },
+          { label: "Select connected", testid: "ctx-connected", action: edit(() => this.selectBy("connected")) }
+        ]);
+        return true;
+      }
+      const layer = this.layer();
+      if (!layer) return false;
+      if (this.sketch.length) this.cancelSketch();
+      if (hit && !this.sel.includes(hit.index)) this.select([hit.index]);
+      const objs = this.sel.map((i) => layer.image.objects[i]);
+      const n2 = this.sel.length;
+      const codes = [...new Set(objs.filter((o2) => o2.ap).map((o2) => o2.ap.code))];
+      const drill = layer.kind === "excellon";
+      openMenu(clientX, clientY, [
+        { label: "Select same shape", testid: "ctx-same-shape", disabled: !n2, action: () => this.selectBy("shape") },
+        {
+          label: "Select same aperture",
+          hint: codes.length === 1 ? `${drill ? "T" : "D"}${codes[0]}` : "",
+          testid: "ctx-same-aperture",
+          disabled: !codes.length,
+          action: () => this.selectBy("aperture")
+        },
+        { label: "Select connected", testid: "ctx-connected", disabled: !n2, action: () => this.selectBy("connected") },
+        null,
+        { label: "Select all", hint: "Ctrl+A", testid: "ctx-select-all", action: () => this.selectAll() },
+        { label: "Invert selection", hint: "Ctrl+I", testid: "ctx-invert", action: () => this.invertSelection() },
+        {
+          label: "Deselect",
+          hint: "Esc",
+          testid: "ctx-deselect",
+          disabled: !n2,
+          action: () => (this.#setSelection([]), this.refresh())
+        },
+        null,
+        ...drill ? [] : [{ label: "To region", testid: "ctx-to-region", disabled: !n2, action: () => this.toRegion() }],
+        { label: "Delete", hint: "Del", testid: "ctx-delete", disabled: !n2, action: () => this.deleteSelection() }
+      ]);
+      return true;
     }
     /** Command targets of the selection, or null (with a message) if one cannot be edited. */
     #targets(layer) {
@@ -27506,7 +27990,16 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
       }
       if (mod && k2.toLowerCase() === "y") return this.redo(), true;
       if (mod && k2.toLowerCase() === "a") return this.selectAll(), true;
+      if (mod && k2.toLowerCase() === "i") return this.invertSelection(), true;
       if (mod || e.altKey) return false;
+      if (k2 === " ") {
+        this.space = true;
+        return e.target?.tagName !== "BUTTON";
+      }
+      if (k2.toLowerCase() === "g") {
+        this.setSelectMode(this.s.selectMode === "enclose" ? "touch" : "enclose");
+        return true;
+      }
       if (k2 === "Escape") {
         if (this.sketch.length || this.drag) this.cancelSketch();
         else this.#setSelection([]), this.refresh();
@@ -27528,28 +28021,47 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
         return true;
       }
       const tool = TOOL_KEY[k2.toLowerCase()];
-      if (tool && (tool === "select" || tool === "pad" || this.layer()?.kind === "gerber")) {
+      if (tool && this.#tools(this.layer()).includes(tool)) {
         this.setTool(tool);
         return true;
       }
       return false;
+    }
+    /**
+     * Snap a new track or region point to the grid; with Shift, keep the segment from the last
+     * point to a multiple of 45°.
+     */
+    #placePt(mm2, e) {
+      const last = this.sketch.at(-1);
+      if (!e?.shiftKey || !last) return this.#snapPt(mm2);
+      const dx = mm2[0] - last[0];
+      const dy = mm2[1] - last[1];
+      const a2 = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4);
+      const ux = Math.round(Math.cos(a2));
+      const uy = Math.round(Math.sin(a2));
+      const t = (dx * ux + dy * uy) / (ux * ux + uy * uy);
+      const g = this.s.gridMm;
+      const k2 = g > 0 ? Math.round(t / g) * g : t;
+      return [round6(last[0] + ux * k2), round6(last[1] + uy * k2)];
     }
     #handler() {
       const v = this.host.viewer;
       return {
         down: (mm2, e) => {
           const layer = this.layer();
-          if (!layer || this.s.tool !== "select") return false;
+          const tool = this.s.tool;
+          if (!layer || this.space || tool !== "select" && tool !== "lasso") return false;
+          if (tool === "lasso") {
+            this.drag = { kind: "lasso", points: [mm2] };
+            return true;
+          }
           const hit = v.pickAt(mm2[0], mm2[1]);
-          if (hit && (!e.shiftKey || this.sel.includes(hit.index))) {
+          if (hit && !e.altKey && (!e.shiftKey || this.sel.includes(hit.index))) {
             this.drag = { kind: "move", start: mm2, dx: 0, dy: 0, hit: hit.index };
             return true;
           }
-          if (!hit && e.shiftKey) {
-            this.drag = { kind: "box", start: mm2, end: mm2 };
-            return true;
-          }
-          return false;
+          this.drag = { kind: "box", start: mm2, end: mm2 };
+          return true;
         },
         move: (mm2) => {
           const d = this.drag;
@@ -27558,6 +28070,9 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
             if (!this.sel.includes(d.hit)) this.#setSelection([d.hit]);
             d.dx = round6(this.snap(mm2[0] - d.start[0]));
             d.dy = round6(this.snap(mm2[1] - d.start[1]));
+          } else if (d.kind === "lasso") {
+            const last = d.points.at(-1);
+            if (Math.hypot(mm2[0] - last[0], mm2[1] - last[1]) * v.view.scale >= LASSO_STEP_PX) d.points.push(mm2);
           } else d.end = mm2;
           v.drawOverlay();
         },
@@ -27570,32 +28085,31 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
             else v.drawOverlay();
             return;
           }
-          const layer = this.layer();
-          const ob = layer.image.objBounds;
-          const [x0, x1] = [Math.min(d.start[0], d.end[0]), Math.max(d.start[0], d.end[0])];
-          const [y0, y1] = [Math.min(d.start[1], d.end[1]), Math.max(d.start[1], d.end[1])];
-          const inside = [];
-          for (let i = 0; i < layer.image.objects.length; i++)
-            if (ob[i * 4] >= x0 && ob[i * 4 + 2] <= x1 && ob[i * 4 + 1] >= y0 && ob[i * 4 + 3] <= y1) inside.push(i);
-          this.#setSelection([...this.sel, ...inside]);
-          this.refresh();
+          if (d.kind === "lasso") {
+            d.points.push(mm2);
+            this.#pickPolygon(d.points.flat(), e);
+          } else this.#pickPolygon(boxPolygon(d.start, d.end), e);
+          v.drawOverlay();
         },
         click: (mm2, e) => {
           const layer = this.layer();
           if (!layer) return;
           const tool = this.s.tool;
-          if (tool === "select") {
+          if (tool === "hand") return;
+          if (tool === "select" || tool === "lasso") {
             const hit = v.pickAt(mm2[0], mm2[1]);
             if (e.shiftKey || e.ctrlKey || e.metaKey) {
               if (hit)
                 this.#setSelection(
                   this.sel.includes(hit.index) ? this.sel.filter((i) => i !== hit.index) : [...this.sel, hit.index]
                 );
+            } else if (e.altKey) {
+              if (hit) this.#setSelection(this.sel.filter((i) => i !== hit.index));
             } else this.#setSelection(hit ? [hit.index] : []);
             this.refresh();
             return;
           }
-          const p = this.#snapPt(mm2);
+          const p = tool === "pad" ? this.#snapPt(mm2) : this.#placePt(mm2, e);
           if (tool === "pad") {
             if (layer.kind === "excellon")
               this.apply({ type: "addHit", diaMm: this.s.holeDiaMm, xMm: p[0], yMm: p[1] }, "Hole added");
@@ -27614,9 +28128,9 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
         dblclick: () => {
           if (this.sketch.length) this.#finishSketch();
         },
-        hover: (mm2) => {
-          this.cursor = this.#snapPt(mm2);
-          if (this.s.tool !== "select") v.drawOverlay();
+        hover: (mm2, e) => {
+          this.cursor = this.s.tool === "pad" ? this.#snapPt(mm2) : this.#placePt(mm2, e);
+          if (this.s.tool === "pad" || this.s.tool === "track" || this.s.tool === "region") v.drawOverlay();
         }
       };
     }
@@ -27631,18 +28145,26 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
       if (d?.kind === "move" && (d.dx || d.dy)) {
         v.outlineObjects(ctx, map, layer.id, this.sel, MISC.selection, 0.15, d.dx, d.dy);
       }
-      if (d?.kind === "box") {
-        const [ax, ay] = v.toPx(map, ...d.start);
-        const [bx, by] = v.toPx(map, ...d.end);
+      if (d?.kind === "box" || d?.kind === "lasso") {
+        const pts2 = d.kind === "box" ? [d.start, [d.end[0], d.start[1]], d.end, [d.start[0], d.end[1]]] : d.points;
         ctx.setTransform(1, 0, 0, 1, 0, 0);
-        ctx.setLineDash([4 * v.dpr, 4 * v.dpr]);
+        ctx.beginPath();
+        pts2.forEach((p, i) => {
+          const [x2, y2] = v.toPx(map, ...p);
+          if (i) ctx.lineTo(x2, y2);
+          else ctx.moveTo(x2, y2);
+        });
+        ctx.closePath();
+        ctx.fillStyle = rgba(MISC.selection, 0.08);
+        ctx.fill();
+        if (this.s.selectMode === "touch") ctx.setLineDash([4 * v.dpr, 4 * v.dpr]);
         ctx.strokeStyle = colour;
         ctx.lineWidth = v.dpr;
-        ctx.strokeRect(Math.min(ax, bx), Math.min(ay, by), Math.abs(bx - ax), Math.abs(by - ay));
+        ctx.stroke();
         ctx.setLineDash([]);
       }
       const tool = this.s.tool;
-      if (tool === "select") return;
+      if (tool !== "pad" && tool !== "track" && tool !== "region") return;
       const half = this.#apertureHalf(layer);
       const pts = this.cursor ? [...this.sketch, this.cursor] : [...this.sketch];
       ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -27721,7 +28243,9 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
         onCursor: (x2, y2) => this.statusPos.textContent = `X ${x2.toFixed(3)}  Y ${y2.toFixed(3)} mm`,
         onSelect: (hit) => this.#onSelect(hit),
         onHover: (hit) => this.statusHover.textContent = hit ? describeShort(hit, this.layerById(hit.layerId)) : "",
-        onView: (v) => this.#onView(v)
+        onView: (v) => this.#onView(v),
+        // the editor's menu; elsewhere (3D view, empty board) the browser's own
+        onContextMenu: (mm2, e) => this.editor.contextMenu(mm2, e.clientX, e.clientY)
       });
       this.viewer3d = new Viewer3D(this.canvas3d, {
         onCamera: (c) => this.#onCamera(c),
@@ -27885,7 +28409,9 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
         inspect: (hit) => app.#inspect(hit),
         message: (text, err2) => app.#message(text, err2),
         download: (text, name) => downloadBytes(new TextEncoder().encode(text), name, "application/octet-stream"),
-        touch: () => app.#touch()
+        touch: () => app.#touch(),
+        layers: () => app.layers,
+        editLayer: (id3) => id3 !== app.activeLayerId && app.#setActive(id3)
       });
       const toolbar = h("header", { class: "toolbar" }, [
         h("span", { class: "title" }, "PCB-CAMmotion"),
@@ -27958,6 +28484,7 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
         this.canvas,
         this.overlay,
         this.canvas3d,
+        this.editor.strip,
         this.empty,
         h("div", { class: "drop" }, "Drop to load"),
         this.banner
@@ -28230,6 +28757,7 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
       const on3 = !!this.view.view3d;
       this.canvas.classList.toggle("hidden", on3);
       this.overlay.classList.toggle("hidden", on3);
+      this.main.classList.toggle("in-3d", on3);
       this.viewer3d.show(on3);
     }
     #fit() {

@@ -17,9 +17,11 @@
 //                    view3d: show the 3D view; explode: 0..1 how far the 3D layers are spread;
 //                    explodeStyle: sheets (apart by copper layer, each on its substrate) | layers;
 //                    camera3d: null | { position: [x, y, z], target: [x, y, z] } in mm
-//   settings.edit:   { on, tool, gridMm, aperture: { code, template, sizesMm }, holeDiaMm }
-//                    the editor (milestone 4): tool = select | pad | track | region; aperture =
-//                    an existing D-code for new pads/tracks, or (code null) a new C/R/O aperture
+//   settings.edit:   { on, tool, selectMode, gridMm, aperture: { code, template, sizesMm }, holeDiaMm }
+//                    the editor (milestone 4): tool = select | lasso | hand | pad | track |
+//                    region; selectMode = enclose (box/lasso picks objects entirely inside) |
+//                    touch (anything it touches); aperture = an existing D-code for new
+//                    pads/tracks, or (code null) a new C/R/O aperture
 //   settings.analyze: { open, tab, highlight, playback }   the analyser dock (milestone 3)
 //                    tab: apertures | shapes | commands; highlight: null | { layer, code }
 //                    (code = aperture/tool number, or null for regions) marks every use;
@@ -38,6 +40,7 @@ import { createEmptyProject } from './schema.js';
 import { safeSourceName } from './pcam.js';
 import { loadFile } from '../model/load-file.js';
 import { LayerEditor } from '../edit/session.js';
+import { SELECT_MODES } from '../edit/selection.js';
 import { identifyLayer, detectFileKind, layerSortKey } from '../model/layers.js';
 import { extractOutline } from '../model/outline.js';
 import { resolveJobFiles } from '../parse/gbrjob.js';
@@ -62,11 +65,12 @@ export const DEFAULT_VIEW = {
   camera3d: null,
 };
 
-export const EDIT_TOOLS = ['select', 'pad', 'track', 'region'];
+export const EDIT_TOOLS = ['select', 'lasso', 'hand', 'pad', 'track', 'region'];
 
 export const DEFAULT_EDIT = {
   on: false,
   tool: 'select',
+  selectMode: 'enclose',
   gridMm: 0.05,
   aperture: { code: null, template: 'C', sizesMm: [0.25, 0.25] },
   holeDiaMm: 0.8,
@@ -143,6 +147,7 @@ export function normaliseEdit(e) {
     ...src,
     on: src.on === true,
     tool: EDIT_TOOLS.includes(src.tool) ? src.tool : d.tool,
+    selectMode: SELECT_MODES.includes(src.selectMode) ? src.selectMode : d.selectMode,
     gridMm: Number.isFinite(src.gridMm) && src.gridMm >= 0 ? src.gridMm : d.gridMm,
     aperture: {
       code: Number.isInteger(a.code) ? a.code : null,

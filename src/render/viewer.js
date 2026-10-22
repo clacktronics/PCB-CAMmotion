@@ -14,7 +14,7 @@ const MAX_SCALE = 20000;
 export class Viewer {
   /**
    * @param {HTMLCanvasElement} canvas
-   * @param {{onCursor?:(x:number,y:number)=>void, onSelect?:(hit:object|null)=>void, onHover?:(hit:object|null)=>void, onView?:(v:object)=>void}} cb
+   * @param {{onCursor?:(x:number,y:number)=>void, onSelect?:(hit:object|null)=>void, onHover?:(hit:object|null)=>void, onView?:(v:object)=>void, onContextMenu?:(mm:number[], e:MouseEvent)=>boolean}} cb
    */
   constructor(canvas, overlay, cb = {}) {
     this.canvas = canvas;
@@ -391,6 +391,10 @@ export class Viewer {
       c.setPointerCapture(e.pointerId);
     });
     c.addEventListener('dblclick', (e) => this.edit?.dblclick?.(this.toMm(e.clientX, e.clientY), e));
+    // right-click: the app's own menu (src/ui/context-menu.js) instead of the browser's
+    c.addEventListener('contextmenu', (e) => {
+      if (this.cb.onContextMenu?.(this.toMm(e.clientX, e.clientY), e)) e.preventDefault();
+    });
     c.addEventListener('pointermove', (e) => {
       const [x, y] = this.toMm(e.clientX, e.clientY);
       this.cb.onCursor?.(x, y);

@@ -47,6 +47,8 @@ export class App {
       onSelect: (hit) => this.#onSelect(hit),
       onHover: (hit) => (this.statusHover.textContent = hit ? describeShort(hit, this.layerById(hit.layerId)) : ''),
       onView: (v) => this.#onView(v),
+      // the editor's menu; elsewhere (3D view, empty board) the browser's own
+      onContextMenu: (mm, e) => this.editor.contextMenu(mm, e.clientX, e.clientY),
     });
     this.viewer3d = new Viewer3D(this.canvas3d, {
       onCamera: (c) => this.#onCamera(c),
@@ -217,6 +219,8 @@ export class App {
       message: (text, err) => app.#message(text, err),
       download: (text, name) => downloadBytes(new TextEncoder().encode(text), name, 'application/octet-stream'),
       touch: () => app.#touch(),
+      layers: () => app.layers,
+      editLayer: (id) => id !== app.activeLayerId && app.#setActive(id),
     });
 
     const toolbar = h('header', { class: 'toolbar' }, [
@@ -293,6 +297,7 @@ export class App {
       this.canvas,
       this.overlay,
       this.canvas3d,
+      this.editor.strip,
       this.empty,
       h('div', { class: 'drop' }, 'Drop to load'),
       this.banner,
@@ -585,6 +590,7 @@ export class App {
     const on = !!this.view.view3d;
     this.canvas.classList.toggle('hidden', on);
     this.overlay.classList.toggle('hidden', on);
+    this.main.classList.toggle('in-3d', on);
     this.viewer3d.show(on);
   }
 

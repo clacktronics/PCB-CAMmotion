@@ -695,6 +695,97 @@ table.apt tr.on td {
 }
 .main canvas.editing[data-tool='pad'],
 .main canvas.editing[data-tool='track'],
-.main canvas.editing[data-tool='region'] {
+.main canvas.editing[data-tool='region'],
+.main canvas.editing[data-tool='lasso'] {
   cursor: crosshair;
+}
+.main canvas.editing[data-tool='hand'] {
+  cursor: grab;
+}
+
+/* editor tool strip on the board (Photoshop-style) */
+.tool-strip {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+.main.in-3d .tool-strip {
+  display: none;
+}
+.tool-strip button {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border-color: transparent;
+}
+.tool-strip button:hover:not(:disabled) {
+  background: var(--panel-2);
+  border-color: var(--line);
+}
+.tool-strip button.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #10161c;
+}
+.tool-strip button:disabled {
+  opacity: 0.4;
+}
+.tool-strip .icon {
+  display: grid;
+}
+.tool-strip .strip-sep {
+  height: 1px;
+  margin: 3px 2px;
+  background: var(--line);
+}
+
+/* right-click menu (src/ui/context-menu.js) */
+.ctx-menu {
+  position: fixed;
+  z-index: 100;
+  min-width: 200px;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+}
+.ctx-menu button {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border-color: transparent;
+  padding: 5px 10px;
+}
+.ctx-menu button:hover:not(:disabled),
+.ctx-menu button:focus-visible {
+  background: var(--panel-2);
+  border-color: var(--line);
+}
+.ctx-menu button:disabled {
+  color: var(--muted);
+  opacity: 0.6;
+}
+.ctx-menu .ctx-hint {
+  color: var(--muted);
+}
+.ctx-menu .ctx-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--line);
 }

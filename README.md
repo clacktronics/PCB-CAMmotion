@@ -47,15 +47,29 @@ continue where you left off.
     forward). ⏭ ends playback and shows the whole layer again.
   - Hovering a feature shows its aperture, kind, polarity and source line in the status bar.
     Highlight, playback position and the dock's tab are saved in the `.pcam`.
-- **Editor** (the **Edit** toolbar button or **E**; works on the selected layer):
-  - *Select* (**V**): click an object, **Shift**+click to add/remove, **Shift**+drag a box,
-    **Ctrl+A** for all. Drag a selected object to move the selection; the arrow keys nudge it
-    one grid step (**Shift**: ten); **Move by** takes exact X/Y in mm. **Del** deletes.
+- **Editor** (the **Edit** toolbar button or **E**; works on the selected layer). A tool
+  strip on the board's left edge holds the tools, Photoshop-style:
+  - *Select* (**V**): click an object, **Shift**+click to add/remove, drag a box round
+    objects (**Shift** adds, **Alt** or **Ctrl** takes away), **Ctrl+A** all, **Ctrl+I**
+    invert. Drag a selected object to move the selection; the arrow keys nudge it one grid
+    step (**Shift**: ten); **Move by** takes exact X/Y in mm. **Del** deletes.
+  - *Lasso* (**L**): draw round the objects to select (same modifiers as the box).
+  - Box and lasso pick objects **entirely inside** (non-greedy, solid outline) or everything
+    they **touch** (greedy, dashed outline) — the mode button under the tools, or **G**. Both
+    test the drawn outline of each object, not its bounding box.
+  - *Hand* (**H**) pans; with any tool, hold **Space** or drag with the middle button.
   - *Pad* (**P**) places a flash with an existing aperture or a new circle / rectangle /
     obround; on a drill layer it is *Hole* and places a hole of the given diameter (reusing
     the tool of that size, or defining a new one). *Track* (**T**): click the points,
-    double-click or **Enter** to finish. *Region* (**R**): click the corners, close on the
-    first point. Everything snaps to the grid (0 = off).
+    double-click or **Enter** to finish. *Region* (**R**): click the corners like a pen tool,
+    close on the first point. **Shift** keeps track and region segments to 45°. Everything
+    snaps to the grid (0 = off).
+  - **Right-click** an object (or the selection) for **Select same shape** (same geometry
+    whatever its D-code: pads by aperture and rotation, tracks by width and vector, regions
+    by outline), **Select same aperture**, **Select connected** (touching copper followed
+    object to object on this layer; clear-polarity cuts are not taken into account),
+    select all / invert / deselect, **To region** and **Delete**. Outside edit mode the menu
+    offers to edit the object, or to start editing its layer with one of those selections.
   - **To region** turns the selected pads, tracks and fills into G36/G37 regions: a single
     object exactly (arcs kept as G02/G03), overlapping objects unified into one outline.
     **Unify layer → regions** does it to the whole layer: every track, pad, fill, step and
