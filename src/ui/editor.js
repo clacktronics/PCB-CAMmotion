@@ -52,7 +52,8 @@ export class EditorPanel {
   /**
    * @param {{settings:()=>object, layer:()=>object|null, project:()=>object, viewer:object,
    *   commit:(layer:object)=>void, inspect:(hit:object|null)=>void, message:(t:string, err?:boolean)=>void,
-   *   download:(text:string, name:string)=>void, touch:()=>void, changed:()=>void}} host
+   *   download:(text:string, name:string)=>void, touch:()=>void, changed:()=>void,
+   *   layers:()=>object[], editLayer:(id:string)=>void, autoSelectLayer:()=>boolean}} host
    */
   constructor(host) {
     this.host = host;
@@ -837,7 +838,17 @@ export class EditorPanel {
         const tool = this.s.tool;
         if (tool === 'hand') return;
         if (tool === 'select' || tool === 'lasso') {
-          const hit = v.pickAt(mm[0], mm[1]);
+          let hit = v.pickAt(mm[0], mm[1]);
+          const modifier = e.shiftKey || e.ctrlKey || e.metaKey || e.altKey;
+          if (!hit && !modifier && this.host.autoSelectLayer()) {
+            // auto select layer: nothing of the edited layer here, so edit the shape's own layer
+            const other = v.pickAt(mm[0], mm[1], null, null);
+            const l = other && this.host.layers().find((x) => x.id === other.layerId);
+            if (l && (l.kind === 'gerber' || l.kind === 'excellon')) {
+              this.host.editLayer(l.id);
+              hit = other;
+            }
+          }
           if (e.shiftKey || e.ctrlKey || e.metaKey) {
             if (hit)
               this.#setSelection(

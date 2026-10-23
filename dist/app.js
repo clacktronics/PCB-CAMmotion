@@ -5117,11 +5117,11 @@
     }
     /**
      * Topmost visible object at a board point (mm), optionally only on layers `accept` takes
-     * (e.g. copper only, for "select connected").
+     * (e.g. copper only, for "select connected"). In edit mode only the layer being edited can
+     * be picked, unless `only` is passed as null (any shown layer).
      */
-    pickAt(x2, y2, accept = null) {
+    pickAt(x2, y2, accept = null, only = this.settings.pickLayerId) {
       const tol = 3 / this.view.scale;
-      const only = this.settings.pickLayerId;
       let order = only ? this.layers.filter((l) => l.id === only && l.image) : this.#pickOrder();
       if (accept) order = order.filter(accept);
       for (const l of order) {
@@ -26297,7 +26297,8 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     view3d: false,
     explode: 0,
     explodeStyle: "sheets",
-    camera3d: null
+    camera3d: null,
+    autoSelectLayer: true
   };
   var EDIT_TOOLS = ["select", "lasso", "hand", "pad", "track", "region"];
   var DEFAULT_EDIT = {
@@ -26332,6 +26333,7 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     const explode = Number(s.view.explode);
     s.view.explode = Number.isFinite(explode) ? Math.min(1, Math.max(0, explode)) : 0;
     s.view.view3d = s.view.view3d === true;
+    if (typeof s.view.autoSelectLayer !== "boolean") s.view.autoSelectLayer = DEFAULT_VIEW.autoSelectLayer;
     if (!EXPLODE_STYLES.includes(s.view.explodeStyle)) s.view.explodeStyle = DEFAULT_VIEW.explodeStyle;
     s.analyze = normaliseAnalyze(s.analyze);
     s.edit = normaliseEdit(s.edit);
@@ -27379,7 +27381,8 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     /**
      * @param {{settings:()=>object, layer:()=>object|null, project:()=>object, viewer:object,
      *   commit:(layer:object)=>void, inspect:(hit:object|null)=>void, message:(t:string, err?:boolean)=>void,
-     *   download:(text:string, name:string)=>void, touch:()=>void, changed:()=>void}} host
+     *   download:(text:string, name:string)=>void, touch:()=>void, changed:()=>void,
+     *   layers:()=>object[], editLayer:(id:string)=>void, autoSelectLayer:()=>boolean}} host
      */
     constructor(host) {
       this.host = host;
@@ -28107,7 +28110,16 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
           const tool = this.s.tool;
           if (tool === "hand") return;
           if (tool === "select" || tool === "lasso") {
-            const hit = v.pickAt(mm2[0], mm2[1]);
+            let hit = v.pickAt(mm2[0], mm2[1]);
+            const modifier = e.shiftKey || e.ctrlKey || e.metaKey || e.altKey;
+            if (!hit && !modifier && this.host.autoSelectLayer()) {
+              const other = v.pickAt(mm2[0], mm2[1], null, null);
+              const l = other && this.host.layers().find((x2) => x2.id === other.layerId);
+              if (l && (l.kind === "gerber" || l.kind === "excellon")) {
+                this.host.editLayer(l.id);
+                hit = other;
+              }
+            }
             if (e.shiftKey || e.ctrlKey || e.metaKey) {
               if (hit)
                 this.#setSelection(
@@ -28421,7 +28433,8 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
         download: (text, name) => downloadBytes(new TextEncoder().encode(text), name, "application/octet-stream"),
         touch: () => app.#touch(),
         layers: () => app.layers,
-        editLayer: (id3) => id3 !== app.activeLayerId && app.#setActive(id3)
+        editLayer: (id3) => id3 !== app.activeLayerId && app.#setActive(id3),
+        autoSelectLayer: () => app.view.autoSelectLayer
       });
       const toolbar = h("header", { class: "toolbar" }, [
         h("span", { class: "title" }, "PCB-CAMmotion"),
@@ -28464,8 +28477,25 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
       this.showBar = h("div", { class: "show-toggles", "data-testid": "show-toggles" }, Object.values(this.btnShow));
       this.layerList = h("ul", { class: "layers", "data-testid": "layers" });
       this.stackPanel = h("div", { class: "stack" });
+      this.autoSelectInput = h("input", {
+        type: "checkbox",
+        "data-testid": "auto-select-layer",
+        onchange: (e) => {
+          this.view.autoSelectLayer = e.target.checked;
+          this.#touch();
+        }
+      });
+      const autoSelect = h(
+        "label",
+        {
+          class: "auto-select",
+          title: "Clicking a shape on the board selects its layer (in edit mode: edits that layer)"
+        },
+        [this.autoSelectInput, "Auto select layer"]
+      );
       const left = h("aside", { class: "panel left" }, [
         h("h2", {}, "Layers"),
+        autoSelect,
         this.showBar,
         this.layerList,
         h("h2", {}, "Board materials"),
@@ -28913,6 +28943,7 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
         b3.disabled = !!v.view3d;
       }
       this.btnBg.classList.toggle("on", v.background === "light");
+      this.autoSelectInput.checked = v.autoSelectLayer !== false;
     }
     #refreshShow() {
       for (const g of LAYER_GROUPS) {
@@ -29104,8 +29135,9 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     }
     #onSelect(hit) {
       this.selection = hit;
-      const layerChanged = hit && hit.layerId !== this.activeLayerId;
-      if (hit && this.view.solo.length !== 1) {
+      const follow = hit && this.view.autoSelectLayer && this.view.solo.length !== 1;
+      const layerChanged = follow && hit.layerId !== this.activeLayerId;
+      if (follow) {
         this.activeLayerId = hit.layerId;
         this.view.activeLayer = hit.layerId;
         this.viewer.settings.activeLayerId = hit.layerId;
@@ -29113,7 +29145,10 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
       this.#refreshInspector();
       this.#refreshLayers();
       this.#refreshDiagnostics();
-      if (layerChanged) this.dock.refresh();
+      if (layerChanged) {
+        this.dock.refresh();
+        this.layerList.querySelector(".layer.active")?.scrollIntoView?.({ block: "nearest" });
+      }
       this.dock.onSelection();
     }
     /** Select one object (from the analyser), as if it had been clicked on the board. */

@@ -789,3 +789,11 @@ table.apt tr.on td {
   margin: 4px 6px;
   background: var(--line);
 }
+.auto-select {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 10px 6px;
+  font-size: 12px;
+  cursor: pointer;
+}

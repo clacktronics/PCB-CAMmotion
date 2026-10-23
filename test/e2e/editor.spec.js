@@ -248,3 +248,53 @@ test('drill layer: add a hole with a new tool, shift+drag box selects holes', as
   await expect(page.locator('[data-testid=edit-selection]')).toHaveText(`${n0} selected`);
   expect(errors).toEqual([]);
 });
+
+/** An F.Cu flash that is the topmost object under its centre (no silkscreen or hole on it). */
+const topPad = (page) =>
+  page.evaluate((n) => {
+    const v = window.__pcam.app.viewer;
+    const objs = window.__pcam.app.layerById(n).image.objects;
+    for (let i = 0; i < objs.length; i++) {
+      const o = objs[i];
+      if (o.k !== 'F' || !o.dark) continue;
+      const hit = v.pickAt(o.x, o.y);
+      if (hit?.layerId === n && hit.index === i) return { index: i, x: o.x, y: o.y };
+    }
+    return null;
+  }, FCU);
+
+test('auto select layer: clicking a shape moves to its layer; switched off, the layer stays', async ({ page }) => {
+  const { errors } = await openApp(page);
+  await loadBoard(page);
+  const BCU = 'synthetic-board-B_Cu.gbr';
+  const active = () => page.locator('[data-testid=layer].active');
+  const toggle = page.locator('[data-testid=auto-select-layer]');
+  const pad = await topPad(page);
+  expect(pad).not.toBeNull();
+  // on by default: a click on an F.Cu pad makes F.Cu the selected layer
+  await expect(toggle).toBeChecked();
+  await selectLayer(page, BCU);
+  await clickMm(page, pad.x, pad.y);
+  await expect(active()).toHaveAttribute('data-name', FCU);
+  await expect(page.locator('[data-testid=inspector]')).toContainText('Flash (D03)');
+  // in edit mode it switches the edited layer and selects the shape there
+  await selectLayer(page, BCU);
+  await page.locator('[data-testid=edit-toggle]').click();
+  await clickMm(page, pad.x, pad.y);
+  await expect(active()).toHaveAttribute('data-name', FCU);
+  await expect(page.locator('[data-testid=edit-selection]')).toHaveText('1 selected');
+  await page.keyboard.press('e');
+  // off: the selected layer stays put (the inspector still shows the shape)
+  await toggle.uncheck();
+  await selectLayer(page, BCU);
+  await clickMm(page, pad.x, pad.y);
+  await expect(page.locator('[data-testid=inspector]')).toContainText('Flash (D03)');
+  await expect(active()).toHaveAttribute('data-name', BCU);
+  // and in edit mode only the edited layer can be picked, as before
+  await page.locator('[data-testid=edit-toggle]').click();
+  await clickMm(page, pad.x, pad.y);
+  await expect(active()).toHaveAttribute('data-name', BCU);
+  await expect(page.locator('[data-testid=edit-selection]')).not.toHaveText('1 selected');
+  expect(await page.evaluate(() => window.__pcam.app.project.settings.view.autoSelectLayer)).toBe(false);
+  expect(errors).toEqual([]);
+});

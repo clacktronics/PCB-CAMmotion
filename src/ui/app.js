@@ -221,6 +221,7 @@ export class App {
       touch: () => app.#touch(),
       layers: () => app.layers,
       editLayer: (id) => id !== app.activeLayerId && app.#setActive(id),
+      autoSelectLayer: () => app.view.autoSelectLayer,
     });
 
     const toolbar = h('header', { class: 'toolbar' }, [
@@ -265,8 +266,25 @@ export class App {
     this.showBar = h('div', { class: 'show-toggles', 'data-testid': 'show-toggles' }, Object.values(this.btnShow));
     this.layerList = h('ul', { class: 'layers', 'data-testid': 'layers' });
     this.stackPanel = h('div', { class: 'stack' });
+    this.autoSelectInput = h('input', {
+      type: 'checkbox',
+      'data-testid': 'auto-select-layer',
+      onchange: (e) => {
+        this.view.autoSelectLayer = e.target.checked;
+        this.#touch();
+      },
+    });
+    const autoSelect = h(
+      'label',
+      {
+        class: 'auto-select',
+        title: 'Clicking a shape on the board selects its layer (in edit mode: edits that layer)',
+      },
+      [this.autoSelectInput, 'Auto select layer'],
+    );
     const left = h('aside', { class: 'panel left' }, [
       h('h2', {}, 'Layers'),
+      autoSelect,
       this.showBar,
       this.layerList,
       h('h2', {}, 'Board materials'),
@@ -752,6 +770,7 @@ export class App {
       b.disabled = !!v.view3d;
     }
     this.btnBg.classList.toggle('on', v.background === 'light');
+    this.autoSelectInput.checked = v.autoSelectLayer !== false;
   }
 
   #refreshShow() {
@@ -958,8 +977,9 @@ export class App {
 
   #onSelect(hit) {
     this.selection = hit;
-    const layerChanged = hit && hit.layerId !== this.activeLayerId;
-    if (hit && this.view.solo.length !== 1) {
+    const follow = hit && this.view.autoSelectLayer && this.view.solo.length !== 1;
+    const layerChanged = follow && hit.layerId !== this.activeLayerId;
+    if (follow) {
       this.activeLayerId = hit.layerId;
       this.view.activeLayer = hit.layerId;
       this.viewer.settings.activeLayerId = hit.layerId;
@@ -967,7 +987,10 @@ export class App {
     this.#refreshInspector();
     this.#refreshLayers();
     this.#refreshDiagnostics();
-    if (layerChanged) this.dock.refresh();
+    if (layerChanged) {
+      this.dock.refresh();
+      this.layerList.querySelector('.layer.active')?.scrollIntoView?.({ block: 'nearest' });
+    }
     this.dock.onSelection();
   }
 

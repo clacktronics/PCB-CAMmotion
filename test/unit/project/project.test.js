@@ -89,6 +89,7 @@ test('viewer settings and layer overrides survive save → load (in settings/pro
     explode: 0.35,
     explodeStyle: 'layers',
     camera3d: { position: [10, -60, 80], target: [40, 30, 0] },
+    autoSelectLayer: false,
   });
   p.settings.analyze = {
     open: false,
@@ -142,6 +143,16 @@ test('3D view settings: defaults for older files, explode kept within 0..1', () 
     p.settings.view.explode = given;
     assert.equal(ensureSettings(p).settings.view.explode, want, String(given));
   }
+});
+
+test('auto select layer: on for older files, kept as a boolean', () => {
+  const p = ensureSettings(loadProject(bytes(join(FIXTURES, 'pcam', 'v1-with-source.pcam'))));
+  assert.equal(p.settings.view.autoSelectLayer, true);
+  p.settings.view.autoSelectLayer = 'no';
+  assert.equal(ensureSettings(p).settings.view.autoSelectLayer, true, 'nonsense falls back to on');
+  p.settings.view.autoSelectLayer = false;
+  const back = ensureSettings(loadProject(saveProject(p)));
+  assert.equal(back.settings.view.autoSelectLayer, false);
 });
 
 test('analyser settings: defaults for older files, bad values replaced', () => {

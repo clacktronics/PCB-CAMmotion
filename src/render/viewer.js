@@ -338,12 +338,11 @@ export class Viewer {
 
   /**
    * Topmost visible object at a board point (mm), optionally only on layers `accept` takes
-   * (e.g. copper only, for "select connected").
+   * (e.g. copper only, for "select connected"). In edit mode only the layer being edited can
+   * be picked, unless `only` is passed as null (any shown layer).
    */
-  pickAt(x, y, accept = null) {
+  pickAt(x, y, accept = null, only = this.settings.pickLayerId) {
     const tol = 3 / this.view.scale; // 3 CSS px
-    // in edit mode only the layer being edited can be picked
-    const only = this.settings.pickLayerId;
     let order = only ? this.layers.filter((l) => l.id === only && l.image) : this.#pickOrder();
     if (accept) order = order.filter(accept);
     for (const l of order) {

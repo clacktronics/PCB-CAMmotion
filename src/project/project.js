@@ -17,6 +17,8 @@
 //                    view3d: show the 3D view; explode: 0..1 how far the 3D layers are spread;
 //                    explodeStyle: sheets (apart by copper layer, each on its substrate) | layers;
 //                    camera3d: null | { position: [x, y, z], target: [x, y, z] } in mm
+//                    autoSelectLayer: clicking a shape on the board selects its layer (in
+//                    edit mode: switches the edited layer to it); off keeps the layer
 //   settings.edit:   { on, tool, selectMode, gridMm, aperture: { code, template, sizesMm }, holeDiaMm }
 //                    the editor (milestone 4): tool = select | lasso | hand | pad | track |
 //                    region; selectMode = enclose (box/lasso picks objects entirely inside) |
@@ -63,6 +65,7 @@ export const DEFAULT_VIEW = {
   explode: 0,
   explodeStyle: 'sheets',
   camera3d: null,
+  autoSelectLayer: true,
 };
 
 export const EDIT_TOOLS = ['select', 'lasso', 'hand', 'pad', 'track', 'region'];
@@ -104,6 +107,7 @@ export function ensureSettings(project) {
   const explode = Number(s.view.explode);
   s.view.explode = Number.isFinite(explode) ? Math.min(1, Math.max(0, explode)) : 0;
   s.view.view3d = s.view.view3d === true;
+  if (typeof s.view.autoSelectLayer !== 'boolean') s.view.autoSelectLayer = DEFAULT_VIEW.autoSelectLayer;
   if (!EXPLODE_STYLES.includes(s.view.explodeStyle)) s.view.explodeStyle = DEFAULT_VIEW.explodeStyle;
   s.analyze = normaliseAnalyze(s.analyze);
   s.edit = normaliseEdit(s.edit);
