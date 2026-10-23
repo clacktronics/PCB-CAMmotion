@@ -356,3 +356,84 @@ test('right-click outside edit mode: select connected uses the copper under a ho
   expect(sel).toContain(pad);
   expect(errors).toEqual([]);
 });
+
+test('rubber deletes everything its stroke touches (one undo step); paint adds a filled region', async ({ page }) => {
+  const { errors } = await openApp(page);
+  await startEditing(page);
+  const layerObjects = () =>
+    page.evaluate((n) => window.__pcam.app.layerById(n).image.objects.map((o) => ({ k: o.k, ln: o.ln })), FCU);
+  const n0 = (await layerObjects()).length;
+
+  // rubber: a stroke down across the long track's middle
+  await page.keyboard.press('x');
+  await expect(page.locator('[data-testid=tool-rubber]')).toHaveClass(/on/);
+  await expect(page.locator('[data-testid=edit-tool]')).toHaveText('Rubber');
+  await expect(page.locator('[data-testid=pick-from]')).toBeVisible();
+  const brush = page.locator('[data-testid=brush-size]');
+  await brush.fill('0.2');
+  await brush.dispatchEvent('change');
+  const t = longTrack();
+  const o = image.objects[t.index];
+  const xm = (o.x1 + o.x2) / 2;
+  const from = [xm, o.y1 + 0.5];
+  const to = [xm, o.y1 - 0.5];
+  const [ax, ay] = await clientAt(page, ...from);
+  const [bx, by] = await clientAt(page, ...to);
+  await page.mouse.move(ax, ay);
+  await page.mouse.down();
+  await page.mouse.move(bx, by, { steps: 6 });
+  // what it will delete is marked while dragging
+  const marked = await page.evaluate(() =>
+    Object.fromEntries([...window.__pcam.app.editor.drag.hits].map(([id, s]) => [id, [...s]])),
+  );
+  expect(marked[FCU]).toContain(t.index);
+  await page.mouse.up();
+  const after = await layerObjects();
+  expect(after.length).toBe(n0 - marked[FCU].length);
+  expect(after.map((x) => x.ln)).not.toContain(o.ln);
+  await page.keyboard.press('Control+z');
+  expect((await layerObjects()).length).toBe(n0);
+
+  // paint: a stroke off the board becomes one region
+  await page.keyboard.press('b');
+  await expect(page.locator('[data-testid=tool-paint]')).toHaveClass(/on/);
+  await brush.fill('1');
+  await brush.dispatchEvent('change');
+  const b = image.bounds;
+  await dragMm(page, [b[2] + 2, b[1] + 2], [b[2] + 4, b[1] + 3]);
+  const painted = await layerObjects();
+  expect(painted.length).toBe(n0 + 1);
+  expect(painted.at(-1).k).toBe('R');
+  const area = await page.evaluate((n) => {
+    const ob = window.__pcam.app.layerById(n).image.objBounds;
+    const i = ob.length / 4 - 1;
+    return [ob[i * 4 + 2] - ob[i * 4], ob[i * 4 + 3] - ob[i * 4 + 1]];
+  }, FCU);
+  // about the 2 × 1 mm stroke plus the 1 mm brush
+  expect(area[0]).toBeGreaterThan(2.5);
+  expect(area[1]).toBeGreaterThan(1.5);
+  expect(await page.evaluate(() => window.__pcam.app.project.settings.edit.brushMm)).toBe(1);
+  expect(await selection(page)).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
+test('drill layer: the rubber deletes holes, there is no paint', async ({ page }) => {
+  const { errors } = await openApp(page);
+  await loadBoard(page);
+  const drl = await page.evaluate(() => window.__pcam.app.layers.find((l) => l.kind === 'excellon').name);
+  await page.locator(`[data-testid=layer][data-name="${drl}"]`).click();
+  await clickMenu(page, '[data-testid=edit-toggle]');
+  await expect(page.locator('[data-testid=tool-paint]')).toHaveCount(0);
+  await page.locator('[data-testid=tool-rubber]').click();
+  const hole = await page.evaluate((n) => {
+    const v = window.__pcam.app.viewer;
+    const objs = window.__pcam.app.layerById(n).image.objects;
+    const i = objs.findIndex((o, k) => o.k === 'F' && v.pickAt(o.x, o.y)?.index === k);
+    return { n: objs.length, x: objs[i].x, y: objs[i].y };
+  }, drl);
+  const [cx, cy] = await clientAt(page, hole.x, hole.y);
+  await page.mouse.click(cx, cy);
+  const n = await page.evaluate((l) => window.__pcam.app.layerById(l).image.objects.length, drl);
+  expect(n).toBeLessThan(hole.n);
+  expect(errors).toEqual([]);
+});

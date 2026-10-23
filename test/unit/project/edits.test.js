@@ -110,6 +110,7 @@ test('editor settings: defaults filled in, nonsense replaced, saved in the proje
     aperture: { code: null, template: 'C', sizesMm: [0.25, 0.25] },
     holeDiaMm: 0.8,
     pickFrom: 'layer',
+    brushMm: 0.5,
   });
   assert.deepEqual(
     normaliseEdit({
@@ -119,6 +120,7 @@ test('editor settings: defaults filled in, nonsense replaced, saved in the proje
       gridMm: -1,
       aperture: { code: 12, template: 'X', sizesMm: [0, 2] },
       pickFrom: 'everything',
+      brushMm: -2,
       keep: 1,
     }),
     {
@@ -128,11 +130,14 @@ test('editor settings: defaults filled in, nonsense replaced, saved in the proje
       aperture: { code: 12, template: 'C', sizesMm: [0.25, 2] },
       holeDiaMm: 0.8,
       pickFrom: 'layer',
+      brushMm: 0.5,
       keep: 1,
     },
   );
-  p.settings.edit = normaliseEdit({ on: true, tool: 'track', gridMm: 0, pickFrom: 'solo' });
+  p.settings.edit = normaliseEdit({ on: true, tool: 'paint', gridMm: 0, pickFrom: 'solo', brushMm: 1.2 });
   assert.equal(p.settings.edit.pickFrom, 'solo');
+  assert.equal(p.settings.edit.tool, 'paint');
+  assert.equal(p.settings.edit.brushMm, 1.2);
   assert.deepEqual(loadProject(saveProject(p)).settings.edit, p.settings.edit);
   // the toolbar's tools; the retired box/lasso mode setting is dropped
   p.settings.edit = normaliseEdit({ on: true, tool: 'lasso', selectMode: 'touch' });

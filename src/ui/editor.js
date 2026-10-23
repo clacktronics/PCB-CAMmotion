@@ -9,6 +9,9 @@
 // of them, as one undo step.
 // The node tool edits one region's corners (src/edit/region-nodes.js): drag a corner, click
 // an edge's midpoint handle to add a corner, Delete to remove the selected corners.
+// Rubber and paint are round brushes (src/edit/brush.js): the rubber deletes every pad, track,
+// region or hole its stroke touches (on the Pick from layers), paint fills its stroke as one
+// region.
 // The edits themselves are DOM-free (src/edit/); this file turns pointer and key input into
 // edit ops. Its settings live in settings.edit of the .pcam (src/project/project.js).
 
@@ -20,17 +23,30 @@ import { MISC, rgba } from '../model/materials.js';
 import { objectsInPolygon, boxPolygon, sameShape, sameAperture, connected, pickLayers } from '../edit/selection.js';
 import { openMenu } from './context-menu.js';
 import { regionNodes, contourPoints } from '../edit/region-nodes.js';
+import { strokeHits, paintContour } from '../edit/brush.js';
 
 const TOOL_LABEL = {
   select: 'Select',
   lasso: 'Lasso',
   node: 'Node',
   hand: 'Hand',
+  rubber: 'Rubber',
   pad: 'Pad',
   track: 'Track',
   region: 'Region',
+  paint: 'Paint',
 };
-const TOOL_KEY = { v: 'select', l: 'lasso', a: 'node', h: 'hand', p: 'pad', t: 'track', r: 'region' };
+const TOOL_KEY = {
+  v: 'select',
+  l: 'lasso',
+  a: 'node',
+  h: 'hand',
+  x: 'rubber',
+  p: 'pad',
+  t: 'track',
+  r: 'region',
+  b: 'paint',
+};
 const PICK_HELP = 'Shift adds to the selection, Alt or Ctrl takes away';
 const PICK_FROM_LABEL = { layer: 'This layer', all: 'All layers', solo: 'Soloed layers' };
 const PICK_FROM_TITLE =
@@ -40,11 +56,14 @@ const TOOL_TITLE = {
   lasso: `Lasso (L): draw round the objects to select; start rightwards to pick objects entirely inside (green), leftwards to pick anything it touches (red) (${PICK_HELP})`,
   node: `Node (A): click a region to show its corners; drag a corner to move it (Shift keeps to 45°), click an edge's midpoint handle to add a corner (or drag it to place one), Delete removes the selected corners; drag a box to select corners (${PICK_HELP})`,
   hand: 'Hand (H): drag to pan the board (any tool: hold Space or drag with the middle button)',
+  rubber:
+    'Rubber (X): click or drag over the board to delete every pad, track, region or hole the brush touches (on the Pick from layers)',
   pad: 'Pad (P): click to place a pad with the chosen aperture (on a drill layer: a hole)',
   track:
     'Track (T): click the points, double-click or Enter to finish, Backspace removes the last point, Shift keeps to 45°',
   region:
     'Region (R): click the corners like a pen tool, click the first point, double-click or Enter to close it; Shift keeps to 45°',
+  paint: 'Paint (B): click or drag to paint a filled blob (a region) with a round brush',
 };
 // tool strip icons: 24×24 line drawings (currentColor)
 const ICON = {
@@ -52,10 +71,14 @@ const ICON = {
   lasso: '<ellipse cx="12" cy="9" rx="8" ry="5" stroke-dasharray="3 2"/><path d="M7 13c-2 2-1 4 1 4s2 2 0 4"/>',
   node: '<path d="M5 19L9 6l10 4-6 9z"/><rect x="3" y="17" width="4" height="4" fill="currentColor"/><rect x="7" y="4" width="4" height="4"/><rect x="17" y="8" width="4" height="4"/><rect x="11" y="17" width="4" height="4"/>',
   hand: '<path d="M8 12V5.5a1.5 1.5 0 013 0V11m0-6.5V4a1.5 1.5 0 013 0v7m0-6a1.5 1.5 0 013 0v7m0-3a1.5 1.5 0 013 0v4c0 4-3 7-7 7h-1c-3 0-4.5-1.5-6-4l-2.6-4.4a1.5 1.5 0 012.6-1.5L8 15"/>',
+  rubber:
+    '<path d="M14.5 4.5l5 5-9 9H6l-2.5-2.5a1.5 1.5 0 010-2.1z"/><path d="M9.5 9.5l5 5"/><path d="M10.5 18.5H20"/>',
   pad: '<circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
   track: '<path d="M4 18h6l8-8h3" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>',
   region:
     '<path d="M4 20l3-11 10-4 3 10-9 6z"/><circle cx="4" cy="20" r="1.6"/><circle cx="7" cy="9" r="1.6"/><circle cx="17" cy="5" r="1.6"/><circle cx="20" cy="15" r="1.6"/><circle cx="11" cy="21" r="1.6"/>',
+  paint:
+    '<path d="M20 4c-3 1-8 5-10 8l2 2c3-2 7-7 8-10z"/><path d="M9 13c-2 0-3.5 1.5-3.5 3.5 0 1.5-1 2.5-2.5 3 3 1 7 0 8-3z" fill="currentColor"/>',
 };
 const CLOSE_PX = 8;
 const LASSO_STEP_PX = 3;
@@ -76,7 +99,7 @@ export class EditorPanel {
     this.groups = new WeakMap(); // op → [{ layerId, op }]: ops made together on several layers
     this.sketch = []; // points of the track/region being drawn (mm)
     this.cursor = null;
-    this.drag = null; // { kind: 'move'|'box'|'lasso'|'node'|'insert'|'nodebox', start, dx, dy, end, points, x0, mode }
+    this.drag = null; // { kind: 'move'|'box'|'lasso'|'node'|'insert'|'nodebox'|'brush', start, dx, dy, end, points, x0, mode, hits }
     this.nodes = new Set(); // node tool: selected corners of the selected region (region-nodes.js numbers)
     this.nodeCache = null;
     this.busy = false;
@@ -192,7 +215,19 @@ export class EditorPanel {
     this.el.append(h('span', { class: 'tool-name', 'data-testid': 'edit-tool' }, this.#toolLabel(tool)));
     if (tool === 'pad' || tool === 'track') this.el.append(this.#apertureRow(layer));
     if (tool === 'node') this.el.append(this.#nodeRow());
-    if (tool === 'select' || tool === 'lasso') {
+    if (tool === 'rubber' || tool === 'paint')
+      this.el.append(
+        h('label', { title: 'Diameter of the round brush' }, [
+          'Brush ⌀ ',
+          numInput(this.s.brushMm, 'brush-size', (v) => {
+            if (!(v > 0)) return;
+            this.s.brushMm = v;
+            this.host.touch();
+          }),
+          ' mm',
+        ]),
+      );
+    if (tool === 'select' || tool === 'lasso' || tool === 'rubber') {
       const pickFrom = h(
         'select',
         {
@@ -303,7 +338,7 @@ export class EditorPanel {
   /** Tools of the edited layer: drill layers have no tracks or regions. */
   #tools(layer) {
     return layer?.kind === 'excellon'
-      ? EDIT_TOOLS.filter((t) => t !== 'track' && t !== 'region' && t !== 'node')
+      ? EDIT_TOOLS.filter((t) => t !== 'track' && t !== 'region' && t !== 'node' && t !== 'paint')
       : EDIT_TOOLS;
   }
 
@@ -327,10 +362,7 @@ export class EditorPanel {
       return s;
     };
     const button = (name, label, attrs) => h('button', { ...attrs, 'aria-label': label }, [icon(name)]);
-    const groups = [
-      ['select', 'lasso', 'node', 'hand'],
-      ['pad', 'track', 'region'],
-    ];
+    const groups = [['select', 'lasso', 'node', 'hand'], ['pad', 'track', 'region', 'paint'], ['rubber']];
     for (const g of groups) {
       const shown = g.filter((t) => tools.includes(t));
       if (!shown.length) continue;
@@ -1150,6 +1182,101 @@ export class EditorPanel {
     }
   }
 
+  // ---------------------------------------------------------------- rubber and paint
+
+  /** Pointer down with the rubber or paint: a brush stroke starts (a click is a single dab). */
+  #brushDown(mm) {
+    this.drag = { kind: 'brush', points: [mm], hits: new Map() };
+    this.cursor = mm;
+    if (this.s.tool === 'rubber') this.#rubHits(this.drag, [mm]);
+    this.host.viewer.drawOverlay();
+    return true;
+  }
+
+  #brushMove(d, mm) {
+    this.cursor = mm;
+    const last = d.points.at(-1);
+    if (Math.hypot(mm[0] - last[0], mm[1] - last[1]) * this.host.viewer.view.scale < LASSO_STEP_PX) return;
+    d.points.push(mm);
+    if (this.s.tool === 'rubber') this.#rubHits(d, [last, mm]);
+  }
+
+  /** Rubber: add the objects a part of the stroke touches on the Pick from layers. */
+  #rubHits(d, points) {
+    const r = this.s.brushMm / 2;
+    for (const l of this.#pickFromLayers()) {
+      const found = strokeHits(l.image, points, r);
+      if (!found.length) continue;
+      let set = d.hits.get(l.id);
+      if (!set) d.hits.set(l.id, (set = new Set()));
+      for (const i of found) set.add(i);
+    }
+  }
+
+  /** The stroke is done: the rubber deletes what it touched, paint adds its outline as a region. */
+  #brushUp(d) {
+    const v = this.host.viewer;
+    if (this.s.tool === 'rubber') {
+      if (!d.hits.size) {
+        this.host.message('Nothing under the rubber');
+        return v.drawOverlay();
+      }
+      // the rubbed objects become the selection and are deleted like it (one undo step)
+      this.#setSelected(new Map([...d.hits].map(([id, set]) => [id, [...set]])));
+      this.deleteSelection();
+      return;
+    }
+    if (this.layer()?.kind !== 'gerber') return v.drawOverlay();
+    let pointsMm;
+    try {
+      pointsMm = paintContour(d.points, this.s.brushMm / 2);
+    } catch (e) {
+      if (!(e instanceof EditError)) throw e;
+      this.host.message(e.message, true);
+      return v.drawOverlay();
+    }
+    // the new blob is not selected: the selection highlight would hide what is painted next
+    if (this.apply({ type: 'addRegion', pointsMm }, 'Painted a region')) {
+      this.#setSelection([]);
+      this.refresh();
+    }
+  }
+
+  /** Brush overlay: the stroke so far (rubber: and what it will delete), the brush outline. */
+  #drawBrush(ctx, map) {
+    const v = this.host.viewer;
+    const d = this.drag?.kind === 'brush' ? this.drag : null;
+    const rubber = this.s.tool === 'rubber';
+    const pick = rubber ? MISC.selectTouch : MISC.selection;
+    if (d && rubber) for (const [id, set] of d.hits) v.outlineObjects(ctx, map, id, [...set], pick, 0.35);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    const rPx = Math.max(1, (this.s.brushMm / 2) * map.s);
+    ctx.fillStyle = ctx.strokeStyle = rgba(pick, rubber ? 0.25 : 0.5);
+    if (d?.points.length === 1) {
+      ctx.beginPath();
+      ctx.arc(...v.toPx(map, ...d.points[0]), rPx, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (d) {
+      ctx.beginPath();
+      d.points.forEach((p, i) => {
+        const [x, y] = v.toPx(map, ...p);
+        if (i) ctx.lineTo(x, y);
+        else ctx.moveTo(x, y);
+      });
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = 2 * rPx;
+      ctx.stroke();
+    }
+    if (this.cursor) {
+      ctx.beginPath();
+      ctx.arc(...v.toPx(map, ...this.cursor), rPx, 0, Math.PI * 2);
+      ctx.strokeStyle = rgba(pick, 1);
+      ctx.lineWidth = Math.max(1, v.dpr);
+      ctx.stroke();
+    }
+  }
+
   // ---------------------------------------------------------------- input
 
   snap(v) {
@@ -1246,6 +1373,7 @@ export class EditorPanel {
         const layer = this.layer();
         const tool = this.s.tool;
         if (layer && !this.space && tool === 'node') return this.#nodeDown(mm, e);
+        if (layer && !this.space && (tool === 'rubber' || tool === 'paint')) return this.#brushDown(mm);
         if (!layer || this.space || (tool !== 'select' && tool !== 'lasso')) return false;
         // drag direction on screen (not board X: the bottom view is mirrored) picks the mode,
         // as in CAD tools: rightwards = entirely inside, leftwards = anything touched
@@ -1270,7 +1398,8 @@ export class EditorPanel {
       move: (mm, e) => {
         const d = this.drag;
         if (!d) return;
-        if (d.kind === 'node') {
+        if (d.kind === 'brush') this.#brushMove(d, mm);
+        else if (d.kind === 'node') {
           if (!this.nodes.has(d.k)) this.nodes = new Set(d.shift ? [...this.nodes, d.k] : [d.k]);
           this.#nodeDragTo(d, mm, e);
         } else if (d.kind === 'insert') d.at = this.#snapPt(mm);
@@ -1294,6 +1423,7 @@ export class EditorPanel {
         const d = this.drag;
         this.drag = null;
         if (!d || !moved) return v.drawOverlay();
+        if (d.kind === 'brush') return this.#brushUp(d);
         if (d.kind === 'node') {
           if (d.dx || d.dy) this.moveCorners(d.dx, d.dy);
           else v.drawOverlay();
@@ -1330,6 +1460,12 @@ export class EditorPanel {
         const tool = this.s.tool;
         if (tool === 'hand') return;
         if (tool === 'node') return this.#nodeClick(mm, e);
+        if (tool === 'rubber' || tool === 'paint') {
+          const d = this.drag;
+          this.drag = null;
+          if (d?.kind === 'brush') this.#brushUp(d);
+          return;
+        }
         if (tool === 'select' || tool === 'lasso') {
           let hit = v.pickAt(mm[0], mm[1]);
           const modifier = e.shiftKey || e.ctrlKey || e.metaKey || e.altKey;
@@ -1385,8 +1521,13 @@ export class EditorPanel {
           v.canvas.dataset.handle = handle?.kind ?? '';
           return;
         }
-        this.cursor = this.s.tool === 'pad' ? this.#snapPt(mm) : this.#placePt(mm, e);
-        if (this.s.tool === 'pad' || this.s.tool === 'track' || this.s.tool === 'region') v.drawOverlay();
+        const tool = this.s.tool;
+        if (tool === 'rubber' || tool === 'paint') {
+          this.cursor = mm;
+          return v.drawOverlay();
+        }
+        this.cursor = tool === 'pad' ? this.#snapPt(mm) : this.#placePt(mm, e);
+        if (tool === 'pad' || tool === 'track' || tool === 'region') v.drawOverlay();
       },
     };
   }
@@ -1427,6 +1568,7 @@ export class EditorPanel {
       ctx.setLineDash([]);
     }
     const tool = this.s.tool;
+    if (tool === 'rubber' || tool === 'paint') return this.#drawBrush(ctx, map);
     if (tool !== 'pad' && tool !== 'track' && tool !== 'region') return;
     const half = this.#apertureHalf(layer);
     const pts = this.cursor ? [...this.sketch, this.cursor] : [...this.sketch];

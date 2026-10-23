@@ -757,7 +757,9 @@ table.apt tr.on td {
 .main canvas.editing[data-tool='pad'],
 .main canvas.editing[data-tool='track'],
 .main canvas.editing[data-tool='region'],
-.main canvas.editing[data-tool='lasso'] {
+.main canvas.editing[data-tool='lasso'],
+.main canvas.editing[data-tool='rubber'],
+.main canvas.editing[data-tool='paint'] {
   cursor: crosshair;
 }
 .main canvas.editing[data-tool='hand'] {
