@@ -34,7 +34,7 @@
 //                    step = commands run (null = playback off, whole image shown), by =
 //                    command | object (object steps skip commands that draw nothing),
 //                    speed = commands per second while playing
-// `edits` (model/edits.json, schema 2; region corner ops from schema 3): per source file the
+// `edits` (model/edits.json, schema 2; region corner ops from schema 3, cutOut and paint from 4): per source file the
 // edit ops of milestone 4 ({ base, ops, redo }, src/edit/session.js); buildLayers replays them, so layers show the
 // edited commands and image while sources/ keeps the original bytes.
 // `stackup` is null until set; it is filled from a .gbrjob (source: 'gbrjob') unless the user

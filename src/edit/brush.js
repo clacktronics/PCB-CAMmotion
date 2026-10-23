@@ -1,8 +1,10 @@
 // Brush geometry for the editor's rubber and paint tools (DOM-free). A brush stroke is the
 // path the pointer dragged (points in mm) swept by a round brush of radius rMm: the union of
 // a capsule per segment (a disc for a single dab).
-//   rubber: every object the stroke touches is deleted whole (strokeHits → a delete op)
-//   paint:  the stroke's outline becomes one filled region (paintContour → an addRegion op)
+//   rubber: the stroke is cut out of every object it touches (strokeHits, strokeContours →
+//           a cutOut op); holes cannot be partly drilled, so they are deleted whole
+//   paint:  the stroke's outline becomes one filled region, unified with the objects it
+//           touches (paintContour, strokeHits → a paint op)
 // Arcs of the brush are flattened to straight segments within tolMm (chord error), inside the
 // true circle, so a painted blob never reaches further than the brush.
 
@@ -74,19 +76,26 @@ export function strokeHits(image, points, rMm) {
   return [...hit].sort((a, b) => a - b);
 }
 
+const nm = (v) => Math.round(v * 1e6) / 1e6 || 0;
+
+/** The stroke's outline as contours (outer CCW, holes CW), flat mm rounded to the nm. */
+export function strokeContours(points, rMm) {
+  if (!(rMm > 0) || !Number.isFinite(rMm)) throw new EditError('The brush size must be positive');
+  if (!points.length) throw new EditError('Nothing under the brush');
+  return booleanOp('union', strokePolygons(points, rMm), []).map((c) => c.map(nm));
+}
+
 /**
  * The painted shape of a stroke as one region contour (flat mm, CCW): the union of the
  * stroke's capsules, any holes (a stroke that loops round) joined to the outline by cut-ins.
  * Coordinates are rounded to the nm.
  */
 export function paintContour(points, rMm) {
-  if (!(rMm > 0) || !Number.isFinite(rMm)) throw new EditError('The brush size must be positive');
-  if (!points.length) throw new EditError('Nothing painted');
-  const polys = nestPolygons(booleanOp('union', strokePolygons(points, rMm), []));
+  const polys = nestPolygons(strokeContours(points, rMm));
   // a stroke is one connected shape: one outline (with holes where it loops)
   if (polys.length !== 1) throw new EditError('Could not outline the brush stroke');
   const { outer, holes } = polys[0];
   const c = holes.length ? joinHoles(outer, holes) : outer;
   if (holes.length && !validContour(c)) throw new EditError('Could not join a hole to its outline');
-  return c.map((v) => Math.round(v * 1e6) / 1e6 || 0);
+  return c.map(nm);
 }

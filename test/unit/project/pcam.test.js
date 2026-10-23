@@ -15,6 +15,7 @@ import {
 import { APP_VERSION } from '../../../src/version.js';
 import { assertGolden } from '../../helpers/golden.js';
 import { buildLayers } from '../../../src/project/project.js';
+import { contoursArea, imageContours } from '../../../src/model/polygons.js';
 
 const NOW = new Date('2026-10-15T00:00:00Z');
 const fixture = (name) => new Uint8Array(readFileSync(new URL(`../../fixtures/pcam/${name}`, import.meta.url)));
@@ -94,7 +95,13 @@ test('fixture v1-with-source.pcam loads, and unknown fields/entries survive load
 });
 
 test('every .pcam fixture loads and migrates to the current schema', () => {
-  for (const name of ['v1-empty.pcam', 'v1-with-source.pcam', 'v2-with-edits.pcam', 'v3-with-node-edits.pcam']) {
+  for (const name of [
+    'v1-empty.pcam',
+    'v1-with-source.pcam',
+    'v2-with-edits.pcam',
+    'v3-with-node-edits.pcam',
+    'v4-with-brush-edits.pcam',
+  ]) {
     assert.equal(loadProject(fixture(name)).manifest.schemaVersion, SCHEMA_VERSION, name);
   }
 });
@@ -168,7 +175,7 @@ test('file names: .pcam in any case; download name is sanitised', () => {
 
 test('fixture v3-with-node-edits.pcam loads and replays its region corner edits', () => {
   const p = loadProject(fixture('v3-with-node-edits.pcam'));
-  assert.equal(p.manifest.schemaVersion, 3);
+  assert.equal(p.manifest.schemaVersion, SCHEMA_VERSION, 'migrated to the current schema');
   const rec = p.edits['board-F_Cu.gbr'];
   assert.deepEqual(
     rec.ops.map((o) => o.type),
@@ -186,6 +193,35 @@ test('fixture v3-with-node-edits.pcam loads and replays its region corner edits'
     [...b].map((v) => +v.toFixed(6)),
     [2, -0.5, 4.5, 3.25],
   );
+  assert.deepEqual(layers[0].diagnostics.errors, []);
+  assert.deepEqual(loadProject(saveProject(p)), p);
+});
+
+test('fixture v4-with-brush-edits.pcam loads and replays its rubber cut-outs and paint', () => {
+  const p = loadProject(fixture('v4-with-brush-edits.pcam'));
+  assert.equal(p.manifest.schemaVersion, 4);
+  const rec = p.edits['board-F_Cu.gbr'];
+  assert.deepEqual(
+    rec.ops.map((o) => o.type),
+    ['cutOut', 'cutOut', 'cutOut', 'paint'],
+  );
+  assert.deepEqual(
+    rec.redo.map((o) => o.type),
+    ['cutOut'],
+  );
+  const { layers } = buildLayers(p);
+  const img = layers[0].image;
+  // the pad gone, the region with a hole, the track cut in two and painted whole again
+  // (the paint is drawn last)
+  assert.deepEqual(
+    img.objects.map((o) => o.k),
+    ['R', 'R'],
+  );
+  const box = (i) => [...img.objBounds.slice(i * 4, i * 4 + 4)].map((v) => +v.toFixed(3));
+  assert.deepEqual(box(0), [6, 0, 8, 2]);
+  assert.deepEqual(box(1), [0.75, -0.3, 5.25, 0.3]);
+  // the hole in the region
+  assert.ok(Math.abs(contoursArea(imageContours(img, [0])) - (4 - Math.PI * 0.16)) < 0.01);
   assert.deepEqual(layers[0].diagnostics.errors, []);
   assert.deepEqual(loadProject(saveProject(p)), p);
 });

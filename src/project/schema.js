@@ -1,7 +1,7 @@
 // .pcam project schema: the in-memory project shape, its version and the migrations that
 // bring older files forward. See PROJECT_PLAN.md → "Project file — .pcam".
 //
-// In-memory project (schema 3):
+// In-memory project (schema 4):
 //   {
 //     manifest: { format, schemaVersion, appVersion, name, created, modified, units, ...unknown },
 //     sources:  [{ name, bytes: Uint8Array }]   original files, byte-for-byte untouched
@@ -18,7 +18,7 @@
 import { APP_VERSION } from '../version.js';
 
 export const PCAM_FORMAT = 'pcam';
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 export const PROJECT_UNITS = 'mm';
 
 /**
@@ -61,6 +61,9 @@ export const MIGRATIONS = {
   // (src/edit/region-nodes.js). Schema-2 edits replay unchanged, so only the version changes;
   // the bump makes older apps refuse files whose edits they could not replay.
   2: (raw) => ({ ...raw, manifest: { ...raw.manifest, schemaVersion: 3 } }),
+  // 3 → 4: the rubber and paint brushes add the cutOut and paint edit ops (src/edit/gerber-ops.js). Schema-3 edits replay
+  // unchanged, so only the version changes; older apps refuse files they could not replay.
+  3: (raw) => ({ ...raw, manifest: { ...raw.manifest, schemaVersion: 4 } }),
 };
 
 /**

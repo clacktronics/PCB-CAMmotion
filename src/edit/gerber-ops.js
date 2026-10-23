@@ -9,6 +9,14 @@
 //   { type: 'toRegion', targets, tolMm }               turn objects into regions; objects
 //                                                      that overlap are unified into one outline
 //   { type: 'unifyLayer', tolMm }                      the whole layer as non-overlapping regions
+//   { type: 'paint', targets, pointsMm, tolMm }       a filled outline (the paint brush) unified
+//                                                      with the objects it touches: they become
+//                                                      regions of the union, drawn last (no
+//                                                      targets: the same as addRegion)
+//   { type: 'cutOut', targets, clipMm, tolMm }         cut a shape out of objects (the rubber):
+//                                                      each becomes regions of what is left of
+//                                                      it, drawn where it was (nothing left:
+//                                                      removed); clipMm is a list of contours
 //   { type: 'moveVertex' | 'insertVertex' | 'deleteVertex', target, ... }
 //                                                      edit a region's corners (src/edit/region-nodes.js)
 // targets are command indices (at the time the op runs) of the commands that produced the
@@ -23,7 +31,7 @@
 
 import { objectCommand, commandObjectRange } from '../analyze/commands.js';
 import { fileUnit, mmPerCount } from './gerber-normalize.js';
-import { imageContours, nestPolygons, DEFAULT_TOL_MM } from '../model/polygons.js';
+import { imageContours, nestPolygons, booleanOp, contoursArea, DEFAULT_TOL_MM } from '../model/polygons.js';
 import { joinHoles, validContour } from './cut-ins.js';
 import { emitObject } from '../render/draw-image.js';
 import { applyNodeOp, NODE_OPS } from './region-nodes.js';
@@ -266,6 +274,10 @@ export function applyGerberOp(commands, op, ctx) {
       return toRegion(commands, op, ctx, count);
     case 'unifyLayer':
       return unifyLayer(commands, op, ctx, count);
+    case 'cutOut':
+      return cutOut(commands, op, ctx, count);
+    case 'paint':
+      return paint(commands, op, ctx, count);
     default:
       if (NODE_OPS.includes(op.type)) return applyNodeOp(commands, op);
       throw new EditError(`Unknown edit ${op.type}`);
@@ -608,4 +620,108 @@ function unifyLayer(commands, op, ctx, count) {
   }
   out.push({ type: 'M02', line: 0 });
   return { commands: out, select };
+}
+
+// ---------------------------------------------------------------- cutting out
+
+/** The clip shape of a cutOut op: contours of at least 3 finite points. */
+function clipContours(clip) {
+  if (!Array.isArray(clip) || !clip.length) throw new EditError('Nothing to cut out');
+  for (const c of clip)
+    if (!Array.isArray(c) || c.length < 6 || c.length % 2 || !c.every(Number.isFinite))
+      throw new EditError('Invalid cut-out shape');
+  return clip;
+}
+
+/**
+ * Cut a shape out of objects. Each target is replaced, at its place in the file (so clear
+ * objects after it still erase it, spec 4.3.2), by regions of what is left of it; a target
+ * the shape covers is removed, one it does not overlap is left as it is.
+ */
+function cutOut(commands, op, ctx, count) {
+  const image = ctx.image;
+  const tol = op.tolMm ?? DEFAULT_TOL_MM;
+  const clip = clipContours(op.clipMm);
+  const edits = [];
+  for (const t of uniqueTargets(commands, op.targets)) {
+    const [a, b] = commandObjectRange(image, t.ci);
+    if (b - a !== 1) throw new EditError('Only single pads, tracks and regions can be cut');
+    const o = image.objects[a];
+    if (!o.dark) throw new EditError('Clear (LPC) objects cannot be cut');
+    const before = imageContours(image, [a], tol);
+    const left = booleanOp('difference', before, clip);
+    if (Math.abs(contoursArea(before) - contoursArea(left)) < 1e-9) continue; // not overlapped
+    const st = scanState(commands, t.kind === 'region' ? t.start : t.ci);
+    const insert = [];
+    const select = [];
+    const contours = polygonContours(left);
+    if (contours.length && st.interp !== 1) insert.push({ type: 'G', code: 1, line: o.ln });
+    for (const c of contours) {
+      insert.push({ type: 'G', code: 36, line: o.ln }, ...lineContour(c, count, o.ln));
+      select.push(insert.length);
+      insert.push({ type: 'G', code: 37, line: o.ln });
+    }
+    if (contours.length && st.interp !== 1) insert.push({ type: 'G', code: st.interp, line: o.ln });
+    const e = removal(commands, t);
+    edits.push({ ...e, insert: [...insert, ...e.insert], select });
+  }
+  if (!edits.length) throw new EditError('Nothing to cut out: the shape does not overlap the objects');
+  return spliceMany(commands, edits);
+}
+
+// ---------------------------------------------------------------- painting
+
+function contoursBounds(contours) {
+  const b = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const c of contours)
+    for (let i = 0; i < c.length; i += 2) {
+      b[0] = Math.min(b[0], c[i]);
+      b[1] = Math.min(b[1], c[i + 1]);
+      b[2] = Math.max(b[2], c[i]);
+      b[3] = Math.max(b[3], c[i + 1]);
+    }
+  return b;
+}
+
+/**
+ * Paint a filled outline unified with the objects it touches. The targets are removed and the
+ * union is drawn at the end of the file, on top. A clear object drawn after the first target
+ * and overlapping the union would no longer erase what it erased of the targets, so then the
+ * outline is only added on top (as addRegion), leaving the targets as they are.
+ */
+function paint(commands, op, ctx, count) {
+  const image = ctx.image;
+  const tol = op.tolMm ?? DEFAULT_TOL_MM;
+  const [shape] = clipContours([op.pointsMm]);
+  const targets = Array.isArray(op.targets) && op.targets.length ? uniqueTargets(commands, op.targets) : [];
+  const objs = [];
+  for (const t of targets) {
+    const [a, b] = commandObjectRange(image, t.ci);
+    if (b - a !== 1) throw new EditError('Only single pads, tracks and regions can be painted over');
+    if (!image.objects[a].dark) throw new EditError('Clear (LPC) objects cannot be painted over');
+    objs.push(a);
+  }
+  const plain = () => add(commands, { type: 'addRegion', pointsMm: op.pointsMm }, ctx, count);
+  if (!objs.length) return plain();
+  objs.sort((a, b) => a - b);
+  const union = booleanOp('union', imageContours(image, objs, tol), [shape]);
+  const ub = contoursBounds(union);
+  const ob = image.objBounds;
+  for (let j = objs[0] + 1; j < image.objects.length; j++)
+    if (
+      !image.objects[j].dark &&
+      !(ob[j * 4] > ub[2] || ob[j * 4 + 2] < ub[0] || ob[j * 4 + 1] > ub[3] || ob[j * 4 + 3] < ub[1])
+    )
+      return plain();
+  const at = insertionPoint(commands);
+  const st = scanState(commands, at);
+  const insert = resetState(st);
+  if (st.interp !== 1) insert.push({ type: 'G', code: 1, line: 0 });
+  const select = [];
+  for (const c of polygonContours(union)) {
+    insert.push({ type: 'G', code: 36, line: 0 }, ...lineContour(c, count, 0));
+    select.push(insert.length);
+    insert.push({ type: 'G', code: 37, line: 0 });
+  }
+  return spliceMany(commands, [...targets.map((t) => removal(commands, t)), { at, remove: 0, insert, select }]);
 }

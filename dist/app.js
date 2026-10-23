@@ -21022,7 +21022,7 @@ void main() {
       const side = item.side === "bottom" ? "bottom" : "top";
       const c = makeCanvas(w2, h2);
       const ctx = c.getContext("2d");
-      const paint = (coverage, colour, op2 = "source-over") => {
+      const paint2 = (coverage, colour, op2 = "source-over") => {
         const tmp = makeCanvas(w2, h2);
         const t = tmp.getContext("2d");
         t.drawImage(coverage, 0, 0);
@@ -21041,15 +21041,15 @@ void main() {
       const opacity = layer?.opacity ?? 1;
       if (item.type === "dielectric") {
         const sub = lookupMaterial("substrate", st2.substrate).value || SUBSTRATE.fr4;
-        paint(this.base, rgba(sub, 1));
+        paint2(this.base, rgba(sub, 1));
         return { canvas: c, opacity: 1, surface: SURFACE.substrate };
       }
       if (item.type === "copper") {
-        paint(this.#mask(layer), rgba(COPPER, 1));
+        paint2(this.#mask(layer), rgba(COPPER, 1));
         const outer = item.side !== "inner";
         const open2 = outer ? this.#openings(side) : null;
         if (outer && !this.#maskLayer(side)) {
-          paint(this.#mask(layer), rgba(lookupMaterial("finish", st2.finish).value, 1));
+          paint2(this.#mask(layer), rgba(lookupMaterial("finish", st2.finish).value, 1));
         } else if (open2) {
           const finish2 = lookupMaterial("finish", st2.finish).value;
           const ex = makeCanvas(w2, h2);
@@ -21057,7 +21057,7 @@ void main() {
           e.drawImage(this.#mask(layer), 0, 0);
           e.globalCompositeOperation = "destination-in";
           e.drawImage(open2, 0, 0);
-          paint(ex, rgba(finish2, 1));
+          paint2(ex, rgba(finish2, 1));
         }
         clipTo(this.base, "destination-in");
         return { canvas: c, opacity, surface: SURFACE.copper };
@@ -21065,28 +21065,28 @@ void main() {
       if (item.type === "soldermask") {
         const mat = lookupMaterial("mask", st2.mask?.[side] ?? st2.mask).value || SOLDER_MASK.green;
         if ((layer.role.polarity || "negative") !== "positive") {
-          paint(this.base, rgba(mat, 1));
+          paint2(this.base, rgba(mat, 1));
           clipTo(this.#mask(layer), "destination-out");
         } else {
-          paint(this.#mask(layer), rgba(mat, 1));
+          paint2(this.#mask(layer), rgba(mat, 1));
           clipTo(this.base, "destination-in");
         }
         return { canvas: c, opacity: (mat.opacity ?? 0.85) * opacity, surface: SURFACE.soldermask };
       }
       if (item.type === "legend") {
         const mat = lookupMaterial("silk", st2.silk?.[side] ?? st2.silk).value || SILKSCREEN.white;
-        paint(this.#mask(layer), rgba(mat, 1));
+        paint2(this.#mask(layer), rgba(mat, 1));
         const open2 = this.#openings(side);
         if (open2) clipTo(open2, "destination-out");
         clipTo(this.base, "destination-in");
         return { canvas: c, opacity, surface: SURFACE.legend };
       }
       if (item.type === "paste") {
-        paint(this.#mask(layer), rgba(MISC.paste, 1));
+        paint2(this.#mask(layer), rgba(MISC.paste, 1));
         clipTo(this.base, "destination-in");
         return { canvas: c, opacity: (MISC.paste.opacity ?? 1) * opacity, surface: SURFACE.paste };
       }
-      paint(this.#mask(layer), rgba({ rgb: roleColour(layer.role) }, 1));
+      paint2(this.#mask(layer), rgba({ rgb: roleColour(layer.role) }, 1));
       clipTo(this.base, "destination-in");
       return { canvas: c, opacity, surface: SURFACE.other };
     }
@@ -21489,7 +21489,7 @@ void main() {
 
   // src/project/schema.js
   var PCAM_FORMAT = "pcam";
-  var SCHEMA_VERSION = 3;
+  var SCHEMA_VERSION = 4;
   var PROJECT_UNITS = "mm";
   function createEmptyProject({ name = "untitled", now = /* @__PURE__ */ new Date() } = {}) {
     const stamp = now.toISOString();
@@ -21519,7 +21519,10 @@ void main() {
     // 2 → 3: region node editing adds the moveVertex, insertVertex and deleteVertex edit ops
     // (src/edit/region-nodes.js). Schema-2 edits replay unchanged, so only the version changes;
     // the bump makes older apps refuse files whose edits they could not replay.
-    2: (raw) => ({ ...raw, manifest: { ...raw.manifest, schemaVersion: 3 } })
+    2: (raw) => ({ ...raw, manifest: { ...raw.manifest, schemaVersion: 3 } }),
+    // 3 → 4: the rubber and paint brushes add the cutOut and paint edit ops (src/edit/gerber-ops.js). Schema-3 edits replay
+    // unchanged, so only the version changes; older apps refuse files they could not replay.
+    3: (raw) => ({ ...raw, manifest: { ...raw.manifest, schemaVersion: 4 } })
   };
   function migrate(raw, migrations = MIGRATIONS, target = SCHEMA_VERSION) {
     let current2 = raw;
@@ -25096,6 +25099,9 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     flush();
     return acc;
   }
+  function contoursArea(contours) {
+    return contours.reduce((s, c) => s + signedArea(c), 0);
+  }
 
   // src/edit/cut-ins.js
   function joinHoles(outer, holes) {
@@ -25640,6 +25646,10 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
         return toRegion(commands, op2, ctx, count2);
       case "unifyLayer":
         return unifyLayer(commands, op2, ctx, count2);
+      case "cutOut":
+        return cutOut(commands, op2, ctx, count2);
+      case "paint":
+        return paint(commands, op2, ctx, count2);
       default:
         if (NODE_OPS.includes(op2.type)) return applyNodeOp(commands, op2);
         throw new EditError(`Unknown edit ${op2.type}`);
@@ -25945,6 +25955,87 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     }
     out.push({ type: "M02", line: 0 });
     return { commands: out, select };
+  }
+  function clipContours(clip) {
+    if (!Array.isArray(clip) || !clip.length) throw new EditError("Nothing to cut out");
+    for (const c of clip)
+      if (!Array.isArray(c) || c.length < 6 || c.length % 2 || !c.every(Number.isFinite))
+        throw new EditError("Invalid cut-out shape");
+    return clip;
+  }
+  function cutOut(commands, op2, ctx, count2) {
+    const image = ctx.image;
+    const tol = op2.tolMm ?? DEFAULT_TOL_MM;
+    const clip = clipContours(op2.clipMm);
+    const edits = [];
+    for (const t of uniqueTargets(commands, op2.targets)) {
+      const [a2, b3] = commandObjectRange(image, t.ci);
+      if (b3 - a2 !== 1) throw new EditError("Only single pads, tracks and regions can be cut");
+      const o2 = image.objects[a2];
+      if (!o2.dark) throw new EditError("Clear (LPC) objects cannot be cut");
+      const before = imageContours(image, [a2], tol);
+      const left = booleanOp("difference", before, clip);
+      if (Math.abs(contoursArea(before) - contoursArea(left)) < 1e-9) continue;
+      const st2 = scanState(commands, t.kind === "region" ? t.start : t.ci);
+      const insert = [];
+      const select = [];
+      const contours = polygonContours(left);
+      if (contours.length && st2.interp !== 1) insert.push({ type: "G", code: 1, line: o2.ln });
+      for (const c of contours) {
+        insert.push({ type: "G", code: 36, line: o2.ln }, ...lineContour(c, count2, o2.ln));
+        select.push(insert.length);
+        insert.push({ type: "G", code: 37, line: o2.ln });
+      }
+      if (contours.length && st2.interp !== 1) insert.push({ type: "G", code: st2.interp, line: o2.ln });
+      const e = removal(commands, t);
+      edits.push({ ...e, insert: [...insert, ...e.insert], select });
+    }
+    if (!edits.length) throw new EditError("Nothing to cut out: the shape does not overlap the objects");
+    return spliceMany(commands, edits);
+  }
+  function contoursBounds(contours) {
+    const b3 = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const c of contours)
+      for (let i = 0; i < c.length; i += 2) {
+        b3[0] = Math.min(b3[0], c[i]);
+        b3[1] = Math.min(b3[1], c[i + 1]);
+        b3[2] = Math.max(b3[2], c[i]);
+        b3[3] = Math.max(b3[3], c[i + 1]);
+      }
+    return b3;
+  }
+  function paint(commands, op2, ctx, count2) {
+    const image = ctx.image;
+    const tol = op2.tolMm ?? DEFAULT_TOL_MM;
+    const [shape] = clipContours([op2.pointsMm]);
+    const targets = Array.isArray(op2.targets) && op2.targets.length ? uniqueTargets(commands, op2.targets) : [];
+    const objs = [];
+    for (const t of targets) {
+      const [a2, b3] = commandObjectRange(image, t.ci);
+      if (b3 - a2 !== 1) throw new EditError("Only single pads, tracks and regions can be painted over");
+      if (!image.objects[a2].dark) throw new EditError("Clear (LPC) objects cannot be painted over");
+      objs.push(a2);
+    }
+    const plain = () => add(commands, { type: "addRegion", pointsMm: op2.pointsMm }, ctx, count2);
+    if (!objs.length) return plain();
+    objs.sort((a2, b3) => a2 - b3);
+    const union = booleanOp("union", imageContours(image, objs, tol), [shape]);
+    const ub = contoursBounds(union);
+    const ob = image.objBounds;
+    for (let j2 = objs[0] + 1; j2 < image.objects.length; j2++)
+      if (!image.objects[j2].dark && !(ob[j2 * 4] > ub[2] || ob[j2 * 4 + 2] < ub[0] || ob[j2 * 4 + 1] > ub[3] || ob[j2 * 4 + 3] < ub[1]))
+        return plain();
+    const at2 = insertionPoint(commands);
+    const st2 = scanState(commands, at2);
+    const insert = resetState(st2);
+    if (st2.interp !== 1) insert.push({ type: "G", code: 1, line: 0 });
+    const select = [];
+    for (const c of polygonContours(union)) {
+      insert.push({ type: "G", code: 36, line: 0 }, ...lineContour(c, count2, 0));
+      select.push(insert.length);
+      insert.push({ type: "G", code: 37, line: 0 });
+    }
+    return spliceMany(commands, [...targets.map((t) => removal(commands, t)), { at: at2, remove: 0, insert, select }]);
   }
 
   // src/edit/excellon-ops.js
@@ -27758,15 +27849,19 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     for (const poly of strokePolygons(points2, rMm)) for (const i of objectsInPolygon(image, poly, "touch")) hit.add(i);
     return [...hit].sort((a2, b3) => a2 - b3);
   }
-  function paintContour(points2, rMm) {
+  var nm2 = (v) => Math.round(v * 1e6) / 1e6 || 0;
+  function strokeContours(points2, rMm) {
     if (!(rMm > 0) || !Number.isFinite(rMm)) throw new EditError("The brush size must be positive");
-    if (!points2.length) throw new EditError("Nothing painted");
-    const polys = nestPolygons(booleanOp("union", strokePolygons(points2, rMm), []));
+    if (!points2.length) throw new EditError("Nothing under the brush");
+    return booleanOp("union", strokePolygons(points2, rMm), []).map((c) => c.map(nm2));
+  }
+  function paintContour(points2, rMm) {
+    const polys = nestPolygons(strokeContours(points2, rMm));
     if (polys.length !== 1) throw new EditError("Could not outline the brush stroke");
     const { outer, holes } = polys[0];
     const c = holes.length ? joinHoles(outer, holes) : outer;
     if (holes.length && !validContour(c)) throw new EditError("Could not join a hole to its outline");
-    return c.map((v) => Math.round(v * 1e6) / 1e6 || 0);
+    return c.map(nm2);
   }
 
   // src/ui/editor.js
@@ -27800,11 +27895,11 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     lasso: `Lasso (L): draw round the objects to select; start rightwards to pick objects entirely inside (green), leftwards to pick anything it touches (red) (${PICK_HELP})`,
     node: `Node (A): click a region to show its corners; drag a corner to move it (Shift keeps to 45°), click an edge's midpoint handle to add a corner (or drag it to place one), Delete removes the selected corners; drag a box to select corners (${PICK_HELP})`,
     hand: "Hand (H): drag to pan the board (any tool: hold Space or drag with the middle button)",
-    rubber: "Rubber (X): click or drag over the board to delete every pad, track, region or hole the brush touches (on the Pick from layers)",
+    rubber: "Rubber (X): click or drag to rub out copper: the stroke is cut out of the pads, tracks and regions it touches (what is left becomes regions) and the holes it touches are deleted (on the Pick from layers)",
     pad: "Pad (P): click to place a pad with the chosen aperture (on a drill layer: a hole)",
     track: "Track (T): click the points, double-click or Enter to finish, Backspace removes the last point, Shift keeps to 45°",
     region: "Region (R): click the corners like a pen tool, click the first point, double-click or Enter to close it; Shift keeps to 45°",
-    paint: "Paint (B): click or drag to paint a filled blob (a region) with a round brush"
+    paint: "Paint (B): click or drag to paint a filled blob (a region) with a round brush; pads, tracks and regions it touches become one region with it"
   };
   var ICON = {
     select: '<path d="M6 3l12 9-5.5 1 3.2 6.3-2.4 1.2-3.2-6.4L6 18z"/>',
@@ -28415,7 +28510,7 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
       for (const { layer, indices } of selected) {
         const targets = this.#targets(layer, indices, selected.length > 1);
         if (!targets) return false;
-        jobs.push({ layer, op: makeOp(targets) });
+        jobs.push({ layer, op: makeOp(targets, layer) });
       }
       if (!jobs.length) return false;
       const next = /* @__PURE__ */ new Map();
@@ -28847,11 +28942,11 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
       d.points.push(mm2);
       if (this.s.tool === "rubber") this.#rubHits(d, [last, mm2]);
     }
-    /** Rubber: add the objects a part of the stroke touches on the Pick from layers. */
+    /** Rubber: add the objects a part of the stroke touches on the Pick from layers (not clear ones). */
     #rubHits(d, points2) {
       const r2 = this.s.brushMm / 2;
       for (const l of this.#pickFromLayers()) {
-        const found = strokeHits(l.image, points2, r2);
+        const found = strokeHits(l.image, points2, r2).filter((i) => l.image.objects[i].dark !== false);
         if (!found.length) continue;
         let set = d.hits.get(l.id);
         if (!set) d.hits.set(l.id, set = /* @__PURE__ */ new Set());
@@ -28866,11 +28961,27 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
           this.host.message("Nothing under the rubber");
           return v.drawOverlay();
         }
+        let clipMm;
+        try {
+          clipMm = strokeContours(d.points, this.s.brushMm / 2);
+        } catch (e) {
+          if (!(e instanceof EditError)) throw e;
+          this.host.message(e.message, true);
+          return v.drawOverlay();
+        }
         this.#setSelected(new Map([...d.hits].map(([id3, set]) => [id3, [...set]])));
-        this.deleteSelection();
+        const done2 = this.#applySelected(
+          (targets2, layer2) => layer2.kind === "excellon" ? { type: "delete", targets: targets2 } : { type: "cutOut", targets: targets2, clipMm },
+          "Rubbed out"
+        );
+        if (done2) {
+          this.#setSelection([]);
+          this.refresh();
+        }
         return;
       }
-      if (this.layer()?.kind !== "gerber") return v.drawOverlay();
+      const layer = this.layer();
+      if (layer?.kind !== "gerber") return v.drawOverlay();
       let pointsMm;
       try {
         pointsMm = paintContour(d.points, this.s.brushMm / 2);
@@ -28879,18 +28990,29 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
         this.host.message(e.message, true);
         return v.drawOverlay();
       }
-      if (this.apply({ type: "addRegion", pointsMm }, "Painted a region")) {
+      const ed3 = layerEditor(layer);
+      const targets = /* @__PURE__ */ new Set();
+      for (const i of strokeHits(layer.image, d.points, this.s.brushMm / 2)) {
+        const t = ed3.target(i);
+        if (!t.error && layer.image.objects[i].dark && t.objects[1] - t.objects[0] === 1) targets.add(t.ci);
+      }
+      const merged = targets.size;
+      const done = merged ? `Painted, unified with ${merged} object${merged === 1 ? "" : "s"}` : "Painted a region";
+      if (this.apply({ type: "paint", targets: [...targets], pointsMm }, done)) {
         this.#setSelection([]);
         this.refresh();
       }
     }
-    /** Brush overlay: the stroke so far (rubber: and what it will delete), the brush outline. */
+    /** Brush overlay: the stroke so far (rubber: and the holes it will delete), the brush outline. */
     #drawBrush(ctx, map) {
       const v = this.host.viewer;
       const d = this.drag?.kind === "brush" ? this.drag : null;
       const rubber = this.s.tool === "rubber";
       const pick = rubber ? MISC.selectTouch : MISC.selection;
-      if (d && rubber) for (const [id3, set] of d.hits) v.outlineObjects(ctx, map, id3, [...set], pick, 0.35);
+      if (d && rubber) {
+        for (const [id3, set] of d.hits)
+          if (this.#layerById(id3)?.kind === "excellon") v.outlineObjects(ctx, map, id3, [...set], pick, 0.35);
+      }
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       const rPx = Math.max(1, this.s.brushMm / 2 * map.s);
       ctx.fillStyle = ctx.strokeStyle = rgba(pick, rubber ? 0.25 : 0.5);

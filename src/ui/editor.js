@@ -9,9 +9,10 @@
 // of them, as one undo step.
 // The node tool edits one region's corners (src/edit/region-nodes.js): drag a corner, click
 // an edge's midpoint handle to add a corner, Delete to remove the selected corners.
-// Rubber and paint are round brushes (src/edit/brush.js): the rubber deletes every pad, track,
-// region or hole its stroke touches (on the Pick from layers), paint fills its stroke as one
-// region.
+// Rubber and paint are round brushes (src/edit/brush.js): the rubber cuts its stroke out of
+// the pads, tracks and regions it touches (what is left becomes regions) and deletes the holes
+// it touches, on the Pick from layers; paint fills its stroke as one region, unified with the
+// pads, tracks and regions it touches.
 // The edits themselves are DOM-free (src/edit/); this file turns pointer and key input into
 // edit ops. Its settings live in settings.edit of the .pcam (src/project/project.js).
 
@@ -23,7 +24,7 @@ import { MISC, rgba } from '../model/materials.js';
 import { objectsInPolygon, boxPolygon, sameShape, sameAperture, connected, pickLayers } from '../edit/selection.js';
 import { openMenu } from './context-menu.js';
 import { regionNodes, contourPoints } from '../edit/region-nodes.js';
-import { strokeHits, paintContour } from '../edit/brush.js';
+import { strokeHits, strokeContours, paintContour } from '../edit/brush.js';
 
 const TOOL_LABEL = {
   select: 'Select',
@@ -57,13 +58,14 @@ const TOOL_TITLE = {
   node: `Node (A): click a region to show its corners; drag a corner to move it (Shift keeps to 45°), click an edge's midpoint handle to add a corner (or drag it to place one), Delete removes the selected corners; drag a box to select corners (${PICK_HELP})`,
   hand: 'Hand (H): drag to pan the board (any tool: hold Space or drag with the middle button)',
   rubber:
-    'Rubber (X): click or drag over the board to delete every pad, track, region or hole the brush touches (on the Pick from layers)',
+    'Rubber (X): click or drag to rub out copper: the stroke is cut out of the pads, tracks and regions it touches (what is left becomes regions) and the holes it touches are deleted (on the Pick from layers)',
   pad: 'Pad (P): click to place a pad with the chosen aperture (on a drill layer: a hole)',
   track:
     'Track (T): click the points, double-click or Enter to finish, Backspace removes the last point, Shift keeps to 45°',
   region:
     'Region (R): click the corners like a pen tool, click the first point, double-click or Enter to close it; Shift keeps to 45°',
-  paint: 'Paint (B): click or drag to paint a filled blob (a region) with a round brush',
+  paint:
+    'Paint (B): click or drag to paint a filled blob (a region) with a round brush; pads, tracks and regions it touches become one region with it',
 };
 // tool strip icons: 24×24 line drawings (currentColor)
 const ICON = {
@@ -730,7 +732,7 @@ export class EditorPanel {
     for (const { layer, indices } of selected) {
       const targets = this.#targets(layer, indices, selected.length > 1);
       if (!targets) return false;
-      jobs.push({ layer, op: makeOp(targets) });
+      jobs.push({ layer, op: makeOp(targets, layer) });
     }
     if (!jobs.length) return false;
     const next = new Map();
@@ -1201,11 +1203,11 @@ export class EditorPanel {
     if (this.s.tool === 'rubber') this.#rubHits(d, [last, mm]);
   }
 
-  /** Rubber: add the objects a part of the stroke touches on the Pick from layers. */
+  /** Rubber: add the objects a part of the stroke touches on the Pick from layers (not clear ones). */
   #rubHits(d, points) {
     const r = this.s.brushMm / 2;
     for (const l of this.#pickFromLayers()) {
-      const found = strokeHits(l.image, points, r);
+      const found = strokeHits(l.image, points, r).filter((i) => l.image.objects[i].dark !== false);
       if (!found.length) continue;
       let set = d.hits.get(l.id);
       if (!set) d.hits.set(l.id, (set = new Set()));
@@ -1221,12 +1223,29 @@ export class EditorPanel {
         this.host.message('Nothing under the rubber');
         return v.drawOverlay();
       }
-      // the rubbed objects become the selection and are deleted like it (one undo step)
+      // the rubbed objects become the selection and are cut (holes: deleted) like it, one undo step
+      let clipMm;
+      try {
+        clipMm = strokeContours(d.points, this.s.brushMm / 2);
+      } catch (e) {
+        if (!(e instanceof EditError)) throw e;
+        this.host.message(e.message, true);
+        return v.drawOverlay();
+      }
       this.#setSelected(new Map([...d.hits].map(([id, set]) => [id, [...set]])));
-      this.deleteSelection();
+      const done = this.#applySelected(
+        (targets, layer) =>
+          layer.kind === 'excellon' ? { type: 'delete', targets } : { type: 'cutOut', targets, clipMm },
+        'Rubbed out',
+      );
+      if (done) {
+        this.#setSelection([]);
+        this.refresh();
+      }
       return;
     }
-    if (this.layer()?.kind !== 'gerber') return v.drawOverlay();
+    const layer = this.layer();
+    if (layer?.kind !== 'gerber') return v.drawOverlay();
     let pointsMm;
     try {
       pointsMm = paintContour(d.points, this.s.brushMm / 2);
@@ -1235,20 +1254,33 @@ export class EditorPanel {
       this.host.message(e.message, true);
       return v.drawOverlay();
     }
+    // the pads, tracks and regions it touches are unified with it (those that can be edited
+    // one by one: not step and repeat or clear objects)
+    const ed = layerEditor(layer);
+    const targets = new Set();
+    for (const i of strokeHits(layer.image, d.points, this.s.brushMm / 2)) {
+      const t = ed.target(i);
+      if (!t.error && layer.image.objects[i].dark && t.objects[1] - t.objects[0] === 1) targets.add(t.ci);
+    }
+    const merged = targets.size;
+    const done = merged ? `Painted, unified with ${merged} object${merged === 1 ? '' : 's'}` : 'Painted a region';
     // the new blob is not selected: the selection highlight would hide what is painted next
-    if (this.apply({ type: 'addRegion', pointsMm }, 'Painted a region')) {
+    if (this.apply({ type: 'paint', targets: [...targets], pointsMm }, done)) {
       this.#setSelection([]);
       this.refresh();
     }
   }
 
-  /** Brush overlay: the stroke so far (rubber: and what it will delete), the brush outline. */
+  /** Brush overlay: the stroke so far (rubber: and the holes it will delete), the brush outline. */
   #drawBrush(ctx, map) {
     const v = this.host.viewer;
     const d = this.drag?.kind === 'brush' ? this.drag : null;
     const rubber = this.s.tool === 'rubber';
     const pick = rubber ? MISC.selectTouch : MISC.selection;
-    if (d && rubber) for (const [id, set] of d.hits) v.outlineObjects(ctx, map, id, [...set], pick, 0.35);
+    // holes go whole (they cannot be partly drilled): mark them; copper loses just the stroke
+    if (d && rubber)
+      for (const [id, set] of d.hits)
+        if (this.#layerById(id)?.kind === 'excellon') v.outlineObjects(ctx, map, id, [...set], pick, 0.35);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     const rPx = Math.max(1, (this.s.brushMm / 2) * map.s);
     ctx.fillStyle = ctx.strokeStyle = rgba(pick, rubber ? 0.25 : 0.5);

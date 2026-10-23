@@ -357,11 +357,21 @@ test('right-click outside edit mode: select connected uses the copper under a ho
   expect(errors).toEqual([]);
 });
 
-test('rubber deletes everything its stroke touches (one undo step); paint adds a filled region', async ({ page }) => {
+test('rubber cuts its stroke out of what it touches (one undo step); paint adds a region unified with what it touches', async ({
+  page,
+}) => {
   const { errors } = await openApp(page);
   await startEditing(page);
   const layerObjects = () =>
-    page.evaluate((n) => window.__pcam.app.layerById(n).image.objects.map((o) => ({ k: o.k, ln: o.ln })), FCU);
+    page.evaluate(
+      (n) =>
+        window.__pcam.app.layerById(n).image.objects.map((o, i, all) => {
+          const ob = window.__pcam.app.layerById(n).image.objBounds;
+          return { k: o.k, ln: o.ln, box: [...ob.slice(i * 4, i * 4 + 4)], n: all.length };
+        }),
+      FCU,
+    );
+  const lastOp = () => page.evaluate((n) => window.__pcam.app.layerById(n).editor.ops.at(-1).type, FCU);
   const n0 = (await layerObjects()).length;
 
   // rubber: a stroke down across the long track's middle
@@ -382,15 +392,20 @@ test('rubber deletes everything its stroke touches (one undo step); paint adds a
   await page.mouse.move(ax, ay);
   await page.mouse.down();
   await page.mouse.move(bx, by, { steps: 6 });
-  // what it will delete is marked while dragging
   const marked = await page.evaluate(() =>
     Object.fromEntries([...window.__pcam.app.editor.drag.hits].map(([id, s]) => [id, [...s]])),
   );
-  expect(marked[FCU]).toContain(t.index);
+  expect(marked[FCU]).toEqual([t.index]);
   await page.mouse.up();
+  // the track is cut in two: two regions from its line, either side of the stroke
   const after = await layerObjects();
-  expect(after.length).toBe(n0 - marked[FCU].length);
-  expect(after.map((x) => x.ln)).not.toContain(o.ln);
+  expect(after.length).toBe(n0 + 1);
+  expect(await lastOp()).toBe('cutOut');
+  const halves = after.filter((x) => x.ln === o.ln && x.k === 'R');
+  expect(halves.length).toBe(2);
+  const [left, right] = halves.sort((p, q) => p.box[0] - q.box[0]);
+  expect(left.box[2]).toBeLessThan(xm);
+  expect(right.box[0]).toBeGreaterThan(xm);
   await page.keyboard.press('Control+z');
   expect((await layerObjects()).length).toBe(n0);
 
@@ -404,6 +419,7 @@ test('rubber deletes everything its stroke touches (one undo step); paint adds a
   const painted = await layerObjects();
   expect(painted.length).toBe(n0 + 1);
   expect(painted.at(-1).k).toBe('R');
+  expect(await lastOp()).toBe('paint');
   const area = await page.evaluate((n) => {
     const ob = window.__pcam.app.layerById(n).image.objBounds;
     const i = ob.length / 4 - 1;
@@ -414,6 +430,21 @@ test('rubber deletes everything its stroke touches (one undo step); paint adds a
   expect(area[1]).toBeGreaterThan(1.5);
   expect(await page.evaluate(() => window.__pcam.app.project.settings.edit.brushMm)).toBe(1);
   expect(await selection(page)).toEqual([]);
+
+  // paint over the long track's end: the track and the stroke become one region
+  await brush.fill('0.4');
+  await brush.dispatchEvent('change');
+  const [x2, y2] = [Math.max(o.x1, o.x2), o.y1];
+  const before = (await layerObjects()).length;
+  await dragMm(page, [x2 - 0.2, y2], [x2 + 1.5, y2 + 1]);
+  const merged = await layerObjects();
+  expect(await lastOp()).toBe('paint');
+  expect(merged.length).toBeLessThanOrEqual(before);
+  expect(merged.some((x) => x.k === 'L' && x.ln === o.ln)).toBe(false);
+  const blob = merged.at(-1);
+  expect(blob.k).toBe('R');
+  expect(blob.box[0]).toBeLessThanOrEqual(Math.min(o.x1, o.x2));
+  expect(blob.box[2]).toBeGreaterThan(x2 + 1.5);
   expect(errors).toEqual([]);
 });
 
