@@ -33,8 +33,8 @@ body {
   --left-width: 300px;
   display: grid;
   grid-template-rows: auto 1fr auto auto;
-  grid-template-columns: var(--left-width) 1fr 320px;
-  grid-template-areas: 'top top top' 'left main right' 'left dock right' 'status status status';
+  grid-template-columns: var(--left-width) minmax(0, 1fr);
+  grid-template-areas: 'top top' 'left main' 'left dock' 'status status';
   height: 100vh;
 }
 .toolbar {
@@ -112,10 +112,6 @@ button.on {
 .left {
   grid-area: left;
   border-right: 1px solid var(--line);
-}
-.right {
-  grid-area: right;
-  border-left: 1px solid var(--line);
 }
 .panel h2 {
   font-size: 11px;
@@ -664,6 +660,45 @@ table.apt tr.on td {
 }
 .cmd-row.cur {
   background: rgba(255, 140, 0, 0.3);
+}
+/* inspector and file messages: a see-through box over the top right of the board, left of
+   the copper layer strip */
+.inspector-box {
+  position: absolute;
+  right: 64px;
+  top: 8px;
+  z-index: 3;
+  width: min(320px, calc(100% - 136px));
+  max-height: calc(100% - 16px);
+  overflow: auto;
+  padding-bottom: 6px;
+  background: rgba(35, 38, 43, 0.72);
+  backdrop-filter: blur(4px);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+.main:has(.empty:not(.hidden)) .inspector-box {
+  display: none;
+}
+.inspector-box summary {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  padding: 8px 10px 6px;
+  cursor: pointer;
+  user-select: none;
+}
+.inspector-box .code {
+  background: rgba(21, 23, 26, 0.8);
+}
+.inspector-box h2 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin: 12px 10px 6px;
 }
 .inspector-actions {
   display: flex;

@@ -28855,11 +28855,9 @@ Click: show only this layer${turns ? `, seen from the ${s.side}` : ""} · Shift+
       ]);
       this.inspector = h("div", { "data-testid": "inspector" });
       this.diagPanel = h("div", { "data-testid": "diagnostics" });
-      const right = h("aside", { class: "panel right" }, [
-        h("h2", {}, "Inspector"),
-        this.inspector,
-        h("h2", {}, "File messages"),
-        this.diagPanel
+      const inspectorBox = h("aside", { class: "inspector-box", "data-testid": "inspector-box" }, [
+        h("details", { open: true }, [h("summary", {}, "Inspector"), this.inspector]),
+        h("details", {}, [h("summary", {}, "File messages"), this.diagPanel])
       ]);
       this.canvas = h("canvas", { "data-testid": "board" });
       this.canvas3d = h("canvas", { class: "view3d hidden", "data-testid": "board-3d" });
@@ -28877,6 +28875,7 @@ Click: show only this layer${turns ? `, seen from the ${s.side}` : ""} · Shift+
         this.canvas3d,
         this.editor.strip,
         this.layerStrip.el,
+        inspectorBox,
         this.empty,
         h("div", { class: "drop" }, "Drop to load"),
         this.banner
@@ -28894,7 +28893,7 @@ Click: show only this layer${turns ? `, seen from the ${s.side}` : ""} · Shift+
         this.projectInfo
       ]);
       clear(this.root);
-      this.root.append(toolbar, left, this.main, this.dock.el, right, status);
+      this.root.append(toolbar, left, this.main, this.dock.el, status);
       this.#bindDrop();
       window.addEventListener("keydown", (e) => {
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {

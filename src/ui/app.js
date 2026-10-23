@@ -357,11 +357,10 @@ export class App {
 
     this.inspector = h('div', { 'data-testid': 'inspector' });
     this.diagPanel = h('div', { 'data-testid': 'diagnostics' });
-    const right = h('aside', { class: 'panel right' }, [
-      h('h2', {}, 'Inspector'),
-      this.inspector,
-      h('h2', {}, 'File messages'),
-      this.diagPanel,
+    // floats over the board (bottom right) so the analyser dock can run the full width
+    const inspectorBox = h('aside', { class: 'inspector-box', 'data-testid': 'inspector-box' }, [
+      h('details', { open: true }, [h('summary', {}, 'Inspector'), this.inspector]),
+      h('details', {}, [h('summary', {}, 'File messages'), this.diagPanel]),
     ]);
 
     this.canvas = h('canvas', { 'data-testid': 'board' });
@@ -380,6 +379,7 @@ export class App {
       this.canvas3d,
       this.editor.strip,
       this.layerStrip.el,
+      inspectorBox,
       this.empty,
       h('div', { class: 'drop' }, 'Drop to load'),
       this.banner,
@@ -399,7 +399,7 @@ export class App {
     ]);
 
     clear(this.root);
-    this.root.append(toolbar, left, this.main, this.dock.el, right, status);
+    this.root.append(toolbar, left, this.main, this.dock.el, status);
     this.#bindDrop();
     window.addEventListener('keydown', (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {

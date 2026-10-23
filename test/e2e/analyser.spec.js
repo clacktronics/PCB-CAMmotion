@@ -225,6 +225,29 @@ test('the Analyser button turns the dock on and off; the board gets the space ba
   expect((await settings(page)).open).toBe(true);
 });
 
+test('the dock runs the full width right of the full-height layer panel; the inspector floats over the board', async ({
+  page,
+}) => {
+  await openApp(page);
+  await loadBoard(page);
+  await selectLayer(page, FCU);
+  const box = async (sel) => page.locator(sel).boundingBox();
+  const dock = await box('section.analyser');
+  const left = await box('aside.panel.left');
+  const main = await box('main.main');
+  const width = page.viewportSize().width;
+  expect(dock.x).toBeCloseTo(left.x + left.width, 0);
+  expect(dock.x + dock.width).toBeCloseTo(width, 0);
+  expect(left.y + left.height).toBeGreaterThanOrEqual(dock.y + dock.height - 1);
+  expect(main.x + main.width).toBeCloseTo(width, 0);
+  const insp = await box('[data-testid=inspector-box]');
+  expect(insp.x).toBeGreaterThan(main.x);
+  expect(insp.x + insp.width).toBeLessThan(main.x + main.width);
+  expect(insp.y + insp.height).toBeLessThan(main.y + main.height);
+  const bg = await page.locator('[data-testid=inspector-box]').evaluate((e) => getComputedStyle(e).backgroundColor);
+  expect(bg).toMatch(/^rgba\(.*, 0\.\d+\)$/);
+});
+
 test('drill files: tools in the table, holes in the gallery', async ({ page }) => {
   const { errors } = await openApp(page);
   await loadBoard(page);
