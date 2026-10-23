@@ -1,7 +1,16 @@
 import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { openApp, loadBoard, pixelAt, clientAt, waitRendered, boardFiles, ROOT } from './viewer-helpers.js';
+import {
+  openApp,
+  loadBoard,
+  pixelAt,
+  clientAt,
+  waitRendered,
+  boardFiles,
+  viewFromSide,
+  ROOT,
+} from './viewer-helpers.js';
 
 test.use({ viewport: { width: 1400, height: 850 } });
 import { MISC, FINISH } from '../../src/model/materials.js';
@@ -11,7 +20,7 @@ test('opens from file:// with no network requests and no errors', async ({ page 
   await expect(page.getByText('Drop Gerber, Excellon')).toBeVisible();
   await loadBoard(page);
   await page.locator('[data-testid=mode-debug]').click();
-  await page.locator('[data-testid=view-bottom]').click();
+  await viewFromSide(page, 'bottom');
   await waitRendered(page);
   expect(external).toEqual([]);
   expect(errors).toEqual([]);
@@ -57,7 +66,7 @@ test('debug colours and bottom view change the picture', async ({ page }) => {
   await waitRendered(page);
   const debug = await pixelAt(page, 30, 40.3);
   expect(debug).not.toEqual(before);
-  await page.locator('[data-testid=view-bottom]').click();
+  await viewFromSide(page, 'bottom');
   await waitRendered(page);
   const state = await page.evaluate(() => window.__pcam.state());
   expect(state.view.side).toBe('bottom');
@@ -122,7 +131,7 @@ test('save a .pcam, reopen it in a fresh page: same layers, settings and view', 
   await openApp(page);
   await loadBoard(page);
   await page.locator('[data-testid=mode-debug]').click();
-  await page.locator('[data-testid=view-bottom]').click();
+  await viewFromSide(page, 'bottom');
   await page.locator('[data-testid=layer] [data-testid=solo]').first().click();
   await page.locator('[data-testid=stack-mask-top-]').selectOption('red');
   const before = await page.evaluate(() => window.__pcam.state());

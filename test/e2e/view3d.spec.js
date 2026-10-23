@@ -2,7 +2,7 @@
 
 import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
-import { openApp, loadBoard, boardFiles, waitRendered, pixelAt, ROOT } from './viewer-helpers.js';
+import { openApp, loadBoard, boardFiles, waitRendered, pixelAt, viewFromSide, ROOT } from './viewer-helpers.js';
 import { loadProject } from '../../src/project/pcam.js';
 import { MISC } from '../../src/model/materials.js';
 
@@ -176,9 +176,9 @@ test('3D: drag orbits, right-drag pans, wheel zooms', async ({ page }) => {
   expect(dist(c3)).toBeLessThan(dist(c2)); // zoomed in
 
   // Bottom looks from below; Fit frames the board again
-  await page.locator('[data-testid=view-bottom]').click();
+  await viewFromSide(page, 'bottom');
   expect((await cam()).position[2]).toBeLessThan(0);
-  await page.locator('[data-testid=view-top]').click();
+  await viewFromSide(page, 'top');
   expect((await cam()).position[2]).toBeGreaterThan(0);
 });
 
@@ -188,7 +188,7 @@ test('3D: view, explode and camera are restored from the saved .pcam', async ({ 
   await open3d(page);
   await page.locator('[data-testid=explode]').fill('0.4');
   await page.locator('[data-testid=explode-layers]').click();
-  await page.locator('[data-testid=view-bottom]').click();
+  await viewFromSide(page, 'bottom');
   const camera = (await state3d(page)).camera;
   const [download] = await Promise.all([page.waitForEvent('download'), page.locator('#save').click()]);
   const path = testInfo.outputPath('3d.pcam');

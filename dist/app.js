@@ -21177,7 +21177,7 @@ void main() {
     }
     setSettings(patch) {
       Object.assign(this.settings, patch);
-      if ("stackup" in patch || "solo" in patch) return this.layersChanged();
+      if ("stackup" in patch || "solo" in patch) this.layersChanged();
       if (!this.gl) return;
       if ("explode" in patch || "explodeStyle" in patch) this.#placeItems();
       if ("side" in patch) this.fit();
@@ -28237,11 +28237,12 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     /**
      * @param {{
      *   layers: () => object[],
-     *   activeId: () => string|null,
      *   solo: () => string[],
+     *   side: () => 'top'|'bottom',
      *   colour: (layer: object) => number[],
-     *   select: (id: string) => void,
+     *   show: (id: string, side: string) => void,
      *   toggleSolo: (id: string) => void,
+     *   showAll: () => void,
      * }} host
      */
     constructor(host) {
@@ -28253,27 +28254,42 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
       const layers = this.host.layers();
       const sheets = copperSheets(layers);
       this.el.classList.toggle("hidden", !sheets.length);
-      const active = this.host.activeId();
+      if (!sheets.length) return;
       const solo = this.host.solo();
-      let side = null;
+      const viewSide = this.host.side();
+      const all = !solo.length;
+      this.el.append(
+        h(
+          "button",
+          {
+            class: `all${all ? " on" : ""}`,
+            "data-testid": "layer-strip-all",
+            "aria-pressed": all ? "true" : "false",
+            title: `Whole board, seen from the ${viewSide}`,
+            onclick: () => this.host.showAll()
+          },
+          "All"
+        )
+      );
+      let side = "all";
       for (const s of sheets) {
         const l = layers.find((x2) => x2.id === s.id);
-        const on3 = s.id === active;
-        const soloed = solo.includes(s.id);
-        if (side && side !== s.side) this.el.append(h("span", { class: "strip-sep", "aria-hidden": "true" }));
+        const on3 = solo.includes(s.id);
+        if (side !== s.side) this.el.append(h("span", { class: "strip-sep", "aria-hidden": "true" }));
         side = s.side;
+        const turns = s.side === "top" || s.side === "bottom";
         this.el.append(
           h(
             "button",
             {
-              class: `${on3 ? "on" : ""}${soloed ? " soloed" : ""}${solo.length && !soloed ? " muted" : ""}`,
+              class: `${on3 ? "on" : ""}${s.side === viewSide ? " facing" : ""}`,
               style: `--layer: ${this.host.colour(l).join(", ")}`,
               "data-testid": `layer-strip-${s.label}`,
               "data-layer": s.id,
               "aria-pressed": on3 ? "true" : "false",
               title: `${s.title}
-Click: select this layer · Shift+click: solo it`,
-              onclick: (e) => e.shiftKey ? this.host.toggleSolo(s.id) : this.host.select(s.id)
+Click: show only this layer${turns ? `, seen from the ${s.side}` : ""} · Shift+click: add it to (or take it out of) the layers shown`,
+              onclick: (e) => e.shiftKey ? this.host.toggleSolo(s.id) : this.host.show(s.id, s.side)
             },
             s.label
           )
@@ -28339,10 +28355,6 @@ Click: select this layer · Shift+click: solo it`,
         "data-testid": "pcam-input",
         onchange: (e) => this.#onFiles(e.target.files, e.target)
       });
-      this.btnSide = {
-        top: h("button", { onclick: () => this.#setView({ side: "top" }), "data-testid": "view-top" }, "Top"),
-        bottom: h("button", { onclick: () => this.#setView({ side: "bottom" }), "data-testid": "view-bottom" }, "Bottom")
-      };
       const modeTitles = {
         realistic: "The board in its real materials",
         debug: "One colour per layer function",
@@ -28474,11 +28486,12 @@ Click: select this layer · Shift+click: solo it`,
       });
       this.layerStrip = new LayerStrip({
         layers: () => app.layers,
-        activeId: () => app.activeLayerId,
         solo: () => app.view.solo,
+        side: () => app.view.side,
         colour: (l) => app.#layerRgb(l),
-        select: (id3) => app.#setActive(id3),
-        toggleSolo: (id3) => app.#soloLayer(id3)
+        show: (id3, side) => app.#showSheet(id3, side),
+        toggleSolo: (id3) => app.#soloLayer(id3),
+        showAll: () => app.#setView({ solo: [] })
       });
       const toolbar = h("header", { class: "toolbar" }, [
         h("span", { class: "title" }, "PCB-CAMmotion"),
@@ -28497,7 +28510,6 @@ Click: select this layer · Shift+click: solo it`,
         h("button", { onclick: () => this.#fit(), "data-testid": "fit", title: "Fit board (F)" }, "Fit"),
         h("span", { class: "seg" }, Object.values(this.btnDim)),
         this.explodeBox,
-        h("span", { class: "seg" }, [this.btnSide.top, this.btnSide.bottom]),
         h("span", { class: "seg" }, Object.values(this.btnMode)),
         this.btnBg,
         this.dock.toolbarButton,
@@ -28837,6 +28849,19 @@ Click: select this layer · Shift+click: solo it`,
       this.dock.refresh();
       this.#refreshDiagnostics();
     }
+    /**
+     * Layer strip: select a copper layer and show it alone, as if soloed; the top and bottom
+     * layers also turn the board to their side.
+     */
+    #showSheet(id3, side) {
+      this.activeLayerId = id3;
+      this.view.activeLayer = id3;
+      this.viewer.settings.activeLayerId = id3;
+      this.#setView(side === "top" || side === "bottom" ? { solo: [id3], side } : { solo: [id3] });
+      this.dock.refresh();
+      this.editor.layerChanged();
+      this.#refreshDiagnostics();
+    }
     /** Show the 2D or the 3D view, as the project's view settings say. */
     #showDimension() {
       const on3 = !!this.view.view3d;
@@ -28978,7 +29003,7 @@ Click: select this layer · Shift+click: solo it`,
     }
     #refreshToolbar() {
       const v = this.view;
-      for (const [k2, b3] of Object.entries(this.btnSide)) b3.classList.toggle("on", v.side === k2);
+      this.layerStrip.refresh();
       for (const [k2, b3] of Object.entries(this.btnDim)) b3.classList.toggle("on", !!v.view3d === (k2 === "3d"));
       this.explodeBox.classList.toggle("hidden", !v.view3d);
       this.explodeInput.value = String(v.explode ?? 0);

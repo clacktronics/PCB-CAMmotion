@@ -73,3 +73,9 @@ export async function clientAt(page, xMm, yMm) {
     [xMm, yMm],
   );
 }
+
+/** See the whole board from one side: T or B in the layer strip turns it, All un-solos. */
+export async function viewFromSide(page, side) {
+  await page.locator(`[data-testid=layer-strip-${side === 'bottom' ? 'B' : 'T'}]`).click();
+  await page.locator('[data-testid=layer-strip-all]').click();
+}

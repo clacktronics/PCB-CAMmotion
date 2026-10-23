@@ -136,7 +136,8 @@ export class Viewer3D {
 
   setSettings(patch) {
     Object.assign(this.settings, patch);
-    if ('stackup' in patch || 'solo' in patch) return this.layersChanged();
+    // a patch can both solo a layer and turn the board (the layer strip's T and B)
+    if ('stackup' in patch || 'solo' in patch) this.layersChanged();
     if (!this.gl) return;
     if ('explode' in patch || 'explodeStyle' in patch) this.#placeItems();
     if ('side' in patch) this.fit();

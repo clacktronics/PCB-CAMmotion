@@ -8,7 +8,7 @@ test.use({ viewport: { width: 1400, height: 850 } });
 
 const views = [
   ['top-realistic', []],
-  ['bottom-realistic', ['view-bottom']],
+  ['bottom-realistic', ['layer-strip-B', 'layer-strip-all']],
   ['top-debug', ['mode-debug']],
 ];
 
@@ -28,6 +28,8 @@ for (const [name, clicks] of views) {
     await page.locator('[data-testid=fit]').click();
     for (const c of clicks) await page.locator(`[data-testid=${c}]`).click();
     await waitRendered(page);
+    // the baselines are the board only: hide the layer strip that floats over the canvas
+    await page.evaluate(() => (document.querySelector('[data-testid=layer-strip]').style.visibility = 'hidden'));
     await page.mouse.move(0, 0);
     await expect(page.locator('[data-testid=board]')).toHaveScreenshot(`${name}.png`, { maxDiffPixelRatio: 0.002 });
   });

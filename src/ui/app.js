@@ -89,10 +89,6 @@ export class App {
       'data-testid': 'pcam-input',
       onchange: (e) => this.#onFiles(e.target.files, e.target),
     });
-    this.btnSide = {
-      top: h('button', { onclick: () => this.#setView({ side: 'top' }), 'data-testid': 'view-top' }, 'Top'),
-      bottom: h('button', { onclick: () => this.#setView({ side: 'bottom' }), 'data-testid': 'view-bottom' }, 'Bottom'),
-    };
     const modeTitles = {
       realistic: 'The board in its real materials',
       debug: 'One colour per layer function',
@@ -227,11 +223,12 @@ export class App {
 
     this.layerStrip = new LayerStrip({
       layers: () => app.layers,
-      activeId: () => app.activeLayerId,
       solo: () => app.view.solo,
+      side: () => app.view.side,
       colour: (l) => app.#layerRgb(l),
-      select: (id) => app.#setActive(id),
+      show: (id, side) => app.#showSheet(id, side),
       toggleSolo: (id) => app.#soloLayer(id),
+      showAll: () => app.#setView({ solo: [] }),
     });
 
     const toolbar = h('header', { class: 'toolbar' }, [
@@ -251,7 +248,6 @@ export class App {
       h('button', { onclick: () => this.#fit(), 'data-testid': 'fit', title: 'Fit board (F)' }, 'Fit'),
       h('span', { class: 'seg' }, Object.values(this.btnDim)),
       this.explodeBox,
-      h('span', { class: 'seg' }, [this.btnSide.top, this.btnSide.bottom]),
       h('span', { class: 'seg' }, Object.values(this.btnMode)),
       this.btnBg,
       this.dock.toolbarButton,
@@ -614,6 +610,20 @@ export class App {
     this.#refreshDiagnostics();
   }
 
+  /**
+   * Layer strip: select a copper layer and show it alone, as if soloed; the top and bottom
+   * layers also turn the board to their side.
+   */
+  #showSheet(id, side) {
+    this.activeLayerId = id;
+    this.view.activeLayer = id;
+    this.viewer.settings.activeLayerId = id;
+    this.#setView(side === 'top' || side === 'bottom' ? { solo: [id], side } : { solo: [id] });
+    this.dock.refresh();
+    this.editor.layerChanged();
+    this.#refreshDiagnostics();
+  }
+
   /** Show the 2D or the 3D view, as the project's view settings say. */
   #showDimension() {
     const on = !!this.view.view3d;
@@ -770,7 +780,7 @@ export class App {
 
   #refreshToolbar() {
     const v = this.view;
-    for (const [k, b] of Object.entries(this.btnSide)) b.classList.toggle('on', v.side === k);
+    this.layerStrip.refresh();
     for (const [k, b] of Object.entries(this.btnDim)) b.classList.toggle('on', !!v.view3d === (k === '3d'));
     this.explodeBox.classList.toggle('hidden', !v.view3d);
     this.explodeInput.value = String(v.explode ?? 0);
