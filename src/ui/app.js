@@ -24,6 +24,7 @@ import { h, clear } from './dom.js';
 import { VIEW_MODES, VIEW_MODE_LABELS, layerColour, toHex, parseHex } from '../model/view-modes.js';
 import { AnalyserDock } from './analyser.js';
 import { EditorPanel } from './editor.js';
+import { LayerStrip } from './layer-strip.js';
 import { describeAperture } from '../analyze/apertures.js';
 import { objectCommand } from '../analyze/commands.js';
 
@@ -224,6 +225,15 @@ export class App {
       autoSelectLayer: () => app.view.autoSelectLayer,
     });
 
+    this.layerStrip = new LayerStrip({
+      layers: () => app.layers,
+      activeId: () => app.activeLayerId,
+      solo: () => app.view.solo,
+      colour: (l) => app.#layerRgb(l),
+      select: (id) => app.#setActive(id),
+      toggleSolo: (id) => app.#soloLayer(id),
+    });
+
     const toolbar = h('header', { class: 'toolbar' }, [
       h('span', { class: 'title' }, 'PCB-CAMmotion'),
       h('button', { id: 'new', onclick: () => this.newProject(), title: 'Start an empty project' }, 'New'),
@@ -316,6 +326,7 @@ export class App {
       this.overlay,
       this.canvas3d,
       this.editor.strip,
+      this.layerStrip.el,
       this.empty,
       h('div', { class: 'drop' }, 'Drop to load'),
       this.banner,
@@ -787,7 +798,13 @@ export class App {
     }
   }
 
+  /** A layer's colour in the current view (its row, its layer strip button). */
+  #layerRgb(l, index = this.layers.indexOf(l)) {
+    return this.view.mode === 'realistic' ? swatchColour(l, this.project).rgb : layerColour(l, this.view.mode, index);
+  }
+
   #refreshLayers() {
+    this.layerStrip.refresh();
     clear(this.layerList);
     for (const [index, l] of this.layers.entries()) {
       const errs = l.diagnostics.list.filter((d) => d.severity === 'error').length;
@@ -820,8 +837,7 @@ export class App {
       const muted = this.view.solo.length > 0 && !soloed;
       const groupOff = this.view.show[groupOf(l.role)] === false;
       // the whole row takes the layer's colour in the current view
-      const rgb =
-        this.view.mode === 'realistic' ? swatchColour(l, this.project).rgb : layerColour(l, this.view.mode, index);
+      const rgb = this.#layerRgb(l, index);
       const row = h(
         'li',
         {

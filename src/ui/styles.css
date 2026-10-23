@@ -797,3 +797,59 @@ table.apt tr.on td {
   font-size: 12px;
   cursor: pointer;
 }
+
+/* copper layer strip on the right of the board (src/ui/layer-strip.js) */
+.layer-strip {
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+.layer-strip button {
+  --layer: 128, 128, 128;
+  position: relative;
+  width: 34px;
+  height: 34px;
+  padding: 0 0 0 4px;
+  font-weight: 600;
+  background: transparent;
+  border-color: transparent;
+}
+/* the layer's colour as a bar on the left edge, as in the layer list */
+.layer-strip button::before {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 6px;
+  bottom: 6px;
+  width: 4px;
+  border-radius: 2px;
+  background: rgb(var(--layer));
+}
+.layer-strip button:hover {
+  background: var(--panel-2);
+  border-color: var(--line);
+}
+.layer-strip button.on {
+  background: rgba(var(--layer), 0.3);
+  border-color: rgb(var(--layer));
+}
+.layer-strip button.soloed {
+  box-shadow: inset 0 -3px 0 var(--accent);
+}
+.layer-strip button.muted {
+  opacity: 0.45;
+}
+.layer-strip .strip-sep {
+  height: 1px;
+  margin: 3px 2px;
+  background: var(--line);
+}

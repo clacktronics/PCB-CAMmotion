@@ -37,3 +37,19 @@ export function shownLayers(layers, show) {
     return !g || show?.[g] !== false;
   });
 }
+
+/**
+ * The copper layers for the layer strip beside the board, top-down: T, the inner layers
+ * numbered 1, 2, … in stack order, then B. `layers` are in display order (layerSortKey).
+ * @returns {{id: string, side: string, label: string, title: string}[]}
+ */
+export function copperSheets(layers) {
+  const copper = layers.filter((l) => l.role?.type === 'copper');
+  const inner = copper.filter((l) => l.role.side === 'inner').sort((a, b) => (a.role.index || 0) - (b.role.index || 0));
+  const sheet = (l, label, what) => ({ id: l.id, side: l.role.side, label, title: `${what}: ${l.name}` });
+  return [
+    ...copper.filter((l) => l.role.side === 'top').map((l) => sheet(l, 'T', 'Top copper')),
+    ...inner.map((l, i) => sheet(l, String(i + 1), `Inner copper ${i + 1}`)),
+    ...copper.filter((l) => l.role.side === 'bottom').map((l) => sheet(l, 'B', 'Bottom copper')),
+  ];
+}

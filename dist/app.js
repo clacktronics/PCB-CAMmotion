@@ -26064,6 +26064,16 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
       return !g || show?.[g] !== false;
     });
   }
+  function copperSheets(layers) {
+    const copper = layers.filter((l) => l.role?.type === "copper");
+    const inner = copper.filter((l) => l.role.side === "inner").sort((a2, b3) => (a2.role.index || 0) - (b3.role.index || 0));
+    const sheet = (l, label, what) => ({ id: l.id, side: l.role.side, label, title: `${what}: ${l.name}` });
+    return [
+      ...copper.filter((l) => l.role.side === "top").map((l) => sheet(l, "T", "Top copper")),
+      ...inner.map((l, i) => sheet(l, String(i + 1), `Inner copper ${i + 1}`)),
+      ...copper.filter((l) => l.role.side === "bottom").map((l) => sheet(l, "B", "Bottom copper"))
+    ];
+  }
 
   // src/project/project.js
   var DEFAULT_VIEW = {
@@ -28222,6 +28232,56 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     return String(round6(v));
   }
 
+  // src/ui/layer-strip.js
+  var LayerStrip = class {
+    /**
+     * @param {{
+     *   layers: () => object[],
+     *   activeId: () => string|null,
+     *   solo: () => string[],
+     *   colour: (layer: object) => number[],
+     *   select: (id: string) => void,
+     *   toggleSolo: (id: string) => void,
+     * }} host
+     */
+    constructor(host) {
+      this.host = host;
+      this.el = h("nav", { class: "layer-strip hidden", "data-testid": "layer-strip", "aria-label": "Copper layers" });
+    }
+    refresh() {
+      clear(this.el);
+      const layers = this.host.layers();
+      const sheets = copperSheets(layers);
+      this.el.classList.toggle("hidden", !sheets.length);
+      const active = this.host.activeId();
+      const solo = this.host.solo();
+      let side = null;
+      for (const s of sheets) {
+        const l = layers.find((x2) => x2.id === s.id);
+        const on3 = s.id === active;
+        const soloed = solo.includes(s.id);
+        if (side && side !== s.side) this.el.append(h("span", { class: "strip-sep", "aria-hidden": "true" }));
+        side = s.side;
+        this.el.append(
+          h(
+            "button",
+            {
+              class: `${on3 ? "on" : ""}${soloed ? " soloed" : ""}${solo.length && !soloed ? " muted" : ""}`,
+              style: `--layer: ${this.host.colour(l).join(", ")}`,
+              "data-testid": `layer-strip-${s.label}`,
+              "data-layer": s.id,
+              "aria-pressed": on3 ? "true" : "false",
+              title: `${s.title}
+Click: select this layer · Shift+click: solo it`,
+              onclick: (e) => e.shiftKey ? this.host.toggleSolo(s.id) : this.host.select(s.id)
+            },
+            s.label
+          )
+        );
+      }
+    }
+  };
+
   // src/ui/app.js
   var SIDES = ["top", "bottom", "inner", "all"];
   var KIND_LABEL = { F: "Flash (D03)", L: "Draw (D01, linear)", A: "Arc (D01, G02/G03)", R: "Region (G36/G37)" };
@@ -28412,6 +28472,14 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
         editLayer: (id3) => id3 !== app.activeLayerId && app.#setActive(id3),
         autoSelectLayer: () => app.view.autoSelectLayer
       });
+      this.layerStrip = new LayerStrip({
+        layers: () => app.layers,
+        activeId: () => app.activeLayerId,
+        solo: () => app.view.solo,
+        colour: (l) => app.#layerRgb(l),
+        select: (id3) => app.#setActive(id3),
+        toggleSolo: (id3) => app.#soloLayer(id3)
+      });
       const toolbar = h("header", { class: "toolbar" }, [
         h("span", { class: "title" }, "PCB-CAMmotion"),
         h("button", { id: "new", onclick: () => this.newProject(), title: "Start an empty project" }, "New"),
@@ -28501,6 +28569,7 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
         this.overlay,
         this.canvas3d,
         this.editor.strip,
+        this.layerStrip.el,
         this.empty,
         h("div", { class: "drop" }, "Drop to load"),
         this.banner
@@ -28932,7 +29001,12 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
         b3.title = count2 ? `${on3 ? "Hide" : "Show"} every ${g.label.toLowerCase()} layer (${count2}) in 2D and 3D` : `No ${g.label.toLowerCase()} layer loaded`;
       }
     }
+    /** A layer's colour in the current view (its row, its layer strip button). */
+    #layerRgb(l, index = this.layers.indexOf(l)) {
+      return this.view.mode === "realistic" ? swatchColour(l, this.project).rgb : layerColour(l, this.view.mode, index);
+    }
     #refreshLayers() {
+      this.layerStrip.refresh();
       clear(this.layerList);
       for (const [index, l] of this.layers.entries()) {
         const errs = l.diagnostics.list.filter((d) => d.severity === "error").length;
@@ -28962,7 +29036,7 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
         const soloed = this.view.solo.includes(l.id);
         const muted = this.view.solo.length > 0 && !soloed;
         const groupOff = this.view.show[groupOf(l.role)] === false;
-        const rgb = this.view.mode === "realistic" ? swatchColour(l, this.project).rgb : layerColour(l, this.view.mode, index);
+        const rgb = this.#layerRgb(l, index);
         const row = h(
           "li",
           {
