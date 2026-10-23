@@ -1,4 +1,4 @@
-// Top bar: File and View drop-down menus keep the toolbar to one short row.
+// Top bar: File, View and Edit drop-down menus keep the toolbar to one short row.
 
 import { test, expect } from '@playwright/test';
 import { openApp, loadBoard } from './viewer-helpers.js';

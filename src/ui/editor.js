@@ -1,8 +1,9 @@
 // Editor (milestone 4): edit mode, a Photoshop-style tool strip on the board (select, lasso,
 // hand, pad or hole, track, region), selection with drag-move, box and lasso select (dragged
 // left to right: objects entirely inside; right to left: anything touched), double-click to
-// select connected, a right-click menu (same shape, same aperture, connected, …), the edit actions (delete, move by, convert to regions, unify the layer),
-// undo/redo, export of the edited file.
+// select connected, a right-click menu (same shape, same aperture, connected, select all,
+// move by, to region, delete), the current tool's options in the top bar, and the Edit menu's
+// actions (undo/redo, unify the layer, revert, export of the edited file).
 // The edits themselves are DOM-free (src/edit/); this file turns pointer and key input into
 // edit ops. Its settings live in settings.edit of the .pcam (src/project/project.js).
 
@@ -56,7 +57,13 @@ export class EditorPanel {
     this.drag = null; // { kind: 'move'|'box'|'lasso', start, dx, dy, end, points, x0, mode }
     this.busy = false;
     this.space = false; // Space held: drags pan, whatever the tool
-    this.el = h('section', { class: 'editor hidden', 'data-testid': 'editor' });
+    // the current tool's options, right-aligned in the top bar
+    this.el = h('div', {
+      class: 'edit-options hidden',
+      role: 'toolbar',
+      'aria-label': 'Tool options',
+      'data-testid': 'editor',
+    });
     this.strip = h('nav', { class: 'tool-strip hidden', 'data-testid': 'tool-strip', 'aria-label': 'Edit tools' });
     window.addEventListener('keyup', (e) => {
       if (e.key === ' ') this.space = false;
@@ -132,121 +139,105 @@ export class EditorPanel {
     v.canvas.dataset.tool = on ? this.s.tool : '';
     v.drawOverlay();
     this.#refreshStrip();
+    this.refreshMenu();
     clear(this.el);
     if (!on) return;
-    this.el.append(h('h2', {}, 'Edit'));
     if (!layer) {
-      this.el.append(h('p', { class: 'muted pad' }, 'Select a Gerber or drill layer to edit it.'));
+      this.el.append(h('span', { class: 'muted' }, 'Select a Gerber or drill layer to edit it'));
       return;
     }
     const ed = layer.editor;
-    const drill = layer.kind === 'excellon';
     const problems = ed ? ed.problems : [];
-    const btn = (label, attrs) => h('button', attrs, label);
     const tool = this.s.tool;
-    this.el.append(
-      h('div', { class: 'edit-row' }, [
-        h('span', { class: 'muted', 'data-testid': 'edit-tool' }, `${this.#toolLabel(tool)} tool`),
-      ]),
-    );
+    const n = this.sel.length;
+    this.el.append(h('span', { class: 'tool-name', 'data-testid': 'edit-tool' }, this.#toolLabel(tool)));
     if (tool === 'pad' || tool === 'track') this.el.append(this.#apertureRow(layer));
     this.el.append(
-      h('div', { class: 'edit-row' }, [
-        h('label', { title: 'Positions and moves snap to this grid (0 = no snapping)' }, [
-          'Grid ',
-          numInput(this.s.gridMm, 'grid', (v) => {
-            this.s.gridMm = Math.max(0, v);
-            this.host.touch();
-          }),
-          ' mm',
-        ]),
+      h('label', { title: 'Positions and moves snap to this grid (0 = no snapping)' }, [
+        'Grid ',
+        numInput(this.s.gridMm, 'grid', (v) => {
+          this.s.gridMm = Math.max(0, v);
+          this.host.touch();
+        }),
+        ' mm',
       ]),
-    );
-    const n = this.sel.length;
-    const dx = numInput(0, 'move-dx');
-    const dy = numInput(0, 'move-dy');
-    this.el.append(
-      h('div', { class: 'edit-row' }, [
-        h('span', { class: 'muted', 'data-testid': 'edit-selection' }, n ? `${n} selected` : 'Nothing selected'),
-        btn('Select all', { onclick: () => this.selectAll(), title: 'Select every object on this layer (Ctrl+A)' }),
-      ]),
-      h('div', { class: 'edit-row' }, [
-        btn('Delete', {
-          disabled: !n,
-          'data-testid': 'edit-delete',
-          title: 'Delete the selection (Del)',
-          onclick: () => this.deleteSelection(),
-        }),
-        drill
-          ? null
-          : btn('To region', {
-              disabled: !n,
-              'data-testid': 'edit-to-region',
-              title:
-                'Turn the selected pads, tracks and fills into G36/G37 regions; overlapping ones are unified into one outline',
-              onclick: () => this.toRegion(),
-            }),
-      ]),
-      h('div', { class: 'edit-row' }, [
-        'Move by ',
-        dx,
-        ' ',
-        dy,
-        ' mm ',
-        btn('Move', {
-          disabled: !n,
-          'data-testid': 'edit-move',
-          title: 'Move the selection by X, Y mm (arrow keys: one grid step, Shift: ten)',
-          onclick: () => this.moveSelection(Number(dx.value), Number(dy.value)),
-        }),
-      ]),
-    );
-    if (!drill)
-      this.el.append(
-        h('div', { class: 'edit-row' }, [
-          btn('Unify layer → regions', {
-            'data-testid': 'edit-unify',
-            title:
-              'Replace everything on this layer with non-overlapping G36/G37 regions: tracks, pads, fills and clear polarity merged into outlines (arcs within 0.5 µm)',
-            onclick: () => this.unifyLayer(),
-          }),
-        ]),
-      );
-    this.el.append(
-      h('div', { class: 'edit-row' }, [
-        btn('Undo', {
-          disabled: !ed?.canUndo,
-          'data-testid': 'edit-undo',
-          title: 'Undo (Ctrl+Z)',
-          onclick: () => this.undo(),
-        }),
-        btn('Redo', {
-          disabled: !ed?.canRedo,
-          'data-testid': 'edit-redo',
-          title: 'Redo (Ctrl+Shift+Z or Ctrl+Y)',
-          onclick: () => this.redo(),
-        }),
-        btn('Export file', {
-          'data-testid': 'edit-export',
-          title: `Download ${layer.name} with the edits (${drill ? 'Excellon' : 'Gerber RS-274X'})`,
-          onclick: () => this.exportFile(),
-        }),
-        btn('Revert', {
-          disabled: !ed?.ops.length,
-          title: 'Drop every edit of this layer: back to the original file',
-          onclick: () => this.revert(),
-        }),
-      ]),
+      h('span', { class: 'muted', 'data-testid': 'edit-selection' }, n ? `${n} selected` : 'Nothing selected'),
       h(
-        'p',
-        { class: `muted pad${problems.length ? ' error' : ''}`, 'data-testid': 'edit-status' },
+        'span',
+        {
+          class: `edit-status${problems.length ? ' error' : ' muted'}`,
+          'data-testid': 'edit-status',
+          title: problems.length
+            ? problems.join('; ')
+            : 'Edits are saved in the project; the original file is kept (Edit menu: revert)',
+        },
         problems.length
-          ? `This file cannot be edited: ${problems.join('; ')}`
+          ? `${layer.name} cannot be edited: ${problems.join('; ')}`
           : ed?.ops.length
-            ? `${ed.ops.length} edit${ed.ops.length === 1 ? '' : 's'} on ${layer.name}, saved in the project; the original file is kept`
+            ? `${layer.name}: ${ed.ops.length} edit${ed.ops.length === 1 ? '' : 's'}`
             : `${layer.name}: no edits`,
       ),
     );
+  }
+
+  /**
+   * Items of the top bar's Edit menu (built once; their state follows refresh() and
+   * refreshMenu()). Selection actions live in the board's right-click menu.
+   */
+  menuItems() {
+    const btn = (label, testid, title, onclick) => h('button', { 'data-testid': testid, title, onclick }, label);
+    this.menu = {
+      undo: btn('Undo', 'edit-undo', 'Undo the last edit of this layer (Ctrl+Z)', () => this.undo()),
+      redo: btn('Redo', 'edit-redo', 'Redo (Ctrl+Shift+Z or Ctrl+Y)', () => this.redo()),
+      toRegion: btn(
+        'Selection to regions',
+        'edit-to-region',
+        'Turn the selected pads, tracks and fills into G36/G37 regions; overlapping ones are unified into one outline',
+        () => this.toRegion(),
+      ),
+      unify: btn(
+        'Unify layer to regions',
+        'edit-unify',
+        'Replace everything on this layer with non-overlapping G36/G37 regions: tracks, pads, fills and clear polarity merged into outlines (arcs within 0.5 µm)',
+        () => this.unifyLayer(),
+      ),
+      revert: btn(
+        'Revert edits on current layer',
+        'edit-revert',
+        'Drop every edit of this layer: back to the original file',
+        () => this.revert(),
+      ),
+      revertAll: btn(
+        'Revert all edits',
+        'edit-revert-all',
+        'Drop the edits of every layer: back to the original files',
+        () => this.revertAll(),
+      ),
+      exportFile: btn('Export edited layer…', 'edit-export', 'Download the current layer with its edits', () =>
+        this.exportFile(),
+      ),
+    };
+    this.refreshMenu();
+    return this.menu;
+  }
+
+  /** Enable the Edit menu's items for the current layer and selection. */
+  refreshMenu() {
+    const m = this.menu;
+    if (!m) return;
+    const layer = this.layer();
+    const ed = layer?.editor;
+    const drill = layer?.kind === 'excellon';
+    m.undo.disabled = !ed?.canUndo;
+    m.redo.disabled = !ed?.canRedo;
+    m.toRegion.disabled = !layer || drill || !this.on || !this.sel.length;
+    m.unify.disabled = !layer || drill;
+    m.revert.disabled = !ed?.ops.length;
+    m.revertAll.disabled = !this.host.layers().some((l) => l.editor?.ops.length);
+    m.exportFile.disabled = !layer;
+    m.exportFile.title = layer
+      ? `Download ${layer.name} with its edits (${drill ? 'Excellon' : 'Gerber RS-274X'})`
+      : 'Select a Gerber or drill layer';
   }
 
   /** Tools of the edited layer: drill layers have no tracks or regions. */
@@ -526,6 +517,7 @@ export class EditorPanel {
         action: () => (this.#setSelection([]), this.refresh()),
       },
       null,
+      { label: 'Move by…', hint: '←↑→↓', testid: 'ctx-move', disabled: !n, action: () => this.promptMove() },
       ...(drill ? [] : [{ label: 'To region', testid: 'ctx-to-region', disabled: !n, action: () => this.toRegion() }]),
       { label: 'Delete', hint: 'Del', testid: 'ctx-delete', disabled: !n, action: () => this.deleteSelection() },
     ]);
@@ -579,6 +571,20 @@ export class EditorPanel {
     if (!layer || !this.sel.length || !Number.isFinite(dxMm) || !Number.isFinite(dyMm) || (!dxMm && !dyMm)) return;
     const targets = this.#targets(layer);
     if (targets) this.apply({ type: 'move', targets, dxMm, dyMm }, `Moved by ${fmt(dxMm)}, ${fmt(dyMm)} mm`);
+  }
+
+  /** Ask for an X, Y offset in mm and move the selection by it. */
+  promptMove() {
+    if (!this.sel.length) return;
+    const answer = window.prompt('Move the selection by X, Y (mm)', '0, 0');
+    if (answer === null) return;
+    const parts = answer
+      .split(/[\s,;]+/)
+      .filter(Boolean)
+      .map(Number);
+    if (parts.length !== 2 || !parts.every(Number.isFinite))
+      return this.host.message(`Move by: expected two numbers in mm, e.g. "1.5, -0.5"`, true);
+    this.moveSelection(parts[0], parts[1]);
   }
 
   toRegion() {
@@ -638,6 +644,22 @@ export class EditorPanel {
     this.#setSelection([]);
     this.refresh();
     this.host.message(`${layer.name}: back to the original file`);
+  }
+
+  revertAll() {
+    const edited = this.host.layers().filter((l) => l.editor?.ops.length);
+    if (
+      !edited.length ||
+      !window.confirm(`Drop every edit of ${edited.length} layer${edited.length === 1 ? '' : 's'}?`)
+    )
+      return;
+    for (const layer of edited) {
+      revertEdits(this.host.project(), layer);
+      this.host.commit(layer);
+    }
+    this.#setSelection([]);
+    this.refresh();
+    this.host.message(`All layers back to the original files`);
   }
 
   exportFile() {

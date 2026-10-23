@@ -1,4 +1,4 @@
-// Application shell: toolbar, layer list, inspector, editor panel, analyser dock, file drop,
+// Application shell: toolbar, layer list, inspector, edit tool options, analyser dock, file drop,
 // .pcam open/save, autosave.
 
 import { Viewer } from '../render/viewer.js';
@@ -240,6 +240,7 @@ export class App {
     };
     const row = (label, children) =>
       h('div', { class: 'menu-row' }, [h('span', { class: 'muted' }, label), h('span', { class: 'seg' }, children)]);
+    const editMenu = this.editor.menuItems();
     this.menuBar = new MenuBar([
       {
         key: 'file',
@@ -262,8 +263,11 @@ export class App {
           item(this.btnSave, 'Ctrl+S'),
           item(this.btnSaveAs),
           null,
+          item(editMenu.exportFile),
+          null,
           h('label', { class: 'menu-row' }, [h('span', { class: 'muted' }, 'Project name'), this.nameInput]),
         ],
+        onOpen: () => this.editor.refreshMenu(),
       },
       {
         key: 'view',
@@ -281,6 +285,21 @@ export class App {
           item(this.editor.toolbarButton, 'E'),
         ],
       },
+      {
+        key: 'edit',
+        label: 'Edit',
+        items: [
+          item(editMenu.undo, 'Ctrl+Z'),
+          item(editMenu.redo, 'Ctrl+Y'),
+          null,
+          item(editMenu.toRegion),
+          item(editMenu.unify),
+          null,
+          item(editMenu.revert),
+          item(editMenu.revertAll),
+        ],
+        onOpen: () => this.editor.refreshMenu(),
+      },
     ]);
 
     const toolbar = h('header', { class: 'toolbar' }, [
@@ -289,6 +308,8 @@ export class App {
       fileInput,
       pcamInput,
       this.explodeBox,
+      h('span', { class: 'spacer' }),
+      this.editor.el,
     ]);
 
     this.btnShow = Object.fromEntries(
@@ -335,7 +356,6 @@ export class App {
     this.inspector = h('div', { 'data-testid': 'inspector' });
     this.diagPanel = h('div', { 'data-testid': 'diagnostics' });
     const right = h('aside', { class: 'panel right' }, [
-      this.editor.el,
       h('h2', {}, 'Inspector'),
       this.inspector,
       h('h2', {}, 'File messages'),
@@ -934,7 +954,7 @@ export class App {
                   {
                     class: 'badge edited',
                     'data-testid': 'edited',
-                    title: `${l.editor.ops.length} edits (Edit panel)`,
+                    title: `${l.editor.ops.length} edits (Edit menu: revert)`,
                   },
                   `✎${l.editor.ops.length}`,
                 )

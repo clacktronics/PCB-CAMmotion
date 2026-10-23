@@ -1,4 +1,5 @@
-// Drop-down menus for the top bar: menuBar(menus) with menus = [{ key, label, items }].
+// Drop-down menus for the top bar: new MenuBar(menus) with menus = [{ key, label, items, onOpen? }];
+// onOpen runs before a menu shows (e.g. to enable its items for the current state).
 // Items are DOM nodes (buttons, rows, inputs) or null for a separator. One menu is open at a
 // time; it closes on a button press inside it, a click elsewhere or Escape. While one menu is
 // open, hovering another menu's title opens that one instead.
@@ -29,7 +30,7 @@ export class MenuBar {
       panel.addEventListener('click', (e) => {
         if (e.target.closest('button')) this.close();
       });
-      return { key: m.key, button, panel, el: h('div', { class: 'menu' }, [button, panel]) };
+      return { key: m.key, onOpen: m.onOpen, button, panel, el: h('div', { class: 'menu' }, [button, panel]) };
     });
     this.open = null;
     this.el = h(
@@ -69,6 +70,7 @@ export class MenuBar {
   }
 
   show(key) {
+    this.byKey(key).onOpen?.();
     this.open = key;
     for (const m of this.menus) {
       m.panel.classList.toggle('hidden', m.key !== key);

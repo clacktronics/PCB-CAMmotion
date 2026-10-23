@@ -81,12 +81,64 @@ test('select a pad, delete it, undo and redo', async ({ page }) => {
   await expect(page.locator(`[data-testid=layer][data-name="${FCU}"] [data-testid=edited]`)).toHaveText('✎1');
   await page.keyboard.press('Control+z');
   await expect.poll(async () => objects(page)).toEqual(before);
-  await page.locator('[data-testid=edit-redo]').click();
+  await clickMenu(page, '[data-testid=edit-redo]');
   await expect.poll(async () => (await objects(page)).length).toBe(before.length - 1);
   // E leaves edit mode; a click selects again for the inspector
   await page.keyboard.press('e');
   await expect(page.locator('[data-testid=editor]')).toBeHidden();
   expect(external).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
+test('tool options sit right-aligned in the top bar; Edit menu reverts one layer or all', async ({ page }) => {
+  const { errors } = await openApp(page);
+  await startEditing(page);
+  const options = page.locator('header.toolbar [data-testid=editor]');
+  await expect(options).toBeVisible();
+  await expect(page.locator('aside.panel [data-testid=editor]')).toHaveCount(0);
+  const bar = await page.locator('header.toolbar').boundingBox();
+  const menus = await page.locator('header.toolbar .menubar').boundingBox();
+  const box = await options.boundingBox();
+  expect(box.x).toBeGreaterThan(menus.x + menus.width);
+  expect(box.x + box.width).toBeGreaterThan(bar.x + bar.width - 20);
+  // general actions live in the menus, not on the bar
+  for (const id of ['edit-undo', 'edit-redo', 'edit-unify', 'edit-revert', 'edit-revert-all']) {
+    await expect(page.locator(`[data-testid=menu-edit-panel] [data-testid=${id}]`)).toHaveCount(1);
+  }
+  await expect(page.locator('[data-testid=menu-file-panel] [data-testid=edit-export]')).toHaveCount(1);
+  for (const id of ['edit-delete', 'edit-move', 'move-dx'])
+    await expect(page.locator(`[data-testid=${id}]`)).toHaveCount(0);
+
+  const fcu0 = await objects(page);
+  let pad = await lonePad(page);
+  await clickMm(page, pad.x, pad.y);
+  await page.keyboard.press('Delete');
+  const other = await page.evaluate(
+    (n) => window.__pcam.app.layers.find((l) => l.kind === 'gerber' && l.name !== n && l.role?.type === 'copper').name,
+    FCU,
+  );
+  await selectLayer(page, other);
+  const other0 = await objects(page, other);
+  pad = await lonePad(page, other);
+  await clickMm(page, pad.x, pad.y);
+  await page.keyboard.press('Delete');
+  await expect.poll(async () => (await objects(page, other)).length).toBe(other0.length - 1);
+
+  // revert the current layer only
+  page.once('dialog', (d) => d.accept());
+  await clickMenu(page, '[data-testid=edit-revert]');
+  await expect.poll(async () => objects(page, other)).toEqual(other0);
+  expect((await objects(page)).length).toBe(fcu0.length - 1);
+  await page.locator('[data-testid=menu-edit]').click();
+  await expect(page.locator('[data-testid=edit-revert]')).toBeDisabled();
+  await page.keyboard.press('Escape');
+
+  // revert every layer
+  page.once('dialog', (d) => d.accept());
+  await clickMenu(page, '[data-testid=edit-revert-all]');
+  await expect.poll(async () => objects(page)).toEqual(fcu0);
+  await page.locator('[data-testid=menu-edit]').click();
+  await expect(page.locator('[data-testid=edit-revert-all]')).toBeDisabled();
   expect(errors).toEqual([]);
 });
 
@@ -109,9 +161,11 @@ test('drag a pad to move it on the grid; arrows nudge; move by numbers', async (
   await page.keyboard.press('ArrowRight');
   o = (await objects(page))[pad.index];
   expect(o.x).toBeCloseTo(pad.x + 1.05, 6);
-  await page.locator('[data-testid=move-dx]').fill('-1.05');
-  await page.locator('[data-testid=move-dy]').fill('0.5');
-  await page.locator('[data-testid=edit-move]').click();
+  // right-click › Move by… asks for X, Y
+  page.once('dialog', (d) => d.accept('-1.05, 0.5'));
+  await clickMm(page, pad.x + 1.05, pad.y - 0.5, { button: 'right' });
+  await page.locator('[data-testid=ctx-move]').click();
+  await expect.poll(async () => (await objects(page))[pad.index].y).toBeCloseTo(pad.y, 6);
   o = (await objects(page))[pad.index];
   expect(o.x).toBeCloseTo(pad.x, 6);
   expect(o.y).toBeCloseTo(pad.y, 6);
@@ -158,7 +212,7 @@ test('add a pad, a track and a region; turn the pad into a region', async ({ pag
 
   await page.locator('[data-testid=tool-select]').click();
   await clickMm(page, x, y);
-  await page.locator('[data-testid=edit-to-region]').click();
+  await clickMenu(page, '[data-testid=edit-to-region]');
   // the region takes the pad's place in the drawing order
   await expect.poll(async () => (await objects(page))[n0].k).toBe('R');
   const area = await page.evaluate(
@@ -181,13 +235,13 @@ test('unify the layer into regions; edits survive save and reopen; export parses
   const pad = await lonePad(page);
   await clickMm(page, pad.x, pad.y);
   await page.keyboard.press('Delete');
-  await page.locator('[data-testid=edit-unify]').click();
+  await clickMenu(page, '[data-testid=edit-unify]');
   await expect(page.locator('[data-testid=status]')).toContainText('unified into');
   const unified = await objects(page);
   expect(unified.every((o) => o.k === 'R')).toBe(true);
 
   const exported = page.waitForEvent('download');
-  await page.locator('[data-testid=edit-export]').click();
+  await clickMenu(page, '[data-testid=edit-export]');
   const dl = await exported;
   expect(dl.suggestedFilename()).toBe(FCU);
   const gbrPath = testInfo.outputPath(FCU);
@@ -213,7 +267,7 @@ test('unify the layer into regions; edits survive save and reopen; export parses
   // still in edit mode (saved in the project) and undo goes back through the replayed edits
   await expect(page.locator('[data-testid=editor]')).toBeVisible();
   await selectLayer(page, FCU);
-  await page.locator('[data-testid=edit-undo]').click();
+  await clickMenu(page, '[data-testid=edit-undo]');
   await expect.poll(async () => (await objects(page)).some((o) => o.k === 'F')).toBe(true);
   expect(errors).toEqual([]);
 });
