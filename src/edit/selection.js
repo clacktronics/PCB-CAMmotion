@@ -13,6 +13,25 @@ const EPS = 1e-9;
 /** Box and lasso modes: 'enclose' picks objects entirely inside, 'touch' anything they touch. */
 export const SELECT_MODES = ['enclose', 'touch'];
 
+/** Where a box or lasso picks from: the edited layer, every shown layer, or the soloed layers. */
+export const PICK_FROM = ['layer', 'all', 'solo'];
+
+/**
+ * The layers a box or lasso picks from: only Gerber and drill layers (the editable kinds).
+ * `layers` are the shown layers (the group toggles applied); 'all' takes every one of them,
+ * 'solo' the soloed ones, or the edited layer when nothing is soloed; 'layer' (or anything
+ * else) just the edited layer.
+ * @param {object[]} layers
+ * @param {{from:string, activeId:string|null, solo:string[]}} opts
+ */
+export function pickLayers(layers, { from, activeId, solo }) {
+  const editable = layers.filter((l) => (l.kind === 'gerber' || l.kind === 'excellon') && l.image);
+  const active = editable.filter((l) => l.id === activeId);
+  if (from === 'all') return editable;
+  if (from === 'solo' && solo?.length) return editable.filter((l) => solo.includes(l.id));
+  return active;
+}
+
 const cache = new WeakMap(); // image → per-object contours (an image is rebuilt after edits)
 
 /**

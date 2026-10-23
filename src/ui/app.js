@@ -302,14 +302,16 @@ export class App {
       },
     ]);
 
+    // the menus sit over the layer panel, with the divider in line with its edge; the tool
+    // and view options take the rest of the bar
     const toolbar = h('header', { class: 'toolbar' }, [
-      h('span', { class: 'title' }, 'PCB-CAMmotion'),
-      this.menuBar.el,
-      fileInput,
-      pcamInput,
-      this.explodeBox,
-      h('span', { class: 'spacer' }),
-      this.editor.el,
+      h('div', { class: 'toolbar-menus' }, [
+        h('span', { class: 'title' }, 'PCB-CAMmotion'),
+        this.menuBar.el,
+        fileInput,
+        pcamInput,
+      ]),
+      h('div', { class: 'toolbar-options' }, [this.editor.el, this.explodeBox]),
     ]);
 
     this.btnShow = Object.fromEntries(

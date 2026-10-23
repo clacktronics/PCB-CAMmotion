@@ -30,21 +30,36 @@ body {
   color: var(--text);
 }
 #app {
+  --left-width: 300px;
   display: grid;
   grid-template-rows: auto 1fr auto auto;
-  grid-template-columns: 300px 1fr 320px;
+  grid-template-columns: var(--left-width) 1fr 320px;
   grid-template-areas: 'top top top' 'left main right' 'left dock right' 'status status status';
   height: 100vh;
 }
 .toolbar {
   grid-area: top;
+  display: grid;
+  grid-template-columns: var(--left-width) minmax(0, 1fr);
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+/* over the layer panel: its right border carries on as the bar's divider */
+.toolbar-menus {
   display: flex;
   gap: 6px;
   align-items: center;
   padding: 6px 8px;
-  background: var(--panel);
-  border-bottom: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+  min-width: 0;
+}
+.toolbar-options {
+  display: flex;
+  gap: 6px 12px;
+  align-items: center;
+  padding: 6px 8px 6px 12px;
   flex-wrap: wrap;
+  min-width: 0;
 }
 .toolbar .title {
   font-weight: 600;
@@ -55,9 +70,6 @@ body {
   height: 22px;
   background: var(--line);
   margin: 0 4px;
-}
-.toolbar .spacer {
-  flex: 1;
 }
 button,
 select,
@@ -659,14 +671,13 @@ table.apt tr.on td {
   margin: 0 10px;
 }
 
-/* edit tool options: right-aligned in the top bar, apart from the menus (milestone 4) */
+/* edit tool options: in the top bar right of the divider over the layer panel (milestone 4) */
 .edit-options {
   display: flex;
+  flex: 1;
   flex-wrap: wrap;
   align-items: center;
   gap: 4px 10px;
-  padding-left: 12px;
-  border-left: 1px solid var(--line);
 }
 .edit-options .tool-name {
   font-weight: 600;
@@ -691,6 +702,7 @@ table.apt tr.on td {
   max-width: 190px;
 }
 .edit-options .edit-status {
+  margin-left: auto;
   font-size: 12px;
   max-width: 260px;
   overflow: hidden;

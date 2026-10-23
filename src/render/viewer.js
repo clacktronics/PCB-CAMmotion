@@ -38,7 +38,7 @@ export class Viewer {
     this.highlight = null; // { layerId, indices: number[] } every use of an aperture
     this.playhead = null; // { layerId, current: [start, end), head: [x, y] | null }
     this.hlCache = null;
-    this.editSelection = null; // { layerId, indices } objects selected in the editor
+    this.editSelection = null; // [{ layerId, indices }] objects selected in the editor, per layer
     this.overlayHook = null; // (ctx, map) => void: the editor's previews (src/ui/editor.js)
     /**
      * Edit mode pointer handler, or null. down(mm, e) returns true to take the drag (else the
@@ -253,10 +253,9 @@ export class Viewer {
       const layer = this.layers.find((l) => l.id === hit.layerId);
       if (layer?.image?.objects[hit.index]) this.#outline(ctx, map, layer, [hit.index], colour, fillAlpha);
     }
-    const es = this.editSelection;
-    if (es?.indices.length) {
+    for (const es of this.editSelection || []) {
       const layer = this.layers.find((l) => l.id === es.layerId);
-      if (layer?.image) this.#outline(ctx, map, layer, es.indices, MISC.selection, 0.3);
+      if (layer?.image && es.indices.length) this.#outline(ctx, map, layer, es.indices, MISC.selection, 0.3);
     }
     this.overlayHook?.(ctx, map);
   }

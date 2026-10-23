@@ -8,6 +8,8 @@ import {
   sameAperture,
   connected,
   apertureKey,
+  pickLayers,
+  PICK_FROM,
 } from '../../../src/edit/selection.js';
 
 // 0 pad D10 at (0,0); 1, 2 a track (0,0)→(2,0)→(2,1); 3 pad D12 (same circle as D10) at (2,1);
@@ -187,4 +189,21 @@ test('zero-width draws (outlines) are picked by their centre line and connect en
   // the arc bulges up to y = 3
   assert.deepEqual(objectsInPolygon(img, boxPolygon([-0.1, -0.1], [2.1, 2.9]), 'enclose'), [0, 1]);
   assert.deepEqual(connected(img, [0]), [0, 1, 2]);
+});
+
+test('pickLayers: a box or lasso picks from the edited layer, every shown layer, or the soloed ones', () => {
+  const img = { objects: [] };
+  const L = (id, kind = 'gerber') => ({ id, kind, image: img });
+  const layers = [L('a'), L('b', 'excellon'), L('c'), { id: 'job', kind: 'gbrjob', image: null }, L('e')];
+  const ids = (from, activeId, solo = []) => pickLayers(layers, { from, activeId, solo }).map((l) => l.id);
+  assert.deepEqual(PICK_FROM, ['layer', 'all', 'solo']);
+  assert.deepEqual(ids('layer', 'c'), ['c']);
+  assert.deepEqual(ids('layer', 'c', ['a']), ['c']);
+  // every Gerber and drill layer shown; other files are not editable
+  assert.deepEqual(ids('all', 'c'), ['a', 'b', 'c', 'e']);
+  assert.deepEqual(ids('solo', 'c', ['a', 'e']), ['a', 'e']);
+  // nothing soloed: just the edited layer
+  assert.deepEqual(ids('solo', 'c'), ['c']);
+  assert.deepEqual(ids('layer', null), []);
+  assert.deepEqual(ids('nonsense', 'c'), ['c']);
 });

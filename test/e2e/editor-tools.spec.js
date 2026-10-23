@@ -95,6 +95,88 @@ test('tool strip: tools by click and key; a box drag picks inside only or touchi
   expect(errors).toEqual([]);
 });
 
+const selectedLayers = (page) => page.evaluate(() => Object.fromEntries(window.__pcam.app.editor.selected));
+const opCounts = (page) =>
+  page.evaluate(() => Object.fromEntries(window.__pcam.app.layers.map((l) => [l.id, l.editor?.ops.length ?? 0])));
+
+test('pick from this layer, all layers or the soloed layers; a selection on several layers moves and undoes as one', async ({
+  page,
+}) => {
+  const { errors } = await openApp(page);
+  await startEditing(page);
+  const a = [10, 20];
+  const b = [36, 40];
+  const touching = objectsInPolygon(image, boxPolygon(a, b), 'touch');
+  // with Shift a drag from an unselected object boxes instead of moving it
+  const box = async () => {
+    await page.keyboard.press('Escape');
+    await page.keyboard.down('Shift');
+    await dragMm(page, [b[0], a[1]], [a[0], b[1]]);
+    await page.keyboard.up('Shift');
+  };
+  const pickFrom = page.locator('[data-testid=pick-from]');
+  await expect(pickFrom).toHaveValue('layer');
+
+  // this layer (the default): only the edited layer
+  await box();
+  expect(await selectedLayers(page)).toEqual({ [FCU]: touching });
+
+  // all layers: every shown Gerber and drill layer (paste is hidden by default)
+  await pickFrom.selectOption('all');
+  expect(await page.evaluate(() => window.__pcam.app.project.settings.edit.pickFrom)).toBe('all');
+  await box();
+  let picked = await selectedLayers(page);
+  const names = Object.keys(picked);
+  expect(names.length).toBeGreaterThan(2);
+  expect(picked[FCU]).toEqual(touching);
+  expect(names).not.toContain('synthetic-board-F_Paste.gbr');
+  await expect(page.locator('[data-testid=edit-selection]')).toContainText(`on ${names.length} layers`);
+
+  // an arrow moves the selection on every layer; one undo takes it all back
+  const before = await opCounts(page);
+
+  // all or nothing: a routed slot on the drill layer cannot be moved yet, so nothing moves
+  await page.keyboard.press('Escape');
+  await page.keyboard.down('Shift');
+  await dragMm(page, [45, 25], [38, 35]);
+  await page.keyboard.up('Shift');
+  expect(Object.keys(await selectedLayers(page))).toContain('synthetic-board-PTH.drl');
+  await page.keyboard.press('ArrowRight');
+  await expect(page.locator('[data-testid=status]')).toHaveText(
+    'synthetic-board-PTH.drl: Routed paths cannot be edited yet',
+  );
+  expect(await opCounts(page)).toEqual(before);
+  await box();
+
+  await page.keyboard.press('ArrowRight');
+  await expect(page.locator('[data-testid=status]')).toContainText(`on ${names.length} layers`);
+  let after = await opCounts(page);
+  for (const n of names) expect(after[n]).toBe(before[n] + 1);
+  expect(Object.keys(await selectedLayers(page)).sort()).toEqual([...names].sort());
+  await page.keyboard.press('Control+z');
+  await expect(page.locator('[data-testid=status]')).toContainText(`Undone on ${names.length} layers`);
+  expect(await opCounts(page)).toEqual(before);
+  await page.keyboard.press('Control+y');
+  await expect(page.locator('[data-testid=status]')).toContainText(`Redone on ${names.length} layers`);
+  after = await opCounts(page);
+  for (const n of names) expect(after[n]).toBe(before[n] + 1);
+  await page.keyboard.press('Control+z');
+  expect(await opCounts(page)).toEqual(before);
+
+  // soloed layers: just those, whichever layer is edited
+  await pickFrom.selectOption('solo');
+  const MASK = 'synthetic-board-F_Mask.gbr';
+  const PTH = 'synthetic-board-PTH.drl';
+  for (const n of [MASK, PTH]) await page.locator(`[data-testid=layer][data-name="${n}"] [data-testid=solo]`).click();
+  await box();
+  picked = await selectedLayers(page);
+  expect(Object.keys(picked).sort()).toEqual([MASK, PTH]);
+  // Escape clears the selection on every layer
+  await page.keyboard.press('Escape');
+  expect(await selectedLayers(page)).toEqual({});
+  expect(errors).toEqual([]);
+});
+
 test('double-click a shape selects everything connected to it', async ({ page }) => {
   const { errors } = await openApp(page);
   await startEditing(page);

@@ -19,11 +19,13 @@
 //                    camera3d: null | { position: [x, y, z], target: [x, y, z] } in mm
 //                    autoSelectLayer: clicking a shape on the board selects its layer (in
 //                    edit mode: switches the edited layer to it); off keeps the layer
-//   settings.edit:   { on, tool, gridMm, aperture: { code, template, sizesMm }, holeDiaMm }
+//   settings.edit:   { on, tool, gridMm, aperture: { code, template, sizesMm }, holeDiaMm,
+//                      pickFrom }
 //                    the editor (milestone 4): tool = select | lasso | hand | pad | track |
 //                    region (box/lasso pick inside only or touching by drag direction; an
 //                    older selectMode setting is dropped on load); aperture = an existing D-code for new
-//                    pads/tracks, or (code null) a new C/R/O aperture
+//                    pads/tracks, or (code null) a new C/R/O aperture; pickFrom = layer | all |
+//                    solo: the layers a box or lasso selects on (edit/selection.js pickLayers)
 //   settings.analyze: { open, tab, highlight, playback }   the analyser dock (milestone 3)
 //                    tab: apertures | shapes | commands; highlight: null | { layer, code }
 //                    (code = aperture/tool number, or null for regions) marks every use;
@@ -48,6 +50,7 @@ import { resolveJobFiles } from '../parse/gbrjob.js';
 import { DEFAULT_STACKUP } from '../model/materials.js';
 import { DEFAULT_SHOW, normaliseShow } from '../model/layer-groups.js';
 import { EXPLODE_STYLES } from '../model/stack3d.js';
+import { PICK_FROM } from '../edit/selection.js';
 import { unzipSync } from '../../vendor/fflate/fflate.js';
 
 export const DEFAULT_VIEW = {
@@ -75,6 +78,7 @@ export const DEFAULT_EDIT = {
   gridMm: 0.05,
   aperture: { code: null, template: 'C', sizesMm: [0.25, 0.25] },
   holeDiaMm: 0.8,
+  pickFrom: 'layer',
 };
 
 export const ANALYZE_TABS = ['apertures', 'shapes', 'commands'];
@@ -158,6 +162,7 @@ export function normaliseEdit(e) {
       sizesMm: [pos(sizes[0], d.aperture.sizesMm[0]), pos(sizes[1], d.aperture.sizesMm[1])],
     },
     holeDiaMm: pos(src.holeDiaMm, d.holeDiaMm),
+    pickFrom: PICK_FROM.includes(src.pickFrom) ? src.pickFrom : d.pickFrom,
   };
 }
 

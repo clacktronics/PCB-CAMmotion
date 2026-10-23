@@ -90,7 +90,9 @@ test('select a pad, delete it, undo and redo', async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
-test('tool options sit right-aligned in the top bar; Edit menu reverts one layer or all', async ({ page }) => {
+test('tool options sit in the top bar past the divider over the layer panel; Edit menu reverts one layer or all', async ({
+  page,
+}) => {
   const { errors } = await openApp(page);
   await startEditing(page);
   const options = page.locator('header.toolbar [data-testid=editor]');
@@ -101,6 +103,12 @@ test('tool options sit right-aligned in the top bar; Edit menu reverts one layer
   const box = await options.boundingBox();
   expect(box.x).toBeGreaterThan(menus.x + menus.width);
   expect(box.x + box.width).toBeGreaterThan(bar.x + bar.width - 20);
+  // the bar's divider carries on the layer panel's right edge
+  const panel = await page.locator('aside.panel.left').boundingBox();
+  const divider = await page.locator('header.toolbar .toolbar-menus').boundingBox();
+  expect(divider.x + divider.width).toBe(panel.x + panel.width);
+  expect(box.x).toBeGreaterThan(panel.x + panel.width);
+  expect(box.x).toBeLessThan(panel.x + panel.width + 20);
   // general actions live in the menus, not on the bar
   for (const id of ['edit-undo', 'edit-redo', 'edit-unify', 'edit-revert', 'edit-revert-all']) {
     await expect(page.locator(`[data-testid=menu-edit-panel] [data-testid=${id}]`)).toHaveCount(1);

@@ -5044,10 +5044,9 @@
         const layer = this.layers.find((l) => l.id === hit.layerId);
         if (layer?.image?.objects[hit.index]) this.#outline(ctx, map, layer, [hit.index], colour, fillAlpha);
       }
-      const es3 = this.editSelection;
-      if (es3?.indices.length) {
+      for (const es3 of this.editSelection || []) {
         const layer = this.layers.find((l) => l.id === es3.layerId);
-        if (layer?.image) this.#outline(ctx, map, layer, es3.indices, MISC.selection, 0.3);
+        if (layer?.image && es3.indices.length) this.#outline(ctx, map, layer, es3.indices, MISC.selection, 0.3);
       }
       this.overlayHook?.(ctx, map);
     }
@@ -26075,6 +26074,235 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     ];
   }
 
+  // src/edit/selection.js
+  var TOL_MM = 2e-3;
+  var EPS = 1e-9;
+  var PICK_FROM = ["layer", "all", "solo"];
+  function pickLayers(layers, { from, activeId, solo }) {
+    const editable = layers.filter((l) => (l.kind === "gerber" || l.kind === "excellon") && l.image);
+    const active = editable.filter((l) => l.id === activeId);
+    if (from === "all") return editable;
+    if (from === "solo" && solo?.length) return editable.filter((l) => solo.includes(l.id));
+    return active;
+  }
+  var cache = /* @__PURE__ */ new WeakMap();
+  function contoursOf(image, i) {
+    let c = cache.get(image);
+    if (!c) cache.set(image, c = []);
+    if (!c[i]) {
+      const o2 = image.objects[i];
+      const cs3 = objectContours(o2, TOL_MM);
+      c[i] = cs3.length ? cs3 : centreLine(o2);
+    }
+    return c[i];
+  }
+  function centreLine(o2) {
+    switch (o2.k) {
+      case "F":
+        return [[o2.x, o2.y]];
+      case "L":
+        return [[o2.x1, o2.y1, o2.x2, o2.y2]];
+      case "A": {
+        const n2 = Math.max(2, Math.ceil(Math.abs(o2.sw) / (Math.PI / 32)));
+        const pts = [];
+        for (let k2 = 0; k2 <= n2; k2++) {
+          const a2 = o2.a0 + o2.sw * k2 / n2;
+          pts.push(o2.cx + o2.r * Math.cos(a2), o2.cy + o2.r * Math.sin(a2));
+        }
+        for (let k2 = pts.length - 4; k2 >= 2; k2 -= 2) pts.push(pts[k2], pts[k2 + 1]);
+        return [pts];
+      }
+    }
+    return [];
+  }
+  function boxPolygon([ax, ay], [bx, by]) {
+    return [ax, ay, bx, ay, bx, by, ax, by];
+  }
+  function objectsInPolygon(image, poly, mode = "enclose") {
+    if (poly.length < 6) return [];
+    const pb = bounds(poly);
+    const ob = image.objBounds;
+    const out = [];
+    for (let i = 0; i < image.objects.length; i++) {
+      const b3 = [ob[i * 4], ob[i * 4 + 1], ob[i * 4 + 2], ob[i * 4 + 3]];
+      if (mode === "enclose") {
+        if (b3[0] < pb[0] || b3[1] < pb[1] || b3[2] > pb[2] || b3[3] > pb[3]) continue;
+        if (enclosed(contoursOf(image, i), poly)) out.push(i);
+      } else {
+        if (!overlap(b3, pb)) continue;
+        if (touches(contoursOf(image, i), [poly])) out.push(i);
+      }
+    }
+    return out;
+  }
+  function apertureKey(ap2) {
+    if (!ap2) return null;
+    if (ap2.kind === "block") return `block:${ap2.code}`;
+    const p = (ap2.mm ?? ap2.params ?? []).map((v) => typeof v === "number" ? r6(v) : v);
+    return `${ap2.kind}:${ap2.template}:${p.join(",")}`;
+  }
+  function shapeKey(o2) {
+    const m = o2.m ? `|${o2.m.map(r6).join(",")}` : "";
+    const pol = o2.dark ? "" : "|clear";
+    switch (o2.k) {
+      case "F":
+        return `F|${apertureKey(o2.ap)}${m}${pol}`;
+      case "L": {
+        let dx = r6(o2.x2 - o2.x1);
+        let dy = r6(o2.y2 - o2.y1);
+        if (dx < 0 || dx === 0 && dy < 0) [dx, dy] = [-dx, -dy];
+        return `L|${apertureKey(o2.ap)}|${dx},${dy}${m}${pol}`;
+      }
+      case "A":
+        return `A|${apertureKey(o2.ap)}|${r6(o2.r)},${r6(o2.a0)},${r6(o2.sw)}${m}${pol}`;
+      case "R": {
+        let x0 = Infinity;
+        let y0 = Infinity;
+        for (const c of o2.contours)
+          for (let i = 0; i < c.length; i += 2) {
+            x0 = Math.min(x0, c[i]);
+            y0 = Math.min(y0, c[i + 1]);
+          }
+        const rel = o2.contours.map((c) => c.map((v, i) => r6(v - (i % 2 ? y0 : x0))).join(","));
+        return `R|${rel.join(";")}${pol}`;
+      }
+    }
+    return null;
+  }
+  function sameShape(image, seeds) {
+    const keys = new Set(seeds.map((i) => shapeKey(image.objects[i])));
+    const out = [];
+    image.objects.forEach((o2, i) => keys.has(shapeKey(o2)) && out.push(i));
+    return out;
+  }
+  function sameAperture(image, seeds) {
+    const keys = new Set(seeds.map((i) => apertureKey(image.objects[i].ap)).filter(Boolean));
+    const out = [];
+    image.objects.forEach((o2, i) => o2.ap && keys.has(apertureKey(o2.ap)) && out.push(i));
+    return out;
+  }
+  function connected(image, seeds) {
+    const objs = image.objects;
+    const ob = image.objBounds;
+    const grid = boundsGrid(image);
+    const seen = new Set(seeds);
+    const queue = seeds.filter((i) => objs[i]?.dark);
+    while (queue.length) {
+      const i = queue.pop();
+      const b3 = [ob[i * 4], ob[i * 4 + 1], ob[i * 4 + 2], ob[i * 4 + 3]];
+      const ci2 = contoursOf(image, i);
+      for (const j2 of grid.query(b3)) {
+        if (seen.has(j2) || !objs[j2].dark) continue;
+        if (!touches(contoursOf(image, j2), ci2)) continue;
+        seen.add(j2);
+        queue.push(j2);
+      }
+    }
+    return [...seen].sort((a2, b3) => a2 - b3);
+  }
+  function boundsGrid(image) {
+    const ob = image.objBounds;
+    const n2 = image.objects.length;
+    const b3 = image.bounds ?? [0, 0, 1, 1];
+    const w2 = Math.max(b3[2] - b3[0], 1e-6);
+    const h2 = Math.max(b3[3] - b3[1], 1e-6);
+    const cell = Math.max(Math.sqrt(w2 * h2 / Math.max(1, n2)), 1e-3);
+    const cols = Math.max(1, Math.ceil(w2 / cell));
+    const rows = Math.max(1, Math.ceil(h2 / cell));
+    const cells = /* @__PURE__ */ new Map();
+    const big = [];
+    const range2 = (i0, i1, j0, j1) => [
+      Math.max(0, Math.floor((i0 - b3[0]) / cell)),
+      Math.min(cols - 1, Math.floor((i1 - b3[0]) / cell)),
+      Math.max(0, Math.floor((j0 - b3[1]) / cell)),
+      Math.min(rows - 1, Math.floor((j1 - b3[1]) / cell))
+    ];
+    for (let i = 0; i < n2; i++) {
+      const [c0, c1, r0, r1] = range2(ob[i * 4], ob[i * 4 + 2], ob[i * 4 + 1], ob[i * 4 + 3]);
+      if ((c1 - c0 + 1) * (r1 - r0 + 1) > 64) {
+        big.push(i);
+        continue;
+      }
+      for (let r2 = r0; r2 <= r1; r2++)
+        for (let c = c0; c <= c1; c++) {
+          const k2 = r2 * cols + c;
+          let l = cells.get(k2);
+          if (!l) cells.set(k2, l = []);
+          l.push(i);
+        }
+    }
+    return {
+      query(q) {
+        const out = new Set(big);
+        const [c0, c1, r0, r1] = range2(q[0] - EPS, q[2] + EPS, q[1] - EPS, q[3] + EPS);
+        for (let r2 = r0; r2 <= r1; r2++)
+          for (let c = c0; c <= c1; c++) for (const i of cells.get(r2 * cols + c) ?? []) out.add(i);
+        return [...out].filter((i) => overlap([ob[i * 4], ob[i * 4 + 1], ob[i * 4 + 2], ob[i * 4 + 3]], q));
+      }
+    };
+  }
+  function inside(contours, x2, y2) {
+    let w2 = 0;
+    for (const c of contours) w2 += winding(c, x2, y2);
+    return w2 !== 0;
+  }
+  function enclosed(contours, poly) {
+    if (!contours.length) return false;
+    for (const c of contours) for (let i = 0; i < c.length; i += 2) if (!inside([poly], c[i], c[i + 1])) return false;
+    return !edgesCross(contours, [poly]);
+  }
+  function touches(a2, b3) {
+    if (!a2.length || !b3.length) return false;
+    for (const c of a2) if (inside(b3, c[0], c[1])) return true;
+    for (const c of b3) if (inside(a2, c[0], c[1])) return true;
+    return edgesCross(a2, b3);
+  }
+  function edgesCross(a2, b3) {
+    for (const ca2 of a2) {
+      const ba = bounds(ca2);
+      for (const cb of b3) {
+        if (!overlap(ba, bounds(cb))) continue;
+        for (let i = 0, pi2 = ca2.length - 2; i < ca2.length; pi2 = i, i += 2) {
+          const sx0 = Math.min(ca2[pi2], ca2[i]);
+          const sx1 = Math.max(ca2[pi2], ca2[i]);
+          const sy0 = Math.min(ca2[pi2 + 1], ca2[i + 1]);
+          const sy1 = Math.max(ca2[pi2 + 1], ca2[i + 1]);
+          for (let j2 = 0, pj = cb.length - 2; j2 < cb.length; pj = j2, j2 += 2) {
+            if (Math.max(cb[pj], cb[j2]) < sx0 - EPS || Math.min(cb[pj], cb[j2]) > sx1 + EPS) continue;
+            if (Math.max(cb[pj + 1], cb[j2 + 1]) < sy0 - EPS || Math.min(cb[pj + 1], cb[j2 + 1]) > sy1 + EPS) continue;
+            if (segmentsMeet(ca2[pi2], ca2[pi2 + 1], ca2[i], ca2[i + 1], cb[pj], cb[pj + 1], cb[j2], cb[j2 + 1])) return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+  function segmentsMeet(x1, y1, x2, y2, x3, y3, x4, y4) {
+    const d1 = cross2(x3, y3, x4, y4, x1, y1);
+    const d2 = cross2(x3, y3, x4, y4, x2, y2);
+    const d3 = cross2(x1, y1, x2, y2, x3, y3);
+    const d4 = cross2(x1, y1, x2, y2, x4, y4);
+    if ((d1 > EPS && d2 < -EPS || d1 < -EPS && d2 > EPS) && (d3 > EPS && d4 < -EPS || d3 < -EPS && d4 > EPS))
+      return true;
+    return Math.abs(d1) <= EPS && onSegment(x3, y3, x4, y4, x1, y1) || Math.abs(d2) <= EPS && onSegment(x3, y3, x4, y4, x2, y2) || Math.abs(d3) <= EPS && onSegment(x1, y1, x2, y2, x3, y3) || Math.abs(d4) <= EPS && onSegment(x1, y1, x2, y2, x4, y4);
+  }
+  var cross2 = (ax, ay, bx, by, px, py) => (bx - ax) * (py - ay) - (by - ay) * (px - ax);
+  function onSegment(ax, ay, bx, by, px, py) {
+    return px >= Math.min(ax, bx) - EPS && px <= Math.max(ax, bx) + EPS && py >= Math.min(ay, by) - EPS && py <= Math.max(ay, by) + EPS;
+  }
+  function bounds(c) {
+    const b3 = [Infinity, Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < c.length; i += 2) {
+      if (c[i] < b3[0]) b3[0] = c[i];
+      if (c[i] > b3[2]) b3[2] = c[i];
+      if (c[i + 1] < b3[1]) b3[1] = c[i + 1];
+      if (c[i + 1] > b3[3]) b3[3] = c[i + 1];
+    }
+    return b3;
+  }
+  var overlap = (a2, b3) => a2[0] <= b3[2] + EPS && a2[2] >= b3[0] - EPS && a2[1] <= b3[3] + EPS && a2[3] >= b3[1] - EPS;
+  var r6 = (v) => Math.round(v * 1e6) / 1e6 || 0;
+
   // src/project/project.js
   var DEFAULT_VIEW = {
     side: "top",
@@ -26098,7 +26326,8 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     tool: "select",
     gridMm: 0.05,
     aperture: { code: null, template: "C", sizesMm: [0.25, 0.25] },
-    holeDiaMm: 0.8
+    holeDiaMm: 0.8,
+    pickFrom: "layer"
   };
   var ANALYZE_TABS = ["apertures", "shapes", "commands"];
   var PLAYBACK_SPEEDS = [1, 5, 20, 100, 1e3, 1e4];
@@ -26169,7 +26398,8 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
         template: ["C", "R", "O"].includes(a2.template) ? a2.template : d.aperture.template,
         sizesMm: [pos(sizes[0], d.aperture.sizesMm[0]), pos(sizes[1], d.aperture.sizesMm[1])]
       },
-      holeDiaMm: pos(src.holeDiaMm, d.holeDiaMm)
+      holeDiaMm: pos(src.holeDiaMm, d.holeDiaMm),
+      pickFrom: PICK_FROM.includes(src.pickFrom) ? src.pickFrom : d.pickFrom
     };
   }
   function defaultLayerSettings() {
@@ -27150,227 +27380,6 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     }
   };
 
-  // src/edit/selection.js
-  var TOL_MM = 2e-3;
-  var EPS = 1e-9;
-  var cache = /* @__PURE__ */ new WeakMap();
-  function contoursOf(image, i) {
-    let c = cache.get(image);
-    if (!c) cache.set(image, c = []);
-    if (!c[i]) {
-      const o2 = image.objects[i];
-      const cs3 = objectContours(o2, TOL_MM);
-      c[i] = cs3.length ? cs3 : centreLine(o2);
-    }
-    return c[i];
-  }
-  function centreLine(o2) {
-    switch (o2.k) {
-      case "F":
-        return [[o2.x, o2.y]];
-      case "L":
-        return [[o2.x1, o2.y1, o2.x2, o2.y2]];
-      case "A": {
-        const n2 = Math.max(2, Math.ceil(Math.abs(o2.sw) / (Math.PI / 32)));
-        const pts = [];
-        for (let k2 = 0; k2 <= n2; k2++) {
-          const a2 = o2.a0 + o2.sw * k2 / n2;
-          pts.push(o2.cx + o2.r * Math.cos(a2), o2.cy + o2.r * Math.sin(a2));
-        }
-        for (let k2 = pts.length - 4; k2 >= 2; k2 -= 2) pts.push(pts[k2], pts[k2 + 1]);
-        return [pts];
-      }
-    }
-    return [];
-  }
-  function boxPolygon([ax, ay], [bx, by]) {
-    return [ax, ay, bx, ay, bx, by, ax, by];
-  }
-  function objectsInPolygon(image, poly, mode = "enclose") {
-    if (poly.length < 6) return [];
-    const pb = bounds(poly);
-    const ob = image.objBounds;
-    const out = [];
-    for (let i = 0; i < image.objects.length; i++) {
-      const b3 = [ob[i * 4], ob[i * 4 + 1], ob[i * 4 + 2], ob[i * 4 + 3]];
-      if (mode === "enclose") {
-        if (b3[0] < pb[0] || b3[1] < pb[1] || b3[2] > pb[2] || b3[3] > pb[3]) continue;
-        if (enclosed(contoursOf(image, i), poly)) out.push(i);
-      } else {
-        if (!overlap(b3, pb)) continue;
-        if (touches(contoursOf(image, i), [poly])) out.push(i);
-      }
-    }
-    return out;
-  }
-  function apertureKey(ap2) {
-    if (!ap2) return null;
-    if (ap2.kind === "block") return `block:${ap2.code}`;
-    const p = (ap2.mm ?? ap2.params ?? []).map((v) => typeof v === "number" ? r6(v) : v);
-    return `${ap2.kind}:${ap2.template}:${p.join(",")}`;
-  }
-  function shapeKey(o2) {
-    const m = o2.m ? `|${o2.m.map(r6).join(",")}` : "";
-    const pol = o2.dark ? "" : "|clear";
-    switch (o2.k) {
-      case "F":
-        return `F|${apertureKey(o2.ap)}${m}${pol}`;
-      case "L": {
-        let dx = r6(o2.x2 - o2.x1);
-        let dy = r6(o2.y2 - o2.y1);
-        if (dx < 0 || dx === 0 && dy < 0) [dx, dy] = [-dx, -dy];
-        return `L|${apertureKey(o2.ap)}|${dx},${dy}${m}${pol}`;
-      }
-      case "A":
-        return `A|${apertureKey(o2.ap)}|${r6(o2.r)},${r6(o2.a0)},${r6(o2.sw)}${m}${pol}`;
-      case "R": {
-        let x0 = Infinity;
-        let y0 = Infinity;
-        for (const c of o2.contours)
-          for (let i = 0; i < c.length; i += 2) {
-            x0 = Math.min(x0, c[i]);
-            y0 = Math.min(y0, c[i + 1]);
-          }
-        const rel = o2.contours.map((c) => c.map((v, i) => r6(v - (i % 2 ? y0 : x0))).join(","));
-        return `R|${rel.join(";")}${pol}`;
-      }
-    }
-    return null;
-  }
-  function sameShape(image, seeds) {
-    const keys = new Set(seeds.map((i) => shapeKey(image.objects[i])));
-    const out = [];
-    image.objects.forEach((o2, i) => keys.has(shapeKey(o2)) && out.push(i));
-    return out;
-  }
-  function sameAperture(image, seeds) {
-    const keys = new Set(seeds.map((i) => apertureKey(image.objects[i].ap)).filter(Boolean));
-    const out = [];
-    image.objects.forEach((o2, i) => o2.ap && keys.has(apertureKey(o2.ap)) && out.push(i));
-    return out;
-  }
-  function connected(image, seeds) {
-    const objs = image.objects;
-    const ob = image.objBounds;
-    const grid = boundsGrid(image);
-    const seen = new Set(seeds);
-    const queue = seeds.filter((i) => objs[i]?.dark);
-    while (queue.length) {
-      const i = queue.pop();
-      const b3 = [ob[i * 4], ob[i * 4 + 1], ob[i * 4 + 2], ob[i * 4 + 3]];
-      const ci2 = contoursOf(image, i);
-      for (const j2 of grid.query(b3)) {
-        if (seen.has(j2) || !objs[j2].dark) continue;
-        if (!touches(contoursOf(image, j2), ci2)) continue;
-        seen.add(j2);
-        queue.push(j2);
-      }
-    }
-    return [...seen].sort((a2, b3) => a2 - b3);
-  }
-  function boundsGrid(image) {
-    const ob = image.objBounds;
-    const n2 = image.objects.length;
-    const b3 = image.bounds ?? [0, 0, 1, 1];
-    const w2 = Math.max(b3[2] - b3[0], 1e-6);
-    const h2 = Math.max(b3[3] - b3[1], 1e-6);
-    const cell = Math.max(Math.sqrt(w2 * h2 / Math.max(1, n2)), 1e-3);
-    const cols = Math.max(1, Math.ceil(w2 / cell));
-    const rows = Math.max(1, Math.ceil(h2 / cell));
-    const cells = /* @__PURE__ */ new Map();
-    const big = [];
-    const range2 = (i0, i1, j0, j1) => [
-      Math.max(0, Math.floor((i0 - b3[0]) / cell)),
-      Math.min(cols - 1, Math.floor((i1 - b3[0]) / cell)),
-      Math.max(0, Math.floor((j0 - b3[1]) / cell)),
-      Math.min(rows - 1, Math.floor((j1 - b3[1]) / cell))
-    ];
-    for (let i = 0; i < n2; i++) {
-      const [c0, c1, r0, r1] = range2(ob[i * 4], ob[i * 4 + 2], ob[i * 4 + 1], ob[i * 4 + 3]);
-      if ((c1 - c0 + 1) * (r1 - r0 + 1) > 64) {
-        big.push(i);
-        continue;
-      }
-      for (let r2 = r0; r2 <= r1; r2++)
-        for (let c = c0; c <= c1; c++) {
-          const k2 = r2 * cols + c;
-          let l = cells.get(k2);
-          if (!l) cells.set(k2, l = []);
-          l.push(i);
-        }
-    }
-    return {
-      query(q) {
-        const out = new Set(big);
-        const [c0, c1, r0, r1] = range2(q[0] - EPS, q[2] + EPS, q[1] - EPS, q[3] + EPS);
-        for (let r2 = r0; r2 <= r1; r2++)
-          for (let c = c0; c <= c1; c++) for (const i of cells.get(r2 * cols + c) ?? []) out.add(i);
-        return [...out].filter((i) => overlap([ob[i * 4], ob[i * 4 + 1], ob[i * 4 + 2], ob[i * 4 + 3]], q));
-      }
-    };
-  }
-  function inside(contours, x2, y2) {
-    let w2 = 0;
-    for (const c of contours) w2 += winding(c, x2, y2);
-    return w2 !== 0;
-  }
-  function enclosed(contours, poly) {
-    if (!contours.length) return false;
-    for (const c of contours) for (let i = 0; i < c.length; i += 2) if (!inside([poly], c[i], c[i + 1])) return false;
-    return !edgesCross(contours, [poly]);
-  }
-  function touches(a2, b3) {
-    if (!a2.length || !b3.length) return false;
-    for (const c of a2) if (inside(b3, c[0], c[1])) return true;
-    for (const c of b3) if (inside(a2, c[0], c[1])) return true;
-    return edgesCross(a2, b3);
-  }
-  function edgesCross(a2, b3) {
-    for (const ca2 of a2) {
-      const ba = bounds(ca2);
-      for (const cb of b3) {
-        if (!overlap(ba, bounds(cb))) continue;
-        for (let i = 0, pi2 = ca2.length - 2; i < ca2.length; pi2 = i, i += 2) {
-          const sx0 = Math.min(ca2[pi2], ca2[i]);
-          const sx1 = Math.max(ca2[pi2], ca2[i]);
-          const sy0 = Math.min(ca2[pi2 + 1], ca2[i + 1]);
-          const sy1 = Math.max(ca2[pi2 + 1], ca2[i + 1]);
-          for (let j2 = 0, pj = cb.length - 2; j2 < cb.length; pj = j2, j2 += 2) {
-            if (Math.max(cb[pj], cb[j2]) < sx0 - EPS || Math.min(cb[pj], cb[j2]) > sx1 + EPS) continue;
-            if (Math.max(cb[pj + 1], cb[j2 + 1]) < sy0 - EPS || Math.min(cb[pj + 1], cb[j2 + 1]) > sy1 + EPS) continue;
-            if (segmentsMeet(ca2[pi2], ca2[pi2 + 1], ca2[i], ca2[i + 1], cb[pj], cb[pj + 1], cb[j2], cb[j2 + 1])) return true;
-          }
-        }
-      }
-    }
-    return false;
-  }
-  function segmentsMeet(x1, y1, x2, y2, x3, y3, x4, y4) {
-    const d1 = cross2(x3, y3, x4, y4, x1, y1);
-    const d2 = cross2(x3, y3, x4, y4, x2, y2);
-    const d3 = cross2(x1, y1, x2, y2, x3, y3);
-    const d4 = cross2(x1, y1, x2, y2, x4, y4);
-    if ((d1 > EPS && d2 < -EPS || d1 < -EPS && d2 > EPS) && (d3 > EPS && d4 < -EPS || d3 < -EPS && d4 > EPS))
-      return true;
-    return Math.abs(d1) <= EPS && onSegment(x3, y3, x4, y4, x1, y1) || Math.abs(d2) <= EPS && onSegment(x3, y3, x4, y4, x2, y2) || Math.abs(d3) <= EPS && onSegment(x1, y1, x2, y2, x3, y3) || Math.abs(d4) <= EPS && onSegment(x1, y1, x2, y2, x4, y4);
-  }
-  var cross2 = (ax, ay, bx, by, px, py) => (bx - ax) * (py - ay) - (by - ay) * (px - ax);
-  function onSegment(ax, ay, bx, by, px, py) {
-    return px >= Math.min(ax, bx) - EPS && px <= Math.max(ax, bx) + EPS && py >= Math.min(ay, by) - EPS && py <= Math.max(ay, by) + EPS;
-  }
-  function bounds(c) {
-    const b3 = [Infinity, Infinity, -Infinity, -Infinity];
-    for (let i = 0; i < c.length; i += 2) {
-      if (c[i] < b3[0]) b3[0] = c[i];
-      if (c[i] > b3[2]) b3[2] = c[i];
-      if (c[i + 1] < b3[1]) b3[1] = c[i + 1];
-      if (c[i + 1] > b3[3]) b3[3] = c[i + 1];
-    }
-    return b3;
-  }
-  var overlap = (a2, b3) => a2[0] <= b3[2] + EPS && a2[2] >= b3[0] - EPS && a2[1] <= b3[3] + EPS && a2[3] >= b3[1] - EPS;
-  var r6 = (v) => Math.round(v * 1e6) / 1e6 || 0;
-
   // src/ui/context-menu.js
   var current = null;
   function closeMenu() {
@@ -27444,6 +27453,8 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
   var TOOL_LABEL = { select: "Select", lasso: "Lasso", hand: "Hand", pad: "Pad", track: "Track", region: "Region" };
   var TOOL_KEY = { v: "select", l: "lasso", h: "hand", p: "pad", t: "track", r: "region" };
   var PICK_HELP = "Shift adds to the selection, Alt or Ctrl takes away";
+  var PICK_FROM_LABEL = { layer: "This layer", all: "All layers", solo: "Soloed layers" };
+  var PICK_FROM_TITLE = "The layers a box or lasso selects on: the edited layer, every shown Gerber and drill layer, or the soloed layers (none soloed: the edited layer). Moving or deleting the selection edits every layer it is on.";
   var TOOL_TITLE = {
     select: `Select (V): click an object, double-click to select everything connected; drag a box left to right to pick objects entirely inside (green), right to left to pick anything it touches (red) (${PICK_HELP}); drag a selected object to move it`,
     lasso: `Lasso (L): draw round the objects to select; start rightwards to pick objects entirely inside (green), leftwards to pick anything it touches (red) (${PICK_HELP})`,
@@ -27472,7 +27483,8 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
      */
     constructor(host) {
       this.host = host;
-      this.sel = [];
+      this.selected = /* @__PURE__ */ new Map();
+      this.groups = /* @__PURE__ */ new WeakMap();
       this.sketch = [];
       this.cursor = null;
       this.drag = null;
@@ -27501,6 +27513,17 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     }
     get s() {
       return this.host.settings();
+    }
+    /** Selected object indices on the edited layer. */
+    get sel() {
+      const l = this.layer();
+      return l && this.selected.get(l.id) || [];
+    }
+    /** Number of selected objects on every layer. */
+    get selCount() {
+      let n2 = 0;
+      for (const indices of this.selected.values()) n2 += indices.length;
+      return n2;
     }
     get on() {
       return !!this.s.on;
@@ -27545,7 +27568,7 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
       v.edit = on3 ? this.#handler() : null;
       v.overlayHook = on3 ? (ctx, map) => this.#drawOverlay(ctx, map) : null;
       v.settings.pickLayerId = on3 && layer ? layer.id : null;
-      v.editSelection = on3 && layer ? { layerId: layer.id, indices: this.sel } : null;
+      v.editSelection = on3 ? this.#viewSelection() : null;
       v.canvas.classList.toggle("editing", on3);
       v.canvas.dataset.tool = on3 ? this.s.tool : "";
       v.drawOverlay();
@@ -27560,9 +27583,26 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
       const ed3 = layer.editor;
       const problems = ed3 ? ed3.problems : [];
       const tool = this.s.tool;
-      const n2 = this.sel.length;
+      const n2 = this.selCount;
+      const onLayers = this.selected.size;
       this.el.append(h("span", { class: "tool-name", "data-testid": "edit-tool" }, this.#toolLabel(tool)));
       if (tool === "pad" || tool === "track") this.el.append(this.#apertureRow(layer));
+      if (tool === "select" || tool === "lasso") {
+        const pickFrom = h(
+          "select",
+          {
+            "data-testid": "pick-from",
+            onchange: (e) => {
+              this.s.pickFrom = e.target.value;
+              this.host.touch();
+            }
+          },
+          Object.entries(PICK_FROM_LABEL).map(
+            ([value, label]) => h("option", { value, selected: this.s.pickFrom === value }, label)
+          )
+        );
+        this.el.append(h("label", { title: PICK_FROM_TITLE }, ["Pick from ", pickFrom]));
+      }
       this.el.append(
         h("label", { title: "Positions and moves snap to this grid (0 = no snapping)" }, [
           "Grid ",
@@ -27572,7 +27612,11 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
           }),
           " mm"
         ]),
-        h("span", { class: "muted", "data-testid": "edit-selection" }, n2 ? `${n2} selected` : "Nothing selected"),
+        h(
+          "span",
+          { class: "muted", "data-testid": "edit-selection" },
+          n2 ? `${n2} selected${onLayers > 1 ? ` on ${onLayers} layers` : ""}` : "Nothing selected"
+        ),
         h(
           "span",
           {
@@ -27781,14 +27825,52 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
       return { round: ref.template === "C", w: w2 / 2, h: hh2 / 2 };
     }
     // ---------------------------------------------------------------- actions
+    /** Select objects of the edited layer only (the selection on other layers is dropped). */
     #setSelection(indices) {
-      this.sel = [...new Set(indices)].sort((a2, b3) => a2 - b3);
-      const v = this.host.viewer;
       const layer = this.layer();
-      v.editSelection = layer ? { layerId: layer.id, indices: this.sel } : null;
+      this.#setSelected(new Map(layer ? [[layer.id, indices]] : []));
+    }
+    /** Change the edited layer's part of the selection, keeping the other layers'. */
+    #setLayerSelection(indices) {
+      const layer = this.layer();
+      if (!layer) return;
+      this.#setSelected(new Map([...this.selected, [layer.id, indices]]));
+    }
+    /** Set the whole selection: layer id → object indices. One selected object is inspected. */
+    #setSelected(byLayer) {
+      this.selected = /* @__PURE__ */ new Map();
+      for (const [id3, indices] of byLayer) {
+        const sorted = [...new Set(indices)].sort((a2, b3) => a2 - b3);
+        if (sorted.length) this.selected.set(id3, sorted);
+      }
+      const v = this.host.viewer;
+      v.editSelection = this.#viewSelection();
       v.drawOverlay();
-      const o2 = layer && this.sel.length === 1 ? layer.image.objects[this.sel[0]] : null;
-      this.host.inspect(o2 ? { layerId: layer.id, index: this.sel[0], object: o2, x: null, y: null } : null);
+      const [only] = this.selCount === 1 ? this.selected : [];
+      const layer = only && this.#layerById(only[0]);
+      const o2 = layer?.image?.objects[only[1][0]];
+      this.host.inspect(o2 ? { layerId: layer.id, index: only[1][0], object: o2, x: null, y: null } : null);
+    }
+    #viewSelection() {
+      return [...this.selected].map(([layerId, indices]) => ({ layerId, indices }));
+    }
+    #layerById(id3) {
+      return this.host.layers().find((l) => l.id === id3) || null;
+    }
+    /** Selected layers with their indices, the edited layer first. */
+    #selectedLayers() {
+      const active = this.layer()?.id;
+      const out = [];
+      for (const [id3, indices] of this.selected) {
+        const layer = this.#layerById(id3);
+        if (layer?.image) out[id3 === active ? "unshift" : "push"]({ layer, indices });
+      }
+      return out;
+    }
+    /** The layers a box or lasso picks from (Pick from in the top bar). */
+    #pickFromLayers() {
+      const v = this.host.viewer;
+      return pickLayers(v.layers, { from: this.s.pickFrom, activeId: this.layer()?.id ?? null, solo: v.settings.solo });
     }
     /** Select objects of the edited layer (e.g. from the analyser's command list). */
     select(indices) {
@@ -27827,13 +27909,21 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
      * touched) with the selection (Shift adds, Alt/Ctrl removes).
      */
     #pickPolygon(poly, mode, e) {
-      const layer = this.layer();
-      if (!layer) return;
-      const picked = objectsInPolygon(layer.image, poly, mode);
-      if (e.altKey || e.ctrlKey || e.metaKey) {
-        const drop = new Set(picked);
-        this.#setSelection(this.sel.filter((i) => !drop.has(i)));
-      } else this.#setSelection(e.shiftKey ? [...this.sel, ...picked] : picked);
+      if (!this.layer()) return;
+      const take = e.altKey || e.ctrlKey || e.metaKey;
+      const next = take || e.shiftKey ? new Map(this.selected) : /* @__PURE__ */ new Map();
+      for (const l of this.#pickFromLayers()) {
+        const picked = objectsInPolygon(l.image, poly, mode);
+        const had = this.selected.get(l.id) || [];
+        if (take) {
+          const drop = new Set(picked);
+          next.set(
+            l.id,
+            had.filter((i) => !drop.has(i))
+          );
+        } else next.set(l.id, e.shiftKey ? [...had, ...picked] : picked);
+      }
+      this.#setSelected(next);
       this.refresh();
     }
     /**
@@ -27879,6 +27969,7 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
       if (hit && !this.sel.includes(hit.index)) this.select([hit.index]);
       const objs = this.sel.map((i) => layer.image.objects[i]);
       const n2 = this.sel.length;
+      const all = this.selCount;
       const codes = [...new Set(objs.filter((o2) => o2.ap).map((o2) => o2.ap.code))];
       const drill = layer.kind === "excellon";
       openMenu(clientX, clientY, [
@@ -27898,24 +27989,24 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
           label: "Deselect",
           hint: "Esc",
           testid: "ctx-deselect",
-          disabled: !n2,
+          disabled: !all,
           action: () => (this.#setSelection([]), this.refresh())
         },
         null,
-        { label: "Move by…", hint: "←↑→↓", testid: "ctx-move", disabled: !n2, action: () => this.promptMove() },
+        { label: "Move by…", hint: "←↑→↓", testid: "ctx-move", disabled: !all, action: () => this.promptMove() },
         ...drill ? [] : [{ label: "To region", testid: "ctx-to-region", disabled: !n2, action: () => this.toRegion() }],
-        { label: "Delete", hint: "Del", testid: "ctx-delete", disabled: !n2, action: () => this.deleteSelection() }
+        { label: "Delete", hint: "Del", testid: "ctx-delete", disabled: !all, action: () => this.deleteSelection() }
       ]);
       return true;
     }
     /** Command targets of the selection, or null (with a message) if one cannot be edited. */
-    #targets(layer) {
+    #targets(layer, indices = this.sel, named = false) {
       const ed3 = layerEditor(layer);
       const out = /* @__PURE__ */ new Set();
-      for (const i of this.sel) {
+      for (const i of indices) {
         const t = ed3.target(i);
         if (t.error) {
-          this.host.message(t.error, true);
+          this.host.message(named ? `${layer.name}: ${t.error}` : t.error, true);
           return null;
         }
         out.add(t.ci);
@@ -27940,22 +28031,62 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
         return false;
       }
     }
+    /**
+     * Run one op on every layer with selected objects (makeOp gets that layer's command
+     * targets). All or nothing: if one layer cannot take it, the others are undone. Ops made on
+     * several layers are one undo step. The objects the ops made or moved are selected.
+     */
+    #applySelected(makeOp, done) {
+      if (this.busy) return false;
+      const jobs = [];
+      const selected = this.#selectedLayers();
+      for (const { layer, indices } of selected) {
+        const targets = this.#targets(layer, indices, selected.length > 1);
+        if (!targets) return false;
+        jobs.push({ layer, op: makeOp(targets) });
+      }
+      if (!jobs.length) return false;
+      const next = /* @__PURE__ */ new Map();
+      const made = [];
+      try {
+        for (const j2 of jobs) {
+          const ed3 = layerEditor(j2.layer);
+          const redo = ed3.redoOps;
+          next.set(j2.layer.id, ed3.apply(j2.op));
+          made.push({ ...j2, redo });
+        }
+      } catch (e) {
+        if (!(e instanceof EditError)) throw e;
+        for (const m of made) {
+          m.layer.editor.undo();
+          m.layer.editor.redoOps = m.redo;
+        }
+        this.host.message(made.length ? `${jobs[made.length].layer.name}: ${e.message}` : e.message, true);
+        return false;
+      } finally {
+        for (const m of made) this.host.commit(m.layer);
+      }
+      if (jobs.length > 1) {
+        const group = jobs.map((j2) => ({ layerId: j2.layer.id, op: j2.op }));
+        for (const j2 of jobs) this.groups.set(j2.op, group);
+      }
+      this.#setSelected(next);
+      this.refresh();
+      const on3 = jobs.length > 1 ? ` on ${jobs.length} layers` : "";
+      if (done) this.host.message(done + on3);
+      return true;
+    }
     deleteSelection() {
-      const layer = this.layer();
-      const targets = layer && this.sel.length && this.#targets(layer);
-      if (!targets) return;
-      const n2 = this.sel.length;
-      if (this.apply({ type: "delete", targets })) this.host.message(`Deleted ${n2} object${n2 === 1 ? "" : "s"}`);
+      const n2 = this.selCount;
+      if (n2) this.#applySelected((targets) => ({ type: "delete", targets }), `Deleted ${n2} object${n2 === 1 ? "" : "s"}`);
     }
     moveSelection(dxMm, dyMm) {
-      const layer = this.layer();
-      if (!layer || !this.sel.length || !Number.isFinite(dxMm) || !Number.isFinite(dyMm) || !dxMm && !dyMm) return;
-      const targets = this.#targets(layer);
-      if (targets) this.apply({ type: "move", targets, dxMm, dyMm }, `Moved by ${fmt2(dxMm)}, ${fmt2(dyMm)} mm`);
+      if (!this.selCount || !Number.isFinite(dxMm) || !Number.isFinite(dyMm) || !dxMm && !dyMm) return;
+      this.#applySelected((targets) => ({ type: "move", targets, dxMm, dyMm }), `Moved by ${fmt2(dxMm)}, ${fmt2(dyMm)} mm`);
     }
     /** Ask for an X, Y offset in mm and move the selection by it. */
     promptMove() {
-      if (!this.sel.length) return;
+      if (!this.selCount) return;
       const answer = window.prompt("Move the selection by X, Y (mm)", "0, 0");
       if (answer === null) return;
       const parts = answer.split(/[\s,;]+/).filter(Boolean).map(Number);
@@ -27986,27 +28117,43 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
         fn2();
       }, 30);
     }
+    /**
+     * The layers an undo or redo of the edited layer's next op takes: every layer of an op made
+     * on several layers at once (while that op is still next on them), else just this one.
+     */
+    #stepLayers(layer, next) {
+      const group = this.groups.get(next(layer.editor));
+      if (!group) return [layer];
+      return group.map((m) => ({ m, l: this.#layerById(m.layerId) })).filter(({ m, l }) => l?.editor && next(l.editor) === m.op).map(({ l }) => l);
+    }
     undo() {
       const layer = this.layer();
-      if (!layer?.editor?.undo()) return;
-      this.host.commit(layer);
+      if (!layer?.editor?.canUndo) return;
+      const layers = this.#stepLayers(layer, (ed3) => ed3.ops.at(-1));
+      for (const l of layers) {
+        l.editor.undo();
+        this.host.commit(l);
+      }
       this.#setSelection([]);
       this.refresh();
-      this.host.message("Undone");
+      this.host.message(layers.length > 1 ? `Undone on ${layers.length} layers` : "Undone");
     }
     redo() {
       const layer = this.layer();
       if (!layer?.editor?.canRedo) return;
+      const next = /* @__PURE__ */ new Map();
       try {
-        const sel = layer.editor.redo();
-        this.host.commit(layer);
-        this.#setSelection(sel);
-        this.refresh();
-        this.host.message("Redone");
+        for (const l of this.#stepLayers(layer, (ed3) => ed3.redoOps.at(-1))) {
+          next.set(l.id, l.editor.redo());
+          this.host.commit(l);
+        }
       } catch (e) {
         if (!(e instanceof EditError)) throw e;
         this.host.message(e.message, true);
       }
+      this.#setSelected(next);
+      this.refresh();
+      if (next.size) this.host.message(next.size > 1 ? `Redone on ${next.size} layers` : "Redone");
     }
     revert() {
       const layer = this.layer();
@@ -28079,7 +28226,7 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
       }
       if (k2 === "Escape") {
         if (this.sketch.length || this.drag) this.cancelSketch();
-        else this.#setSelection([]), this.refresh();
+        else this.#setSelected(/* @__PURE__ */ new Map()), this.refresh();
         return true;
       }
       if (k2 === "Enter" && this.sketch.length) return this.#finishSketch(), true;
@@ -28090,7 +28237,7 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
         } else this.deleteSelection();
         return true;
       }
-      if (k2.startsWith("Arrow") && this.sel.length) {
+      if (k2.startsWith("Arrow") && this.selCount) {
         const step = (this.s.gridMm || 0.01) * (e.shiftKey ? 10 : 1);
         const d = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] }[k2];
         if (this.host.viewer.settings.side === "bottom") d[0] = -d[0];
@@ -28137,6 +28284,11 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
             this.drag = { kind: "move", start: mm2, dx: 0, dy: 0, hit: hit.index };
             return true;
           }
+          const other = !e.altKey && v.pickAt(mm2[0], mm2[1], (l) => this.selected.has(l.id), null);
+          if (other && this.selected.get(other.layerId).includes(other.index)) {
+            this.drag = { kind: "move", start: mm2, dx: 0, dy: 0, hit: null };
+            return true;
+          }
           this.drag = { kind: "box", start: mm2, end: mm2, x0: e.clientX, mode: "enclose" };
           return true;
         },
@@ -28144,7 +28296,7 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
           const d = this.drag;
           if (!d) return;
           if (d.kind === "move") {
-            if (!this.sel.includes(d.hit)) this.#setSelection([d.hit]);
+            if (d.hit !== null && !this.sel.includes(d.hit)) this.#setSelection([d.hit]);
             d.dx = round6(this.snap(mm2[0] - d.start[0]));
             d.dy = round6(this.snap(mm2[1] - d.start[1]));
           } else if (d.kind === "lasso") {
@@ -28191,11 +28343,11 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
             }
             if (e.shiftKey || e.ctrlKey || e.metaKey) {
               if (hit)
-                this.#setSelection(
+                this.#setLayerSelection(
                   this.sel.includes(hit.index) ? this.sel.filter((i) => i !== hit.index) : [...this.sel, hit.index]
                 );
             } else if (e.altKey) {
-              if (hit) this.#setSelection(this.sel.filter((i) => i !== hit.index));
+              if (hit) this.#setLayerSelection(this.sel.filter((i) => i !== hit.index));
             } else this.#setSelection(hit ? [hit.index] : []);
             this.refresh();
             return;
@@ -28240,7 +28392,8 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
       const colour = rgba(MISC.selection, 1);
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       if (d?.kind === "move" && (d.dx || d.dy)) {
-        v.outlineObjects(ctx, map, layer.id, this.sel, MISC.selection, 0.15, d.dx, d.dy);
+        for (const [id3, indices] of this.selected)
+          v.outlineObjects(ctx, map, id3, indices, MISC.selection, 0.15, d.dx, d.dy);
       }
       if (d?.kind === "box" || d?.kind === "lasso") {
         const touch2 = d.mode === "touch";
@@ -28652,13 +28805,13 @@ Click: show only this layer${turns ? `, seen from the ${s.side}` : ""} · Shift+
         }
       ]);
       const toolbar = h("header", { class: "toolbar" }, [
-        h("span", { class: "title" }, "PCB-CAMmotion"),
-        this.menuBar.el,
-        fileInput,
-        pcamInput,
-        this.explodeBox,
-        h("span", { class: "spacer" }),
-        this.editor.el
+        h("div", { class: "toolbar-menus" }, [
+          h("span", { class: "title" }, "PCB-CAMmotion"),
+          this.menuBar.el,
+          fileInput,
+          pcamInput
+        ]),
+        h("div", { class: "toolbar-options" }, [this.editor.el, this.explodeBox])
       ]);
       this.btnShow = Object.fromEntries(
         LAYER_GROUPS.map((g) => [

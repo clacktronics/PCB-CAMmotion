@@ -3,7 +3,9 @@
 // left to right: objects entirely inside; right to left: anything touched), double-click to
 // select connected, a right-click menu (same shape, same aperture, connected, select all,
 // move by, to region, delete), the current tool's options in the top bar, and the Edit menu's
-// actions (undo/redo, unify the layer, revert, export of the edited file).
+// actions (undo/redo, unify the layer, revert, export of the edited file). Box and lasso pick
+// from the edited layer, every shown layer or the soloed layers (Pick from, in the top bar);
+// moving or deleting a selection on several layers edits each of them, as one undo step.
 // The edits themselves are DOM-free (src/edit/); this file turns pointer and key input into
 // edit ops. Its settings live in settings.edit of the .pcam (src/project/project.js).
 
@@ -12,12 +14,15 @@ import { layerEditor, revertEdits, EDIT_TOOLS } from '../project/project.js';
 import { EditError } from '../edit/session.js';
 import { describeAperture } from '../analyze/apertures.js';
 import { MISC, rgba } from '../model/materials.js';
-import { objectsInPolygon, boxPolygon, sameShape, sameAperture, connected } from '../edit/selection.js';
+import { objectsInPolygon, boxPolygon, sameShape, sameAperture, connected, pickLayers } from '../edit/selection.js';
 import { openMenu } from './context-menu.js';
 
 const TOOL_LABEL = { select: 'Select', lasso: 'Lasso', hand: 'Hand', pad: 'Pad', track: 'Track', region: 'Region' };
 const TOOL_KEY = { v: 'select', l: 'lasso', h: 'hand', p: 'pad', t: 'track', r: 'region' };
 const PICK_HELP = 'Shift adds to the selection, Alt or Ctrl takes away';
+const PICK_FROM_LABEL = { layer: 'This layer', all: 'All layers', solo: 'Soloed layers' };
+const PICK_FROM_TITLE =
+  'The layers a box or lasso selects on: the edited layer, every shown Gerber and drill layer, or the soloed layers (none soloed: the edited layer). Moving or deleting the selection edits every layer it is on.';
 const TOOL_TITLE = {
   select: `Select (V): click an object, double-click to select everything connected; drag a box left to right to pick objects entirely inside (green), right to left to pick anything it touches (red) (${PICK_HELP}); drag a selected object to move it`,
   lasso: `Lasso (L): draw round the objects to select; start rightwards to pick objects entirely inside (green), leftwards to pick anything it touches (red) (${PICK_HELP})`,
@@ -51,7 +56,8 @@ export class EditorPanel {
    */
   constructor(host) {
     this.host = host;
-    this.sel = []; // selected object indices on the edited layer
+    this.selected = new Map(); // layer id → selected object indices (sorted, never empty)
+    this.groups = new WeakMap(); // op → [{ layerId, op }]: ops made together on several layers
     this.sketch = []; // points of the track/region being drawn (mm)
     this.cursor = null;
     this.drag = null; // { kind: 'move'|'box'|'lasso', start, dx, dy, end, points, x0, mode }
@@ -82,6 +88,19 @@ export class EditorPanel {
 
   get s() {
     return this.host.settings();
+  }
+
+  /** Selected object indices on the edited layer. */
+  get sel() {
+    const l = this.layer();
+    return (l && this.selected.get(l.id)) || [];
+  }
+
+  /** Number of selected objects on every layer. */
+  get selCount() {
+    let n = 0;
+    for (const indices of this.selected.values()) n += indices.length;
+    return n;
   }
 
   get on() {
@@ -134,7 +153,7 @@ export class EditorPanel {
     v.edit = on ? this.#handler() : null;
     v.overlayHook = on ? (ctx, map) => this.#drawOverlay(ctx, map) : null;
     v.settings.pickLayerId = on && layer ? layer.id : null;
-    v.editSelection = on && layer ? { layerId: layer.id, indices: this.sel } : null;
+    v.editSelection = on ? this.#viewSelection() : null;
     v.canvas.classList.toggle('editing', on);
     v.canvas.dataset.tool = on ? this.s.tool : '';
     v.drawOverlay();
@@ -149,9 +168,26 @@ export class EditorPanel {
     const ed = layer.editor;
     const problems = ed ? ed.problems : [];
     const tool = this.s.tool;
-    const n = this.sel.length;
+    const n = this.selCount;
+    const onLayers = this.selected.size;
     this.el.append(h('span', { class: 'tool-name', 'data-testid': 'edit-tool' }, this.#toolLabel(tool)));
     if (tool === 'pad' || tool === 'track') this.el.append(this.#apertureRow(layer));
+    if (tool === 'select' || tool === 'lasso') {
+      const pickFrom = h(
+        'select',
+        {
+          'data-testid': 'pick-from',
+          onchange: (e) => {
+            this.s.pickFrom = e.target.value;
+            this.host.touch();
+          },
+        },
+        Object.entries(PICK_FROM_LABEL).map(([value, label]) =>
+          h('option', { value, selected: this.s.pickFrom === value }, label),
+        ),
+      );
+      this.el.append(h('label', { title: PICK_FROM_TITLE }, ['Pick from ', pickFrom]));
+    }
     this.el.append(
       h('label', { title: 'Positions and moves snap to this grid (0 = no snapping)' }, [
         'Grid ',
@@ -161,7 +197,11 @@ export class EditorPanel {
         }),
         ' mm',
       ]),
-      h('span', { class: 'muted', 'data-testid': 'edit-selection' }, n ? `${n} selected` : 'Nothing selected'),
+      h(
+        'span',
+        { class: 'muted', 'data-testid': 'edit-selection' },
+        n ? `${n} selected${onLayers > 1 ? ` on ${onLayers} layers` : ''}` : 'Nothing selected',
+      ),
       h(
         'span',
         {
@@ -386,14 +426,58 @@ export class EditorPanel {
 
   // ---------------------------------------------------------------- actions
 
+  /** Select objects of the edited layer only (the selection on other layers is dropped). */
   #setSelection(indices) {
-    this.sel = [...new Set(indices)].sort((a, b) => a - b);
-    const v = this.host.viewer;
     const layer = this.layer();
-    v.editSelection = layer ? { layerId: layer.id, indices: this.sel } : null;
+    this.#setSelected(new Map(layer ? [[layer.id, indices]] : []));
+  }
+
+  /** Change the edited layer's part of the selection, keeping the other layers'. */
+  #setLayerSelection(indices) {
+    const layer = this.layer();
+    if (!layer) return;
+    this.#setSelected(new Map([...this.selected, [layer.id, indices]]));
+  }
+
+  /** Set the whole selection: layer id → object indices. One selected object is inspected. */
+  #setSelected(byLayer) {
+    this.selected = new Map();
+    for (const [id, indices] of byLayer) {
+      const sorted = [...new Set(indices)].sort((a, b) => a - b);
+      if (sorted.length) this.selected.set(id, sorted);
+    }
+    const v = this.host.viewer;
+    v.editSelection = this.#viewSelection();
     v.drawOverlay();
-    const o = layer && this.sel.length === 1 ? layer.image.objects[this.sel[0]] : null;
-    this.host.inspect(o ? { layerId: layer.id, index: this.sel[0], object: o, x: null, y: null } : null);
+    const [only] = this.selCount === 1 ? this.selected : [];
+    const layer = only && this.#layerById(only[0]);
+    const o = layer?.image?.objects[only[1][0]];
+    this.host.inspect(o ? { layerId: layer.id, index: only[1][0], object: o, x: null, y: null } : null);
+  }
+
+  #viewSelection() {
+    return [...this.selected].map(([layerId, indices]) => ({ layerId, indices }));
+  }
+
+  #layerById(id) {
+    return this.host.layers().find((l) => l.id === id) || null;
+  }
+
+  /** Selected layers with their indices, the edited layer first. */
+  #selectedLayers() {
+    const active = this.layer()?.id;
+    const out = [];
+    for (const [id, indices] of this.selected) {
+      const layer = this.#layerById(id);
+      if (layer?.image) out[id === active ? 'unshift' : 'push']({ layer, indices });
+    }
+    return out;
+  }
+
+  /** The layers a box or lasso picks from (Pick from in the top bar). */
+  #pickFromLayers() {
+    const v = this.host.viewer;
+    return pickLayers(v.layers, { from: this.s.pickFrom, activeId: this.layer()?.id ?? null, solo: v.settings.solo });
   }
 
   /** Select objects of the edited layer (e.g. from the analyser's command list). */
@@ -437,13 +521,21 @@ export class EditorPanel {
    * touched) with the selection (Shift adds, Alt/Ctrl removes).
    */
   #pickPolygon(poly, mode, e) {
-    const layer = this.layer();
-    if (!layer) return;
-    const picked = objectsInPolygon(layer.image, poly, mode);
-    if (e.altKey || e.ctrlKey || e.metaKey) {
-      const drop = new Set(picked);
-      this.#setSelection(this.sel.filter((i) => !drop.has(i)));
-    } else this.#setSelection(e.shiftKey ? [...this.sel, ...picked] : picked);
+    if (!this.layer()) return;
+    const take = e.altKey || e.ctrlKey || e.metaKey;
+    const next = take || e.shiftKey ? new Map(this.selected) : new Map();
+    for (const l of this.#pickFromLayers()) {
+      const picked = objectsInPolygon(l.image, poly, mode);
+      const had = this.selected.get(l.id) || [];
+      if (take) {
+        const drop = new Set(picked);
+        next.set(
+          l.id,
+          had.filter((i) => !drop.has(i)),
+        );
+      } else next.set(l.id, e.shiftKey ? [...had, ...picked] : picked);
+    }
+    this.#setSelected(next);
     this.refresh();
   }
 
@@ -494,6 +586,7 @@ export class EditorPanel {
     if (hit && !this.sel.includes(hit.index)) this.select([hit.index]);
     const objs = this.sel.map((i) => layer.image.objects[i]);
     const n = this.sel.length;
+    const all = this.selCount; // move, delete and deselect take the selection on every layer
     const codes = [...new Set(objs.filter((o) => o.ap).map((o) => o.ap.code))];
     const drill = layer.kind === 'excellon';
     openMenu(clientX, clientY, [
@@ -513,25 +606,25 @@ export class EditorPanel {
         label: 'Deselect',
         hint: 'Esc',
         testid: 'ctx-deselect',
-        disabled: !n,
+        disabled: !all,
         action: () => (this.#setSelection([]), this.refresh()),
       },
       null,
-      { label: 'Move by…', hint: '←↑→↓', testid: 'ctx-move', disabled: !n, action: () => this.promptMove() },
+      { label: 'Move by…', hint: '←↑→↓', testid: 'ctx-move', disabled: !all, action: () => this.promptMove() },
       ...(drill ? [] : [{ label: 'To region', testid: 'ctx-to-region', disabled: !n, action: () => this.toRegion() }]),
-      { label: 'Delete', hint: 'Del', testid: 'ctx-delete', disabled: !n, action: () => this.deleteSelection() },
+      { label: 'Delete', hint: 'Del', testid: 'ctx-delete', disabled: !all, action: () => this.deleteSelection() },
     ]);
     return true;
   }
 
   /** Command targets of the selection, or null (with a message) if one cannot be edited. */
-  #targets(layer) {
+  #targets(layer, indices = this.sel, named = false) {
     const ed = layerEditor(layer);
     const out = new Set();
-    for (const i of this.sel) {
+    for (const i of indices) {
       const t = ed.target(i);
       if (t.error) {
-        this.host.message(t.error, true);
+        this.host.message(named ? `${layer.name}: ${t.error}` : t.error, true);
         return null;
       }
       out.add(t.ci);
@@ -558,24 +651,65 @@ export class EditorPanel {
     }
   }
 
+  /**
+   * Run one op on every layer with selected objects (makeOp gets that layer's command
+   * targets). All or nothing: if one layer cannot take it, the others are undone. Ops made on
+   * several layers are one undo step. The objects the ops made or moved are selected.
+   */
+  #applySelected(makeOp, done) {
+    if (this.busy) return false;
+    const jobs = [];
+    const selected = this.#selectedLayers();
+    for (const { layer, indices } of selected) {
+      const targets = this.#targets(layer, indices, selected.length > 1);
+      if (!targets) return false;
+      jobs.push({ layer, op: makeOp(targets) });
+    }
+    if (!jobs.length) return false;
+    const next = new Map();
+    const made = [];
+    try {
+      for (const j of jobs) {
+        const ed = layerEditor(j.layer);
+        const redo = ed.redoOps;
+        next.set(j.layer.id, ed.apply(j.op));
+        made.push({ ...j, redo });
+      }
+    } catch (e) {
+      if (!(e instanceof EditError)) throw e;
+      for (const m of made) {
+        m.layer.editor.undo();
+        m.layer.editor.redoOps = m.redo;
+      }
+      this.host.message(made.length ? `${jobs[made.length].layer.name}: ${e.message}` : e.message, true);
+      return false;
+    } finally {
+      for (const m of made) this.host.commit(m.layer);
+    }
+    if (jobs.length > 1) {
+      const group = jobs.map((j) => ({ layerId: j.layer.id, op: j.op }));
+      for (const j of jobs) this.groups.set(j.op, group);
+    }
+    this.#setSelected(next);
+    this.refresh();
+    const on = jobs.length > 1 ? ` on ${jobs.length} layers` : '';
+    if (done) this.host.message(done + on);
+    return true;
+  }
+
   deleteSelection() {
-    const layer = this.layer();
-    const targets = layer && this.sel.length && this.#targets(layer);
-    if (!targets) return;
-    const n = this.sel.length;
-    if (this.apply({ type: 'delete', targets })) this.host.message(`Deleted ${n} object${n === 1 ? '' : 's'}`);
+    const n = this.selCount;
+    if (n) this.#applySelected((targets) => ({ type: 'delete', targets }), `Deleted ${n} object${n === 1 ? '' : 's'}`);
   }
 
   moveSelection(dxMm, dyMm) {
-    const layer = this.layer();
-    if (!layer || !this.sel.length || !Number.isFinite(dxMm) || !Number.isFinite(dyMm) || (!dxMm && !dyMm)) return;
-    const targets = this.#targets(layer);
-    if (targets) this.apply({ type: 'move', targets, dxMm, dyMm }, `Moved by ${fmt(dxMm)}, ${fmt(dyMm)} mm`);
+    if (!this.selCount || !Number.isFinite(dxMm) || !Number.isFinite(dyMm) || (!dxMm && !dyMm)) return;
+    this.#applySelected((targets) => ({ type: 'move', targets, dxMm, dyMm }), `Moved by ${fmt(dxMm)}, ${fmt(dyMm)} mm`);
   }
 
   /** Ask for an X, Y offset in mm and move the selection by it. */
   promptMove() {
-    if (!this.sel.length) return;
+    if (!this.selCount) return;
     const answer = window.prompt('Move the selection by X, Y (mm)', '0, 0');
     if (answer === null) return;
     const parts = answer
@@ -612,28 +746,48 @@ export class EditorPanel {
     }, 30);
   }
 
+  /**
+   * The layers an undo or redo of the edited layer's next op takes: every layer of an op made
+   * on several layers at once (while that op is still next on them), else just this one.
+   */
+  #stepLayers(layer, next) {
+    const group = this.groups.get(next(layer.editor));
+    if (!group) return [layer];
+    return group
+      .map((m) => ({ m, l: this.#layerById(m.layerId) }))
+      .filter(({ m, l }) => l?.editor && next(l.editor) === m.op)
+      .map(({ l }) => l);
+  }
+
   undo() {
     const layer = this.layer();
-    if (!layer?.editor?.undo()) return;
-    this.host.commit(layer);
+    if (!layer?.editor?.canUndo) return;
+    const layers = this.#stepLayers(layer, (ed) => ed.ops.at(-1));
+    for (const l of layers) {
+      l.editor.undo();
+      this.host.commit(l);
+    }
     this.#setSelection([]);
     this.refresh();
-    this.host.message('Undone');
+    this.host.message(layers.length > 1 ? `Undone on ${layers.length} layers` : 'Undone');
   }
 
   redo() {
     const layer = this.layer();
     if (!layer?.editor?.canRedo) return;
+    const next = new Map();
     try {
-      const sel = layer.editor.redo();
-      this.host.commit(layer);
-      this.#setSelection(sel);
-      this.refresh();
-      this.host.message('Redone');
+      for (const l of this.#stepLayers(layer, (ed) => ed.redoOps.at(-1))) {
+        next.set(l.id, l.editor.redo());
+        this.host.commit(l);
+      }
     } catch (e) {
       if (!(e instanceof EditError)) throw e;
       this.host.message(e.message, true);
     }
+    this.#setSelected(next);
+    this.refresh();
+    if (next.size) this.host.message(next.size > 1 ? `Redone on ${next.size} layers` : 'Redone');
   }
 
   revert() {
@@ -717,7 +871,7 @@ export class EditorPanel {
     }
     if (k === 'Escape') {
       if (this.sketch.length || this.drag) this.cancelSketch();
-      else (this.#setSelection([]), this.refresh());
+      else (this.#setSelected(new Map()), this.refresh());
       return true;
     }
     if (k === 'Enter' && this.sketch.length) return (this.#finishSketch(), true);
@@ -728,7 +882,7 @@ export class EditorPanel {
       } else this.deleteSelection();
       return true;
     }
-    if (k.startsWith('Arrow') && this.sel.length) {
+    if (k.startsWith('Arrow') && this.selCount) {
       const step = (this.s.gridMm || 0.01) * (e.shiftKey ? 10 : 1);
       const d = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] }[k];
       // the bottom view is mirrored: left on screen is +X on the board
@@ -782,6 +936,12 @@ export class EditorPanel {
           this.drag = { kind: 'move', start: mm, dx: 0, dy: 0, hit: hit.index };
           return true;
         }
+        // a selected object on another layer moves the selection too
+        const other = !e.altKey && v.pickAt(mm[0], mm[1], (l) => this.selected.has(l.id), null);
+        if (other && this.selected.get(other.layerId).includes(other.index)) {
+          this.drag = { kind: 'move', start: mm, dx: 0, dy: 0, hit: null };
+          return true;
+        }
         this.drag = { kind: 'box', start: mm, end: mm, x0: e.clientX, mode: 'enclose' };
         return true;
       },
@@ -789,7 +949,7 @@ export class EditorPanel {
         const d = this.drag;
         if (!d) return;
         if (d.kind === 'move') {
-          if (!this.sel.includes(d.hit)) this.#setSelection([d.hit]);
+          if (d.hit !== null && !this.sel.includes(d.hit)) this.#setSelection([d.hit]);
           d.dx = round6(this.snap(mm[0] - d.start[0]));
           d.dy = round6(this.snap(mm[1] - d.start[1]));
         } else if (d.kind === 'lasso') {
@@ -837,11 +997,11 @@ export class EditorPanel {
           }
           if (e.shiftKey || e.ctrlKey || e.metaKey) {
             if (hit)
-              this.#setSelection(
+              this.#setLayerSelection(
                 this.sel.includes(hit.index) ? this.sel.filter((i) => i !== hit.index) : [...this.sel, hit.index],
               );
           } else if (e.altKey) {
-            if (hit) this.#setSelection(this.sel.filter((i) => i !== hit.index));
+            if (hit) this.#setLayerSelection(this.sel.filter((i) => i !== hit.index));
           } else this.#setSelection(hit ? [hit.index] : []);
           this.refresh();
           return;
@@ -889,7 +1049,8 @@ export class EditorPanel {
     const colour = rgba(MISC.selection, 1);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     if (d?.kind === 'move' && (d.dx || d.dy)) {
-      v.outlineObjects(ctx, map, layer.id, this.sel, MISC.selection, 0.15, d.dx, d.dy);
+      for (const [id, indices] of this.selected)
+        v.outlineObjects(ctx, map, id, indices, MISC.selection, 0.15, d.dx, d.dy);
     }
     if (d?.kind === 'box' || d?.kind === 'lasso') {
       // inside-only picks draw green and solid, touching picks red and dashed (as in CAD tools)
