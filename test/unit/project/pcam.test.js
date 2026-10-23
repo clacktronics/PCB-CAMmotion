@@ -14,6 +14,7 @@ import {
 } from '../../../src/project/pcam.js';
 import { APP_VERSION } from '../../../src/version.js';
 import { assertGolden } from '../../helpers/golden.js';
+import { buildLayers } from '../../../src/project/project.js';
 
 const NOW = new Date('2026-10-15T00:00:00Z');
 const fixture = (name) => new Uint8Array(readFileSync(new URL(`../../fixtures/pcam/${name}`, import.meta.url)));
@@ -75,7 +76,7 @@ test('settings, stackup, tools and unknown data survive a round trip', () => {
 
 test('fixture v1-empty.pcam loads', () => {
   const p = loadProject(fixture('v1-empty.pcam'));
-  assert.equal(p.manifest.schemaVersion, 2, 'migrated to schema 2');
+  assert.equal(p.manifest.schemaVersion, SCHEMA_VERSION, 'migrated to the current schema');
   assert.deepEqual(p.edits, {});
   assert.equal(p.manifest.name, 'empty');
   assert.equal(p.manifest.units, 'mm');
@@ -93,7 +94,7 @@ test('fixture v1-with-source.pcam loads, and unknown fields/entries survive load
 });
 
 test('every .pcam fixture loads and migrates to the current schema', () => {
-  for (const name of ['v1-empty.pcam', 'v1-with-source.pcam', 'v2-with-edits.pcam']) {
+  for (const name of ['v1-empty.pcam', 'v1-with-source.pcam', 'v2-with-edits.pcam', 'v3-with-node-edits.pcam']) {
     assert.equal(loadProject(fixture(name)).manifest.schemaVersion, SCHEMA_VERSION, name);
   }
 });
@@ -109,7 +110,7 @@ test('edits survive a round trip in model/edits.json; projects without edits hav
 
 test('fixture v2-with-edits.pcam loads with its edits', () => {
   const p = loadProject(fixture('v2-with-edits.pcam'));
-  assert.equal(p.manifest.schemaVersion, 2);
+  assert.equal(p.manifest.schemaVersion, SCHEMA_VERSION, 'migrated to the current schema');
   assert.deepEqual(Object.keys(p.edits), ['board-F_Cu.gbr']);
   assert.deepEqual(
     p.edits['board-F_Cu.gbr'].ops.map((o) => o.type),
@@ -163,4 +164,28 @@ test('file names: .pcam in any case; download name is sanitised', () => {
   const p = createEmptyProject({ name: 'my/board: v2', now: NOW });
   assert.equal(pcamFileName(p), 'my_board_ v2.pcam');
   assert.equal(pcamFileName(createEmptyProject({ name: '  ', now: NOW })), 'untitled.pcam');
+});
+
+test('fixture v3-with-node-edits.pcam loads and replays its region corner edits', () => {
+  const p = loadProject(fixture('v3-with-node-edits.pcam'));
+  assert.equal(p.manifest.schemaVersion, 3);
+  const rec = p.edits['board-F_Cu.gbr'];
+  assert.deepEqual(
+    rec.ops.map((o) => o.type),
+    ['moveVertex', 'insertVertex', 'deleteVertex'],
+  );
+  assert.deepEqual(
+    rec.redo.map((o) => o.type),
+    ['moveVertex'],
+  );
+  const { layers } = buildLayers(p);
+  const region = layers[0].image.objects[1];
+  assert.equal(region.k, 'R');
+  const b = layers[0].image.objBounds.slice(4, 8);
+  assert.deepEqual(
+    [...b].map((v) => +v.toFixed(6)),
+    [2, -0.5, 4.5, 3.25],
+  );
+  assert.deepEqual(layers[0].diagnostics.errors, []);
+  assert.deepEqual(loadProject(saveProject(p)), p);
 });

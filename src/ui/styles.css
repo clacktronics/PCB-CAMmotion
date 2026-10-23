@@ -763,6 +763,12 @@ table.apt tr.on td {
 .main canvas.editing[data-tool='hand'] {
   cursor: grab;
 }
+.main canvas.editing[data-tool='node'][data-handle='corner'] {
+  cursor: move;
+}
+.main canvas.editing[data-tool='node'][data-handle='edge'] {
+  cursor: copy;
+}
 
 /* editor tool strip on the board (Photoshop-style) */
 .tool-strip {

@@ -51,7 +51,7 @@ test('tool strip: tools by click and key; a box drag picks inside only or touchi
   const { errors } = await openApp(page);
   await startEditing(page);
   const strip = page.locator('[data-testid=tool-strip]');
-  for (const t of ['select', 'lasso', 'hand', 'pad', 'track', 'region'])
+  for (const t of ['select', 'lasso', 'node', 'hand', 'pad', 'track', 'region'])
     await expect(strip.locator(`[data-testid=tool-${t}]`)).toBeVisible();
   // no mode toggle: the drag direction picks the mode
   await expect(page.locator('[data-testid=select-mode]')).toHaveCount(0);

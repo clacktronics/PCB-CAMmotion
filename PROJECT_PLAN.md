@@ -124,11 +124,14 @@ Decisions made on the way:
   polygons from the renderer's own outlines, ready for CAM offsetting (milestone 6).
   Not yet editable: single copies of step and repeat, objects inside aperture blocks,
   routed drill paths.
-  Editor UI: a Photoshop-style tool strip on the board (select, lasso, hand, pad/hole,
-  track, region); box and lasso select objects entirely inside or everything they touch,
+  Editor UI: a Photoshop-style tool strip on the board (select, lasso, node, hand,
+  pad/hole, track, region); box and lasso select objects entirely inside or everything they touch,
   tested against each object's drawn outline (`src/edit/selection.js`, DOM-free); a
   right-click menu selects the same shape, the same aperture or the connected copper.
   The tool and the select mode are saved in `settings.edit` (no schema change).
+  Node tool: moves, adds and deletes the corners of a region's contours as JSON ops
+  (`src/edit/region-nodes.js`; arcs keep their sweep), saved in `model/edits.json` like
+  every other edit (schema 3, so older apps refuse files they could not replay).
 
 ### Project file — `.pcam` (from milestone 0, extended by every milestone)
 

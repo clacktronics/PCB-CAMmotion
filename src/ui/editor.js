@@ -1,11 +1,14 @@
 // Editor (milestone 4): edit mode, a Photoshop-style tool strip on the board (select, lasso,
-// hand, pad or hole, track, region), selection with drag-move, box and lasso select (dragged
-// left to right: objects entirely inside; right to left: anything touched), double-click to
-// select connected, a right-click menu (same shape, same aperture, connected, select all,
-// move by, to region, delete), the current tool's options in the top bar, and the Edit menu's
-// actions (undo/redo, unify the layer, revert, export of the edited file). Box and lasso pick
-// from the edited layer, every shown layer or the soloed layers (Pick from, in the top bar);
-// moving or deleting a selection on several layers edits each of them, as one undo step.
+// node, hand, pad or hole, track, region), selection with drag-move, box and lasso select
+// (dragged left to right: objects entirely inside; right to left: anything touched),
+// double-click to select connected, a right-click menu (same shape, same aperture,
+// connected, select all, move by, to region, delete), the current tool's options in the top
+// bar, and the Edit menu's actions (undo/redo, unify the layer, revert, export of the edited
+// file). Box and lasso pick from the edited layer, every shown layer or the soloed layers
+// (Pick from, in the top bar); moving or deleting a selection on several layers edits each
+// of them, as one undo step.
+// The node tool edits one region's corners (src/edit/region-nodes.js): drag a corner, click
+// an edge's midpoint handle to add a corner, Delete to remove the selected corners.
 // The edits themselves are DOM-free (src/edit/); this file turns pointer and key input into
 // edit ops. Its settings live in settings.edit of the .pcam (src/project/project.js).
 
@@ -16,9 +19,18 @@ import { describeAperture } from '../analyze/apertures.js';
 import { MISC, rgba } from '../model/materials.js';
 import { objectsInPolygon, boxPolygon, sameShape, sameAperture, connected, pickLayers } from '../edit/selection.js';
 import { openMenu } from './context-menu.js';
+import { regionNodes, contourPoints } from '../edit/region-nodes.js';
 
-const TOOL_LABEL = { select: 'Select', lasso: 'Lasso', hand: 'Hand', pad: 'Pad', track: 'Track', region: 'Region' };
-const TOOL_KEY = { v: 'select', l: 'lasso', h: 'hand', p: 'pad', t: 'track', r: 'region' };
+const TOOL_LABEL = {
+  select: 'Select',
+  lasso: 'Lasso',
+  node: 'Node',
+  hand: 'Hand',
+  pad: 'Pad',
+  track: 'Track',
+  region: 'Region',
+};
+const TOOL_KEY = { v: 'select', l: 'lasso', a: 'node', h: 'hand', p: 'pad', t: 'track', r: 'region' };
 const PICK_HELP = 'Shift adds to the selection, Alt or Ctrl takes away';
 const PICK_FROM_LABEL = { layer: 'This layer', all: 'All layers', solo: 'Soloed layers' };
 const PICK_FROM_TITLE =
@@ -26,6 +38,7 @@ const PICK_FROM_TITLE =
 const TOOL_TITLE = {
   select: `Select (V): click an object, double-click to select everything connected; drag a box left to right to pick objects entirely inside (green), right to left to pick anything it touches (red) (${PICK_HELP}); drag a selected object to move it`,
   lasso: `Lasso (L): draw round the objects to select; start rightwards to pick objects entirely inside (green), leftwards to pick anything it touches (red) (${PICK_HELP})`,
+  node: `Node (A): click a region to show its corners; drag a corner to move it (Shift keeps to 45°), click an edge's midpoint handle to add a corner (or drag it to place one), Delete removes the selected corners; drag a box to select corners (${PICK_HELP})`,
   hand: 'Hand (H): drag to pan the board (any tool: hold Space or drag with the middle button)',
   pad: 'Pad (P): click to place a pad with the chosen aperture (on a drill layer: a hole)',
   track:
@@ -37,6 +50,7 @@ const TOOL_TITLE = {
 const ICON = {
   select: '<path d="M6 3l12 9-5.5 1 3.2 6.3-2.4 1.2-3.2-6.4L6 18z"/>',
   lasso: '<ellipse cx="12" cy="9" rx="8" ry="5" stroke-dasharray="3 2"/><path d="M7 13c-2 2-1 4 1 4s2 2 0 4"/>',
+  node: '<path d="M5 19L9 6l10 4-6 9z"/><rect x="3" y="17" width="4" height="4" fill="currentColor"/><rect x="7" y="4" width="4" height="4"/><rect x="17" y="8" width="4" height="4"/><rect x="11" y="17" width="4" height="4"/>',
   hand: '<path d="M8 12V5.5a1.5 1.5 0 013 0V11m0-6.5V4a1.5 1.5 0 013 0v7m0-6a1.5 1.5 0 013 0v7m0-3a1.5 1.5 0 013 0v4c0 4-3 7-7 7h-1c-3 0-4.5-1.5-6-4l-2.6-4.4a1.5 1.5 0 012.6-1.5L8 15"/>',
   pad: '<circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
   track: '<path d="M4 18h6l8-8h3" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>',
@@ -46,6 +60,8 @@ const ICON = {
 const CLOSE_PX = 8;
 const LASSO_STEP_PX = 3;
 const LASSO_DIR_PX = 4; // how far a lasso must move sideways before its first direction counts
+const HANDLE_PX = 6; // node tool: how close (CSS px) the pointer must be to a corner or edge handle
+const EDGE_HANDLE_PX = 28; // edges shorter than this on screen get no midpoint handle
 
 export class EditorPanel {
   /**
@@ -60,7 +76,9 @@ export class EditorPanel {
     this.groups = new WeakMap(); // op → [{ layerId, op }]: ops made together on several layers
     this.sketch = []; // points of the track/region being drawn (mm)
     this.cursor = null;
-    this.drag = null; // { kind: 'move'|'box'|'lasso', start, dx, dy, end, points, x0, mode }
+    this.drag = null; // { kind: 'move'|'box'|'lasso'|'node'|'insert'|'nodebox', start, dx, dy, end, points, x0, mode }
+    this.nodes = new Set(); // node tool: selected corners of the selected region (region-nodes.js numbers)
+    this.nodeCache = null;
     this.busy = false;
     this.space = false; // Space held: drags pan, whatever the tool
     // the current tool's options, right-aligned in the top bar
@@ -156,6 +174,7 @@ export class EditorPanel {
     v.editSelection = on ? this.#viewSelection() : null;
     v.canvas.classList.toggle('editing', on);
     v.canvas.dataset.tool = on ? this.s.tool : '';
+    if (!on || this.s.tool !== 'node') v.canvas.dataset.handle = '';
     v.drawOverlay();
     this.#refreshStrip();
     this.refreshMenu();
@@ -172,6 +191,7 @@ export class EditorPanel {
     const onLayers = this.selected.size;
     this.el.append(h('span', { class: 'tool-name', 'data-testid': 'edit-tool' }, this.#toolLabel(tool)));
     if (tool === 'pad' || tool === 'track') this.el.append(this.#apertureRow(layer));
+    if (tool === 'node') this.el.append(this.#nodeRow());
     if (tool === 'select' || tool === 'lasso') {
       const pickFrom = h(
         'select',
@@ -282,7 +302,9 @@ export class EditorPanel {
 
   /** Tools of the edited layer: drill layers have no tracks or regions. */
   #tools(layer) {
-    return layer?.kind === 'excellon' ? EDIT_TOOLS.filter((t) => t !== 'track' && t !== 'region') : EDIT_TOOLS;
+    return layer?.kind === 'excellon'
+      ? EDIT_TOOLS.filter((t) => t !== 'track' && t !== 'region' && t !== 'node')
+      : EDIT_TOOLS;
   }
 
   #toolLabel(tool) {
@@ -306,7 +328,7 @@ export class EditorPanel {
     };
     const button = (name, label, attrs) => h('button', { ...attrs, 'aria-label': label }, [icon(name)]);
     const groups = [
-      ['select', 'lasso', 'hand'],
+      ['select', 'lasso', 'node', 'hand'],
       ['pad', 'track', 'region'],
     ];
     for (const g of groups) {
@@ -441,6 +463,7 @@ export class EditorPanel {
 
   /** Set the whole selection: layer id → object indices. One selected object is inspected. */
   #setSelected(byLayer) {
+    this.nodes = new Set();
     this.selected = new Map();
     for (const [id, indices] of byLayer) {
       const sorted = [...new Set(indices)].sort((a, b) => a - b);
@@ -589,7 +612,19 @@ export class EditorPanel {
     const all = this.selCount; // move, delete and deselect take the selection on every layer
     const codes = [...new Set(objs.filter((o) => o.ap).map((o) => o.ap.code))];
     const drill = layer.kind === 'excellon';
+    const corners = this.#nodeRegion() ? this.nodes.size : 0;
     openMenu(clientX, clientY, [
+      ...(corners
+        ? [
+            {
+              label: `Delete ${corners === 1 ? 'corner' : `${corners} corners`}`,
+              hint: 'Del',
+              testid: 'ctx-delete-corners',
+              action: () => this.deleteCorners(),
+            },
+            null,
+          ]
+        : []),
       { label: 'Select same shape', testid: 'ctx-same-shape', disabled: !n, action: () => this.selectBy('shape') },
       {
         label: 'Select same aperture',
@@ -763,11 +798,13 @@ export class EditorPanel {
     const layer = this.layer();
     if (!layer?.editor?.canUndo) return;
     const layers = this.#stepLayers(layer, (ed) => ed.ops.at(-1));
+    // the node tool keeps editing the region (corner edits leave it where it was)
+    const keep = this.#nodeRegion() ? this.sel : [];
     for (const l of layers) {
       l.editor.undo();
       this.host.commit(l);
     }
-    this.#setSelection([]);
+    this.#setSelection(keep.filter((i) => layer.image.objects[i]?.k === 'R'));
     this.refresh();
     this.host.message(layers.length > 1 ? `Undone on ${layers.length} layers` : 'Undone');
   }
@@ -840,6 +877,279 @@ export class EditorPanel {
     this.host.viewer.drawOverlay();
   }
 
+  // ---------------------------------------------------------------- node tool
+
+  /**
+   * The region the node tool edits: the one selected object of the edited Gerber layer, when
+   * it is a region. { layer, target (its G37), info (regionNodes) } or null.
+   */
+  #nodeRegion() {
+    if (this.s.tool !== 'node') return null;
+    const layer = this.layer();
+    if (!layer || layer.kind !== 'gerber' || this.selCount !== 1) return null;
+    const ed = layerEditor(layer);
+    const oi = this.sel[0];
+    const c = this.nodeCache;
+    if (c && c.commands === ed.commands && c.oi === oi && c.layerId === layer.id) return c.region;
+    let region = null;
+    const t = ed.target(oi);
+    if (t.kind === 'region') {
+      try {
+        region = { layer, target: t.ci, info: regionNodes(ed.commands, t.ci) };
+      } catch (e) {
+        if (!(e instanceof EditError)) throw e;
+      }
+    }
+    this.nodeCache = { commands: ed.commands, oi, layerId: layer.id, region };
+    return region;
+  }
+
+  /** Top bar for the node tool: corner count, and X/Y of a single selected corner. */
+  #nodeRow() {
+    const r = this.#nodeRegion();
+    if (!r) return h('span', { class: 'muted', 'data-testid': 'node-info' }, 'Click a region to edit its corners');
+    const n = r.info.points.size;
+    const picked = this.nodes.size > 1 ? ` · ${this.nodes.size} selected` : '';
+    const row = [
+      h('span', { class: 'muted', 'data-testid': 'node-info' }, `${n} corner${n === 1 ? '' : 's'}${picked}`),
+    ];
+    if (this.nodes.size === 1) {
+      const [k] = this.nodes;
+      const [x, y] = r.info.points.get(k);
+      const set = (axis) => (v) => {
+        const d = round6(v - (axis ? y : x));
+        if (d) this.moveCorners(axis ? 0 : d, axis ? d : 0);
+      };
+      row.push(
+        h('label', { title: 'Position of the selected corner' }, [
+          'X ',
+          numInput(round6(x), 'node-x', set(0)),
+          ' Y ',
+          numInput(round6(y), 'node-y', set(1)),
+          ' mm',
+        ]),
+      );
+    }
+    return h('div', { class: 'edit-row' }, row);
+  }
+
+  /** Midpoints of a contour's edges: [{ k (the edge), x, y, px (on-screen length) }]. */
+  #edgeMids(contour, map) {
+    const out = [];
+    let prev = contour.path[0];
+    for (const e of contour.path.slice(1)) {
+      let mid;
+      let len;
+      if (e.sw !== null && e.c) {
+        const r = Math.hypot(prev.x - e.c[0], prev.y - e.c[1]);
+        const a = Math.atan2(prev.y - e.c[1], prev.x - e.c[0]) + e.sw / 2;
+        mid = [e.c[0] + r * Math.cos(a), e.c[1] + r * Math.sin(a)];
+        len = r * Math.abs(e.sw);
+      } else {
+        mid = [(prev.x + e.x) / 2, (prev.y + e.y) / 2];
+        len = Math.hypot(e.x - prev.x, e.y - prev.y);
+      }
+      out.push({ k: e.k, x: round6(mid[0]), y: round6(mid[1]), px: len * map.s });
+      prev = e;
+    }
+    return out;
+  }
+
+  /** The corner or edge-midpoint handle under a board point: { kind: 'corner'|'edge', k, x, y } or null. */
+  #nodeHit(mm, region = this.#nodeRegion()) {
+    if (!region) return null;
+    const v = this.host.viewer;
+    const map = v.map();
+    const [px, py] = v.toPx(map, ...mm);
+    const near = HANDLE_PX * v.dpr;
+    let best = null;
+    const consider = (kind, k, x, y) => {
+      const [hx, hy] = v.toPx(map, x, y);
+      const d = Math.hypot(hx - px, hy - py);
+      if (d <= near && (!best || d < best.d)) best = { kind, k, x, y, d };
+    };
+    for (const [k, [x, y]] of region.info.points) consider('corner', k, x, y);
+    if (best) return best;
+    for (const c of region.info.contours)
+      for (const m of this.#edgeMids(c, map)) if (m.px >= EDGE_HANDLE_PX * v.dpr) consider('edge', m.k, m.x, m.y);
+    return best;
+  }
+
+  /** Run a node op on the edited region; `nodes` are the corners selected afterwards. */
+  #nodeApply(op, done, nodes = this.nodes) {
+    const keep = new Set(nodes);
+    if (!this.apply(op, done)) return false;
+    this.nodes = keep;
+    this.refresh();
+    return true;
+  }
+
+  /** Move the selected corners by (dx, dy) mm. */
+  moveCorners(dxMm, dyMm) {
+    const r = this.#nodeRegion();
+    if (!r || !this.nodes.size || !Number.isFinite(dxMm) || !Number.isFinite(dyMm) || (!dxMm && !dyMm)) return;
+    const n = this.nodes.size;
+    this.#nodeApply(
+      { type: 'moveVertex', target: r.target, vertices: [...this.nodes], dxMm, dyMm },
+      `Moved ${n} corner${n === 1 ? '' : 's'} by ${fmt(dxMm)}, ${fmt(dyMm)} mm`,
+    );
+  }
+
+  /** Delete the selected corners. */
+  deleteCorners() {
+    const r = this.#nodeRegion();
+    if (!r || !this.nodes.size) return;
+    const n = this.nodes.size;
+    this.#nodeApply(
+      { type: 'deleteVertex', target: r.target, vertices: [...this.nodes] },
+      `Deleted ${n} corner${n === 1 ? '' : 's'}`,
+      [],
+    );
+  }
+
+  /** Add a corner on edge k at (x, y) mm; the new corner is selected (it takes the edge's number). */
+  #insertCorner(k, x, y) {
+    const r = this.#nodeRegion();
+    if (!r) return;
+    this.#nodeApply({ type: 'insertVertex', target: r.target, segment: k, xMm: x, yMm: y }, 'Corner added', [k]);
+  }
+
+  /** Node tool click: select a corner, add one at an edge midpoint, or pick the region to edit. */
+  #nodeClick(mm, e) {
+    this.drag = null;
+    const v = this.host.viewer;
+    const handle = this.#nodeHit(mm);
+    if (handle?.kind === 'corner') {
+      const add = e.shiftKey || e.ctrlKey || e.metaKey;
+      const nodes = new Set(add || e.altKey ? this.nodes : []);
+      if (e.altKey || (add && this.nodes.has(handle.k))) nodes.delete(handle.k);
+      else nodes.add(handle.k);
+      this.nodes = nodes;
+      this.refresh();
+      return;
+    }
+    if (handle?.kind === 'edge') return this.#insertCorner(handle.k, handle.x, handle.y);
+    let hit = v.pickAt(mm[0], mm[1]);
+    const modifier = e.shiftKey || e.ctrlKey || e.metaKey || e.altKey;
+    if (!hit && !modifier && this.host.autoSelectLayer()) {
+      const other = v.pickAt(mm[0], mm[1], null, null);
+      const l = other && this.host.layers().find((x) => x.id === other.layerId);
+      if (l && l.kind === 'gerber') {
+        this.host.editLayer(l.id);
+        hit = other;
+      }
+    }
+    if (modifier && this.#nodeRegion()) return; // a missed Shift/Alt-click keeps the corners
+    if (hit && this.sel.length === 1 && this.sel[0] === hit.index && this.nodes.size) {
+      this.nodes = new Set(); // a click inside the region drops the corner selection
+      this.refresh();
+      return;
+    }
+    this.#setSelection(hit ? [hit.index] : []);
+    this.refresh();
+    const layer = this.layer();
+    if (hit && layer && layerEditor(layer).target(hit.index).kind !== 'region')
+      this.host.message('Only regions have corners: right-click → To region turns this object into one', true);
+  }
+
+  /** Pointer down with the node tool: drag a corner, an edge midpoint (new corner) or a corner box. */
+  #nodeDown(mm, e) {
+    const r = this.#nodeRegion();
+    if (!r) return false;
+    const handle = this.#nodeHit(mm, r);
+    if (handle?.kind === 'corner') {
+      this.drag = { kind: 'node', k: handle.k, anchor: r.info.points.get(handle.k), dx: 0, dy: 0, shift: e.shiftKey };
+      return true;
+    }
+    if (handle?.kind === 'edge') {
+      this.drag = { kind: 'insert', k: handle.k, at: [handle.x, handle.y] };
+      return true;
+    }
+    this.drag = { kind: 'nodebox', start: mm, end: mm };
+    return true;
+  }
+
+  /** Corner drag: the dragged corner lands on the grid; Shift keeps it at 45° steps from where it was. */
+  #nodeDragTo(d, mm, e) {
+    let x = mm[0];
+    let y = mm[1];
+    if (e?.shiftKey) {
+      const dx = x - d.anchor[0];
+      const dy = y - d.anchor[1];
+      const a = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4);
+      const ux = Math.round(Math.cos(a));
+      const uy = Math.round(Math.sin(a));
+      const t = (dx * ux + dy * uy) / (ux * ux + uy * uy);
+      const g = this.s.gridMm;
+      const k = g > 0 ? Math.round(t / g) * g : t;
+      x = d.anchor[0] + ux * k;
+      y = d.anchor[1] + uy * k;
+    } else [x, y] = this.#snapPt(mm);
+    d.dx = round6(x - d.anchor[0]);
+    d.dy = round6(y - d.anchor[1]);
+  }
+
+  /** Node tool overlay: the region's outline (as it will be while dragging), corner and edge handles. */
+  #drawNodes(ctx, map) {
+    const r = this.#nodeRegion();
+    if (!r) return;
+    const v = this.host.viewer;
+    const d = this.drag;
+    const pos = new Map();
+    if (d?.kind === 'node' && (d.dx || d.dy)) {
+      const moving = this.nodes.has(d.k) ? this.nodes : new Set([d.k]);
+      for (const k of moving) {
+        const [x, y] = r.info.points.get(k);
+        pos.set(k, [x + d.dx, y + d.dy]);
+      }
+    }
+    const insert = d?.kind === 'insert' ? { segment: d.k, x: d.at[0], y: d.at[1] } : null;
+    const tol = (0.5 * v.dpr) / map.s;
+    const dragging = pos.size || insert;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.beginPath();
+    for (const c of r.info.contours) {
+      const p = contourPoints(c, { pos, insert }, tol);
+      for (let i = 0; i < p.length; i += 2) {
+        const [x, y] = v.toPx(map, p[i], p[i + 1]);
+        if (i) ctx.lineTo(x, y);
+        else ctx.moveTo(x, y);
+      }
+      ctx.closePath();
+    }
+    if (dragging) {
+      ctx.fillStyle = rgba(MISC.selection, 0.2);
+      ctx.fill('evenodd');
+    }
+    ctx.strokeStyle = rgba(MISC.selection, 1);
+    ctx.lineWidth = Math.max(1, v.dpr);
+    ctx.stroke();
+    const s = 3.5 * v.dpr;
+    if (!dragging) {
+      for (const c of r.info.contours)
+        for (const m of this.#edgeMids(c, map)) {
+          if (m.px < EDGE_HANDLE_PX * v.dpr) continue;
+          const [x, y] = v.toPx(map, m.x, m.y);
+          ctx.beginPath();
+          ctx.arc(x, y, s * 0.75, 0, Math.PI * 2);
+          ctx.fillStyle = rgba(MISC.selection, 0.35);
+          ctx.fill();
+          ctx.stroke();
+        }
+    }
+    for (const [k, p] of r.info.points) {
+      const [x, y] = v.toPx(map, ...(pos.get(k) ?? p));
+      ctx.fillStyle = this.nodes.has(k) || pos.has(k) ? rgba(MISC.selection, 1) : 'rgba(0, 0, 0, 0.6)';
+      ctx.fillRect(x - s, y - s, 2 * s, 2 * s);
+      ctx.strokeRect(x - s, y - s, 2 * s, 2 * s);
+    }
+    if (insert) {
+      const [x, y] = v.toPx(map, insert.x, insert.y);
+      ctx.fillStyle = rgba(MISC.selection, 1);
+      ctx.fillRect(x - s, y - s, 2 * s, 2 * s);
+    }
+  }
+
   // ---------------------------------------------------------------- input
 
   snap(v) {
@@ -871,8 +1181,19 @@ export class EditorPanel {
     }
     if (k === 'Escape') {
       if (this.sketch.length || this.drag) this.cancelSketch();
+      else if (this.nodes.size) ((this.nodes = new Set()), this.refresh());
       else (this.#setSelected(new Map()), this.refresh());
       return true;
+    }
+    if (this.nodes.size && this.#nodeRegion()) {
+      if (k === 'Delete' || k === 'Backspace') return (this.deleteCorners(), true);
+      if (k.startsWith('Arrow')) {
+        const step = (this.s.gridMm || 0.01) * (e.shiftKey ? 10 : 1);
+        const d = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] }[k];
+        if (this.host.viewer.settings.side === 'bottom') d[0] = -d[0];
+        this.moveCorners(round6(d[0]), round6(d[1]));
+        return true;
+      }
     }
     if (k === 'Enter' && this.sketch.length) return (this.#finishSketch(), true);
     if (k === 'Delete' || k === 'Backspace') {
@@ -924,6 +1245,7 @@ export class EditorPanel {
       down: (mm, e) => {
         const layer = this.layer();
         const tool = this.s.tool;
+        if (layer && !this.space && tool === 'node') return this.#nodeDown(mm, e);
         if (!layer || this.space || (tool !== 'select' && tool !== 'lasso')) return false;
         // drag direction on screen (not board X: the bottom view is mirrored) picks the mode,
         // as in CAD tools: rightwards = entirely inside, leftwards = anything touched
@@ -948,7 +1270,12 @@ export class EditorPanel {
       move: (mm, e) => {
         const d = this.drag;
         if (!d) return;
-        if (d.kind === 'move') {
+        if (d.kind === 'node') {
+          if (!this.nodes.has(d.k)) this.nodes = new Set(d.shift ? [...this.nodes, d.k] : [d.k]);
+          this.#nodeDragTo(d, mm, e);
+        } else if (d.kind === 'insert') d.at = this.#snapPt(mm);
+        else if (d.kind === 'nodebox') d.end = mm;
+        else if (d.kind === 'move') {
           if (d.hit !== null && !this.sel.includes(d.hit)) this.#setSelection([d.hit]);
           d.dx = round6(this.snap(mm[0] - d.start[0]));
           d.dy = round6(this.snap(mm[1] - d.start[1]));
@@ -967,6 +1294,25 @@ export class EditorPanel {
         const d = this.drag;
         this.drag = null;
         if (!d || !moved) return v.drawOverlay();
+        if (d.kind === 'node') {
+          if (d.dx || d.dy) this.moveCorners(d.dx, d.dy);
+          else v.drawOverlay();
+          return;
+        }
+        if (d.kind === 'insert') return this.#insertCorner(d.k, d.at[0], d.at[1]);
+        if (d.kind === 'nodebox') {
+          const r = this.#nodeRegion();
+          if (!r) return v.drawOverlay();
+          const [x0, x1] = [Math.min(d.start[0], d.end[0]), Math.max(d.start[0], d.end[0])];
+          const [y0, y1] = [Math.min(d.start[1], d.end[1]), Math.max(d.start[1], d.end[1])];
+          const inside = [...r.info.points].filter(([, [x, y]]) => x >= x0 && x <= x1 && y >= y0 && y <= y1);
+          const take = e.altKey || e.ctrlKey || e.metaKey;
+          const nodes = new Set(take || e.shiftKey ? this.nodes : []);
+          for (const [k] of inside) nodes[take ? 'delete' : 'add'](k);
+          this.nodes = nodes;
+          this.refresh();
+          return;
+        }
         if (d.kind === 'move') {
           if (d.dx || d.dy) this.moveSelection(d.dx, d.dy);
           else v.drawOverlay();
@@ -983,6 +1329,7 @@ export class EditorPanel {
         if (!layer) return;
         const tool = this.s.tool;
         if (tool === 'hand') return;
+        if (tool === 'node') return this.#nodeClick(mm, e);
         if (tool === 'select' || tool === 'lasso') {
           let hit = v.pickAt(mm[0], mm[1]);
           const modifier = e.shiftKey || e.ctrlKey || e.metaKey || e.altKey;
@@ -1033,6 +1380,11 @@ export class EditorPanel {
         this.selectBy('connected');
       },
       hover: (mm, e) => {
+        if (this.s.tool === 'node') {
+          const handle = this.#nodeHit(mm);
+          v.canvas.dataset.handle = handle?.kind ?? '';
+          return;
+        }
         this.cursor = this.s.tool === 'pad' ? this.#snapPt(mm) : this.#placePt(mm, e);
         if (this.s.tool === 'pad' || this.s.tool === 'track' || this.s.tool === 'region') v.drawOverlay();
       },
@@ -1052,11 +1404,12 @@ export class EditorPanel {
       for (const [id, indices] of this.selected)
         v.outlineObjects(ctx, map, id, indices, MISC.selection, 0.15, d.dx, d.dy);
     }
-    if (d?.kind === 'box' || d?.kind === 'lasso') {
+    if (this.s.tool === 'node') this.#drawNodes(ctx, map);
+    if (d?.kind === 'box' || d?.kind === 'lasso' || d?.kind === 'nodebox') {
       // inside-only picks draw green and solid, touching picks red and dashed (as in CAD tools)
       const touch = d.mode === 'touch';
       const pick = touch ? MISC.selectTouch : MISC.selectInside;
-      const pts = d.kind === 'box' ? [d.start, [d.end[0], d.start[1]], d.end, [d.start[0], d.end[1]]] : d.points;
+      const pts = d.kind === 'lasso' ? d.points : [d.start, [d.end[0], d.start[1]], d.end, [d.start[0], d.end[1]]];
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.beginPath();
       pts.forEach((p, i) => {

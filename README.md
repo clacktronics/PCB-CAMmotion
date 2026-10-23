@@ -54,6 +54,14 @@ continue where you left off.
     invert. Drag a selected object to move the selection; the arrow keys nudge it one grid
     step (**Shift**: ten); **Move by** takes exact X/Y in mm. **Del** deletes.
   - *Lasso* (**L**): draw round the objects to select (same modifiers as the box).
+  - *Node* (**A**): edit a region's corners. Click a region to show its corners (squares)
+    and edge midpoints (dots). Drag a corner to move it (it snaps to the grid; **Shift**
+    keeps it at 45° from where it was); click a midpoint to add a corner there, or drag it to
+    place one; click corners or drag a box to select several (**Shift** adds, **Alt** or
+    **Ctrl** takes away), then drag, nudge with the arrow keys, type X/Y in the top bar, or
+    **Del** to delete (an outline keeps at least 3 corners). Arc edges keep their sweep
+    angle when a corner moves, and a corner added at an arc's midpoint splits it into two
+    arcs. Pads and tracks have no corners: turn them into regions first (**To region**).
   - Box and lasso pick objects **entirely inside** (non-greedy, solid outline) or everything
     they **touch** (greedy, dashed outline) — the mode button under the tools, or **G**. Both
     test the drawn outline of each object, not its bounding box.

@@ -33,8 +33,8 @@
 //                    step = commands run (null = playback off, whole image shown), by =
 //                    command | object (object steps skip commands that draw nothing),
 //                    speed = commands per second while playing
-// `edits` (model/edits.json, schema 2): per source file the edit ops of milestone 4
-// ({ base, ops, redo }, src/edit/session.js); buildLayers replays them, so layers show the
+// `edits` (model/edits.json, schema 2; region corner ops from schema 3): per source file the
+// edit ops of milestone 4 ({ base, ops, redo }, src/edit/session.js); buildLayers replays them, so layers show the
 // edited commands and image while sources/ keeps the original bytes.
 // `stackup` is null until set; it is filled from a .gbrjob (source: 'gbrjob') unless the user
 // edited it (source: 'user'). Everything derived (parsed images, layers) is rebuilt on load.
@@ -70,7 +70,7 @@ export const DEFAULT_VIEW = {
   autoSelectLayer: true,
 };
 
-export const EDIT_TOOLS = ['select', 'lasso', 'hand', 'pad', 'track', 'region'];
+export const EDIT_TOOLS = ['select', 'lasso', 'node', 'hand', 'pad', 'track', 'region'];
 
 export const DEFAULT_EDIT = {
   on: false,

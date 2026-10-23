@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import { openApp, loadBoard, clientAt, waitRendered } from './viewer-helpers.js';
 import { clickMenu } from './helpers.js';
 import { loadProject } from '../../src/project/pcam.js';
+import { SCHEMA_VERSION } from '../../src/project/schema.js';
 import { parseGerber } from '../../src/parse/gerber.js';
 import { interpretGerber } from '../../src/model/gerber-image.js';
 
@@ -263,7 +264,7 @@ test('unify the layer into regions; edits survive save and reopen; export parses
   const pcamPath = testInfo.outputPath('edited.pcam');
   await (await saving).saveAs(pcamPath);
   const project = loadProject(new Uint8Array(readFileSync(pcamPath)));
-  expect(project.manifest.schemaVersion).toBe(2);
+  expect(project.manifest.schemaVersion).toBe(SCHEMA_VERSION);
   expect(project.edits[FCU].ops.map((o) => o.type)).toEqual(['delete', 'unifyLayer']);
 
   await clickMenu(page, '#new');

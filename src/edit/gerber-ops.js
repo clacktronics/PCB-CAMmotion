@@ -9,6 +9,8 @@
 //   { type: 'toRegion', targets, tolMm }               turn objects into regions; objects
 //                                                      that overlap are unified into one outline
 //   { type: 'unifyLayer', tolMm }                      the whole layer as non-overlapping regions
+//   { type: 'moveVertex' | 'insertVertex' | 'deleteVertex', target, ... }
+//                                                      edit a region's corners (src/edit/region-nodes.js)
 // targets are command indices (at the time the op runs) of the commands that produced the
 // objects: the D01/D03 of a draw or flash, the G37 of a region. aperture is { code } (an
 // existing aperture) or { template: 'C'|'R'|'O', paramsMm } (reused if an identical one exists).
@@ -24,6 +26,7 @@ import { fileUnit, mmPerCount } from './gerber-normalize.js';
 import { imageContours, nestPolygons, DEFAULT_TOL_MM } from '../model/polygons.js';
 import { joinHoles, validContour } from './cut-ins.js';
 import { emitObject } from '../render/draw-image.js';
+import { applyNodeOp, NODE_OPS } from './region-nodes.js';
 
 const TAU = Math.PI * 2;
 
@@ -41,7 +44,8 @@ export function gerberTarget(commands, image, oi) {
   return { ...info, objects: commandObjectRange(image, ci) };
 }
 
-function targetInfo(commands, ci, strict = true) {
+/** The command `ci` as an edit target: { ci, kind, start? } (throws EditError, or with strict false returns { error }). */
+export function targetInfo(commands, ci, strict = true) {
   const c = commands[ci];
   let r;
   if (c?.type === 'D' && c.op === 3) r = { ci, kind: 'flash' };
@@ -136,7 +140,8 @@ export function dependsOnCurrentPoint(commands, from) {
   return false;
 }
 
-function pointBefore(commands, ci) {
+/** The current point before command ci (counts). */
+export function pointBefore(commands, ci) {
   for (let i = ci - 1; i >= 0; i--) if (commands[i].type === 'D') return [commands[i].x, commands[i].y];
   return [0, 0];
 }
@@ -262,6 +267,7 @@ export function applyGerberOp(commands, op, ctx) {
     case 'unifyLayer':
       return unifyLayer(commands, op, ctx, count);
     default:
+      if (NODE_OPS.includes(op.type)) return applyNodeOp(commands, op);
       throw new EditError(`Unknown edit ${op.type}`);
   }
 }
