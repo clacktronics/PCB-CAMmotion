@@ -1,0 +1,48 @@
+name: Pages
+
+# Publishes the static app to GitHub Pages on every push to main (or by hand from the
+# Actions tab). The site is the committed files as they are: index.html, the committed
+# bundle dist/app.js and the stylesheet — no build step, so it is exactly what opening
+# index.html from disk gives. Everything still runs in the browser; nothing is uploaded.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Collect the runtime files
+        run: |
+          mkdir -p _site/dist _site/src/ui _site/vendor
+          cp index.html _site/
+          cp dist/app.js _site/dist/
+          cp src/ui/styles.css _site/src/ui/
+          # Third-party licences for the code bundled into dist/app.js.
+          for d in vendor/*/; do
+            n=$(basename "$d")
+            mkdir -p "_site/vendor/$n"
+            cp "$d"LICENSE* "_site/vendor/$n/" 2>/dev/null || true
+          done
+          touch _site/.nojekyll
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4

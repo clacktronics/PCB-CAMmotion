@@ -8,8 +8,11 @@ runs entirely on your computer, and the whole project is one `.pcam` file.
 
 ## Use
 
-Open `index.html` in a browser (straight from disk works), or run `npm start` and go to
-<http://127.0.0.1:4173/>. Drop Gerber / drill / `.gbrjob` files onto the window to add them
+Open `index.html` in a browser (straight from disk works), run `npm start` and go to
+<http://127.0.0.1:4173/>, or use the hosted copy at
+<https://clacktronics.github.io/PCB-CAMmotion/> (published from `main` by
+`.github/workflows/pages.yml`; it is the same static page, so files you drop are still
+processed in your browser and never uploaded). Drop Gerber / drill / `.gbrjob` files onto the window to add them
 to the project; **Save** downloads the project as `.pcam`; drop or **Open…** a `.pcam` to
 continue where you left off.
 
