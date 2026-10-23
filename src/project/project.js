@@ -19,10 +19,10 @@
 //                    camera3d: null | { position: [x, y, z], target: [x, y, z] } in mm
 //                    autoSelectLayer: clicking a shape on the board selects its layer (in
 //                    edit mode: switches the edited layer to it); off keeps the layer
-//   settings.edit:   { on, tool, selectMode, gridMm, aperture: { code, template, sizesMm }, holeDiaMm }
+//   settings.edit:   { on, tool, gridMm, aperture: { code, template, sizesMm }, holeDiaMm }
 //                    the editor (milestone 4): tool = select | lasso | hand | pad | track |
-//                    region; selectMode = enclose (box/lasso picks objects entirely inside) |
-//                    touch (anything it touches); aperture = an existing D-code for new
+//                    region (box/lasso pick inside only or touching by drag direction; an
+//                    older selectMode setting is dropped on load); aperture = an existing D-code for new
 //                    pads/tracks, or (code null) a new C/R/O aperture
 //   settings.analyze: { open, tab, highlight, playback }   the analyser dock (milestone 3)
 //                    tab: apertures | shapes | commands; highlight: null | { layer, code }
@@ -42,7 +42,6 @@ import { createEmptyProject } from './schema.js';
 import { safeSourceName } from './pcam.js';
 import { loadFile } from '../model/load-file.js';
 import { LayerEditor } from '../edit/session.js';
-import { SELECT_MODES } from '../edit/selection.js';
 import { identifyLayer, detectFileKind, layerSortKey } from '../model/layers.js';
 import { extractOutline } from '../model/outline.js';
 import { resolveJobFiles } from '../parse/gbrjob.js';
@@ -73,7 +72,6 @@ export const EDIT_TOOLS = ['select', 'lasso', 'hand', 'pad', 'track', 'region'];
 export const DEFAULT_EDIT = {
   on: false,
   tool: 'select',
-  selectMode: 'enclose',
   gridMm: 0.05,
   aperture: { code: null, template: 'C', sizesMm: [0.25, 0.25] },
   holeDiaMm: 0.8,
@@ -147,11 +145,12 @@ export function normaliseEdit(e) {
   const a = src.aperture && typeof src.aperture === 'object' ? src.aperture : {};
   const pos = (v, dv) => (Number.isFinite(v) && v > 0 ? v : dv);
   const sizes = Array.isArray(a.sizesMm) ? a.sizesMm : [];
+  const rest = { ...src };
+  delete rest.selectMode; // retired: box/lasso now pick by drag direction
   return {
-    ...src,
+    ...rest,
     on: src.on === true,
     tool: EDIT_TOOLS.includes(src.tool) ? src.tool : d.tool,
-    selectMode: SELECT_MODES.includes(src.selectMode) ? src.selectMode : d.selectMode,
     gridMm: Number.isFinite(src.gridMm) && src.gridMm >= 0 ? src.gridMm : d.gridMm,
     aperture: {
       code: Number.isInteger(a.code) ? a.code : null,

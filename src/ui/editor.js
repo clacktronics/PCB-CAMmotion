@@ -1,7 +1,7 @@
 // Editor (milestone 4): edit mode, a Photoshop-style tool strip on the board (select, lasso,
-// hand, pad or hole, track, region), selection with drag-move, box and lasso select (objects
-// entirely inside, or anything touched), a right-click menu (same shape, same aperture,
-// connected, …), the edit actions (delete, move by, convert to regions, unify the layer),
+// hand, pad or hole, track, region), selection with drag-move, box and lasso select (dragged
+// left to right: objects entirely inside; right to left: anything touched), double-click to
+// select connected, a right-click menu (same shape, same aperture, connected, …), the edit actions (delete, move by, convert to regions, unify the layer),
 // undo/redo, export of the edited file.
 // The edits themselves are DOM-free (src/edit/); this file turns pointer and key input into
 // edit ops. Its settings live in settings.edit of the .pcam (src/project/project.js).
@@ -18,18 +18,14 @@ const TOOL_LABEL = { select: 'Select', lasso: 'Lasso', hand: 'Hand', pad: 'Pad',
 const TOOL_KEY = { v: 'select', l: 'lasso', h: 'hand', p: 'pad', t: 'track', r: 'region' };
 const PICK_HELP = 'Shift adds to the selection, Alt or Ctrl takes away';
 const TOOL_TITLE = {
-  select: `Select (V): click an object, drag a box around objects (${PICK_HELP}); drag a selected object to move it`,
-  lasso: `Lasso (L): draw round the objects to select (${PICK_HELP})`,
+  select: `Select (V): click an object, double-click to select everything connected; drag a box left to right to pick objects entirely inside (green), right to left to pick anything it touches (red) (${PICK_HELP}); drag a selected object to move it`,
+  lasso: `Lasso (L): draw round the objects to select; start rightwards to pick objects entirely inside (green), leftwards to pick anything it touches (red) (${PICK_HELP})`,
   hand: 'Hand (H): drag to pan the board (any tool: hold Space or drag with the middle button)',
   pad: 'Pad (P): click to place a pad with the chosen aperture (on a drill layer: a hole)',
   track:
     'Track (T): click the points, double-click or Enter to finish, Backspace removes the last point, Shift keeps to 45°',
   region:
     'Region (R): click the corners like a pen tool, click the first point, double-click or Enter to close it; Shift keeps to 45°',
-};
-const MODE_TITLE = {
-  enclose: 'Box and lasso select objects entirely inside (non-greedy). G: switch to touching',
-  touch: 'Box and lasso select everything they touch (greedy). G: switch to entirely inside',
 };
 // tool strip icons: 24×24 line drawings (currentColor)
 const ICON = {
@@ -40,13 +36,10 @@ const ICON = {
   track: '<path d="M4 18h6l8-8h3" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>',
   region:
     '<path d="M4 20l3-11 10-4 3 10-9 6z"/><circle cx="4" cy="20" r="1.6"/><circle cx="7" cy="9" r="1.6"/><circle cx="17" cy="5" r="1.6"/><circle cx="20" cy="15" r="1.6"/><circle cx="11" cy="21" r="1.6"/>',
-  enclose:
-    '<rect x="3" y="3" width="18" height="18" stroke-dasharray="3 2"/><rect x="8" y="8" width="8" height="8" fill="currentColor"/>',
-  touch:
-    '<rect x="3" y="3" width="13" height="13" stroke-dasharray="3 2"/><rect x="11" y="11" width="10" height="10" fill="currentColor"/>',
 };
 const CLOSE_PX = 8;
 const LASSO_STEP_PX = 3;
+const LASSO_DIR_PX = 4; // how far a lasso must move sideways before its first direction counts
 
 export class EditorPanel {
   /**
@@ -60,7 +53,7 @@ export class EditorPanel {
     this.sel = []; // selected object indices on the edited layer
     this.sketch = []; // points of the track/region being drawn (mm)
     this.cursor = null;
-    this.drag = null; // { kind: 'move'|'box', start, dx, dy, end }
+    this.drag = null; // { kind: 'move'|'box'|'lasso', start, dx, dy, end, points, x0, mode }
     this.busy = false;
     this.space = false; // Space held: drags pan, whatever the tool
     this.el = h('section', { class: 'editor hidden', 'data-testid': 'editor' });
@@ -97,12 +90,6 @@ export class EditorPanel {
     this.s.on = on;
     this.cancelSketch();
     this.#setSelection([]);
-    this.host.touch();
-    this.refresh();
-  }
-
-  setSelectMode(mode) {
-    this.s.selectMode = mode === 'touch' ? 'touch' : 'enclose';
     this.host.touch();
     this.refresh();
   }
@@ -162,24 +149,6 @@ export class EditorPanel {
         h('span', { class: 'muted', 'data-testid': 'edit-tool' }, `${this.#toolLabel(tool)} tool`),
       ]),
     );
-    if (tool === 'select' || tool === 'lasso')
-      this.el.append(
-        h('div', { class: 'edit-row' }, [
-          'Box/lasso picks ',
-          h(
-            'span',
-            { class: 'seg' },
-            ['enclose', 'touch'].map((m) =>
-              btn(m === 'enclose' ? 'Inside only' : 'Touching', {
-                class: this.s.selectMode === m ? 'on' : '',
-                'data-testid': `select-mode-${m}`,
-                title: MODE_TITLE[m],
-                onclick: () => this.setSelectMode(m),
-              }),
-            ),
-          ),
-        ]),
-      );
     if (tool === 'pad' || tool === 'track') this.el.append(this.#apertureRow(layer));
     this.el.append(
       h('div', { class: 'edit-row' }, [
@@ -289,7 +258,7 @@ export class EditorPanel {
     return tool === 'pad' && this.layer()?.kind === 'excellon' ? 'Hole' : TOOL_LABEL[tool];
   }
 
-  /** The tool strip on the board's left edge (Photoshop-style): tools, then the box/lasso mode. */
+  /** The tool strip on the board's left edge (Photoshop-style). */
   #refreshStrip() {
     const layer = this.layer();
     const on = this.on;
@@ -326,17 +295,6 @@ export class EditorPanel {
         );
       }
     }
-    const mode = this.s.selectMode;
-    this.strip.append(
-      h('span', { class: 'strip-sep' }),
-      button(mode, mode === 'enclose' ? 'Select inside only' : 'Select touching', {
-        class: 'mode',
-        'data-testid': 'select-mode',
-        'data-mode': mode,
-        title: MODE_TITLE[mode],
-        onclick: () => this.setSelectMode(mode === 'enclose' ? 'touch' : 'enclose'),
-      }),
-    );
   }
 
   #apertureRow(layer) {
@@ -483,11 +441,14 @@ export class EditorPanel {
     this.host.message(`${found.length} object${found.length === 1 ? '' : 's'} ${what}`);
   }
 
-  /** Box or lasso: combine what the polygon picks with the selection (Shift adds, Alt/Ctrl removes). */
-  #pickPolygon(poly, e) {
+  /**
+   * Box or lasso: combine what the polygon picks (mode enclose: entirely inside; touch: anything
+   * touched) with the selection (Shift adds, Alt/Ctrl removes).
+   */
+  #pickPolygon(poly, mode, e) {
     const layer = this.layer();
     if (!layer) return;
-    const picked = objectsInPolygon(layer.image, poly, this.s.selectMode);
+    const picked = objectsInPolygon(layer.image, poly, mode);
     if (e.altKey || e.ctrlKey || e.metaKey) {
       const drop = new Set(picked);
       this.#setSelection(this.sel.filter((i) => !drop.has(i)));
@@ -732,10 +693,6 @@ export class EditorPanel {
       this.space = true;
       return e.target?.tagName !== 'BUTTON'; // Space still presses a focused button
     }
-    if (k.toLowerCase() === 'g') {
-      this.setSelectMode(this.s.selectMode === 'enclose' ? 'touch' : 'enclose');
-      return true;
-    }
     if (k === 'Escape') {
       if (this.sketch.length || this.drag) this.cancelSketch();
       else (this.#setSelection([]), this.refresh());
@@ -792,8 +749,10 @@ export class EditorPanel {
         const layer = this.layer();
         const tool = this.s.tool;
         if (!layer || this.space || (tool !== 'select' && tool !== 'lasso')) return false;
+        // drag direction on screen (not board X: the bottom view is mirrored) picks the mode,
+        // as in CAD tools: rightwards = entirely inside, leftwards = anything touched
         if (tool === 'lasso') {
-          this.drag = { kind: 'lasso', points: [mm] };
+          this.drag = { kind: 'lasso', points: [mm], x0: e.clientX, mode: null };
           return true;
         }
         const hit = v.pickAt(mm[0], mm[1]);
@@ -801,10 +760,10 @@ export class EditorPanel {
           this.drag = { kind: 'move', start: mm, dx: 0, dy: 0, hit: hit.index };
           return true;
         }
-        this.drag = { kind: 'box', start: mm, end: mm };
+        this.drag = { kind: 'box', start: mm, end: mm, x0: e.clientX, mode: 'enclose' };
         return true;
       },
-      move: (mm) => {
+      move: (mm, e) => {
         const d = this.drag;
         if (!d) return;
         if (d.kind === 'move') {
@@ -814,7 +773,12 @@ export class EditorPanel {
         } else if (d.kind === 'lasso') {
           const last = d.points.at(-1);
           if (Math.hypot(mm[0] - last[0], mm[1] - last[1]) * v.view.scale >= LASSO_STEP_PX) d.points.push(mm);
-        } else d.end = mm;
+          if (!d.mode && e && Math.abs(e.clientX - d.x0) >= LASSO_DIR_PX)
+            d.mode = e.clientX > d.x0 ? 'enclose' : 'touch';
+        } else {
+          d.end = mm;
+          if (e) d.mode = e.clientX >= d.x0 ? 'enclose' : 'touch';
+        }
         v.drawOverlay();
       },
       up: (mm, e, moved) => {
@@ -828,8 +792,8 @@ export class EditorPanel {
         }
         if (d.kind === 'lasso') {
           d.points.push(mm);
-          this.#pickPolygon(d.points.flat(), e);
-        } else this.#pickPolygon(boxPolygon(d.start, d.end), e);
+          this.#pickPolygon(d.points.flat(), d.mode ?? 'enclose', e);
+        } else this.#pickPolygon(boxPolygon(d.start, d.end), d.mode, e);
         v.drawOverlay();
       },
       click: (mm, e) => {
@@ -876,8 +840,15 @@ export class EditorPanel {
         this.sketch.push(p);
         v.drawOverlay();
       },
-      dblclick: () => {
-        if (this.sketch.length) this.#finishSketch();
+      dblclick: (mm) => {
+        if (this.sketch.length) return this.#finishSketch();
+        const tool = this.s.tool;
+        if (tool !== 'select' && tool !== 'lasso') return;
+        // the clicks before it have already selected the shape (switching layer if need be)
+        const hit = this.layer() && this.host.viewer.pickAt(mm[0], mm[1]);
+        if (!hit) return;
+        this.#setSelection([hit.index]);
+        this.selectBy('connected');
       },
       hover: (mm, e) => {
         this.cursor = this.s.tool === 'pad' ? this.#snapPt(mm) : this.#placePt(mm, e);
@@ -899,7 +870,9 @@ export class EditorPanel {
       v.outlineObjects(ctx, map, layer.id, this.sel, MISC.selection, 0.15, d.dx, d.dy);
     }
     if (d?.kind === 'box' || d?.kind === 'lasso') {
-      // inside-only picks draw a solid outline, touching picks a dashed one (as in CAD tools)
+      // inside-only picks draw green and solid, touching picks red and dashed (as in CAD tools)
+      const touch = d.mode === 'touch';
+      const pick = touch ? MISC.selectTouch : MISC.selectInside;
       const pts = d.kind === 'box' ? [d.start, [d.end[0], d.start[1]], d.end, [d.start[0], d.end[1]]] : d.points;
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.beginPath();
@@ -909,10 +882,10 @@ export class EditorPanel {
         else ctx.moveTo(x, y);
       });
       ctx.closePath();
-      ctx.fillStyle = rgba(MISC.selection, 0.08);
+      ctx.fillStyle = rgba(pick, 0.12);
       ctx.fill();
-      if (this.s.selectMode === 'touch') ctx.setLineDash([4 * v.dpr, 4 * v.dpr]);
-      ctx.strokeStyle = colour;
+      if (touch) ctx.setLineDash([4 * v.dpr, 4 * v.dpr]);
+      ctx.strokeStyle = rgba(pick, 1);
       ctx.lineWidth = v.dpr;
       ctx.stroke();
       ctx.setLineDash([]);

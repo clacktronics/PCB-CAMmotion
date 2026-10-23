@@ -86,6 +86,8 @@ export const MISC = {
   background: { rgb: [30, 32, 36] },
   backgroundLight: { rgb: [236, 238, 242] },
   selection: { rgb: [0, 200, 255] },
+  selectInside: { rgb: [60, 210, 90] }, // box/lasso dragged rightwards: objects entirely inside
+  selectTouch: { rgb: [235, 60, 60] }, // box/lasso dragged leftwards: anything it touches
   hover: { rgb: [255, 255, 255] },
   highlight: { rgb: [255, 0, 200] }, // analyser: every use of an aperture
   playhead: { rgb: [255, 140, 0] }, // step-through playback: the last command's objects

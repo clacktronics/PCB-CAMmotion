@@ -4193,6 +4193,10 @@
     background: { rgb: [30, 32, 36] },
     backgroundLight: { rgb: [236, 238, 242] },
     selection: { rgb: [0, 200, 255] },
+    selectInside: { rgb: [60, 210, 90] },
+    // box/lasso dragged rightwards: objects entirely inside
+    selectTouch: { rgb: [235, 60, 60] },
+    // box/lasso dragged leftwards: anything it touches
     hover: { rgb: [255, 255, 255] },
     highlight: { rgb: [255, 0, 200] },
     // analyser: every use of an aperture
@@ -25966,228 +25970,6 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     return { name, kind, diagnostics: null };
   }
 
-  // src/edit/selection.js
-  var TOL_MM = 2e-3;
-  var EPS = 1e-9;
-  var SELECT_MODES = ["enclose", "touch"];
-  var cache = /* @__PURE__ */ new WeakMap();
-  function contoursOf(image, i) {
-    let c = cache.get(image);
-    if (!c) cache.set(image, c = []);
-    if (!c[i]) {
-      const o2 = image.objects[i];
-      const cs3 = objectContours(o2, TOL_MM);
-      c[i] = cs3.length ? cs3 : centreLine(o2);
-    }
-    return c[i];
-  }
-  function centreLine(o2) {
-    switch (o2.k) {
-      case "F":
-        return [[o2.x, o2.y]];
-      case "L":
-        return [[o2.x1, o2.y1, o2.x2, o2.y2]];
-      case "A": {
-        const n2 = Math.max(2, Math.ceil(Math.abs(o2.sw) / (Math.PI / 32)));
-        const pts = [];
-        for (let k2 = 0; k2 <= n2; k2++) {
-          const a2 = o2.a0 + o2.sw * k2 / n2;
-          pts.push(o2.cx + o2.r * Math.cos(a2), o2.cy + o2.r * Math.sin(a2));
-        }
-        for (let k2 = pts.length - 4; k2 >= 2; k2 -= 2) pts.push(pts[k2], pts[k2 + 1]);
-        return [pts];
-      }
-    }
-    return [];
-  }
-  function boxPolygon([ax, ay], [bx, by]) {
-    return [ax, ay, bx, ay, bx, by, ax, by];
-  }
-  function objectsInPolygon(image, poly, mode = "enclose") {
-    if (poly.length < 6) return [];
-    const pb = bounds(poly);
-    const ob = image.objBounds;
-    const out = [];
-    for (let i = 0; i < image.objects.length; i++) {
-      const b3 = [ob[i * 4], ob[i * 4 + 1], ob[i * 4 + 2], ob[i * 4 + 3]];
-      if (mode === "enclose") {
-        if (b3[0] < pb[0] || b3[1] < pb[1] || b3[2] > pb[2] || b3[3] > pb[3]) continue;
-        if (enclosed(contoursOf(image, i), poly)) out.push(i);
-      } else {
-        if (!overlap(b3, pb)) continue;
-        if (touches(contoursOf(image, i), [poly])) out.push(i);
-      }
-    }
-    return out;
-  }
-  function apertureKey(ap2) {
-    if (!ap2) return null;
-    if (ap2.kind === "block") return `block:${ap2.code}`;
-    const p = (ap2.mm ?? ap2.params ?? []).map((v) => typeof v === "number" ? r6(v) : v);
-    return `${ap2.kind}:${ap2.template}:${p.join(",")}`;
-  }
-  function shapeKey(o2) {
-    const m = o2.m ? `|${o2.m.map(r6).join(",")}` : "";
-    const pol = o2.dark ? "" : "|clear";
-    switch (o2.k) {
-      case "F":
-        return `F|${apertureKey(o2.ap)}${m}${pol}`;
-      case "L": {
-        let dx = r6(o2.x2 - o2.x1);
-        let dy = r6(o2.y2 - o2.y1);
-        if (dx < 0 || dx === 0 && dy < 0) [dx, dy] = [-dx, -dy];
-        return `L|${apertureKey(o2.ap)}|${dx},${dy}${m}${pol}`;
-      }
-      case "A":
-        return `A|${apertureKey(o2.ap)}|${r6(o2.r)},${r6(o2.a0)},${r6(o2.sw)}${m}${pol}`;
-      case "R": {
-        let x0 = Infinity;
-        let y0 = Infinity;
-        for (const c of o2.contours)
-          for (let i = 0; i < c.length; i += 2) {
-            x0 = Math.min(x0, c[i]);
-            y0 = Math.min(y0, c[i + 1]);
-          }
-        const rel = o2.contours.map((c) => c.map((v, i) => r6(v - (i % 2 ? y0 : x0))).join(","));
-        return `R|${rel.join(";")}${pol}`;
-      }
-    }
-    return null;
-  }
-  function sameShape(image, seeds) {
-    const keys = new Set(seeds.map((i) => shapeKey(image.objects[i])));
-    const out = [];
-    image.objects.forEach((o2, i) => keys.has(shapeKey(o2)) && out.push(i));
-    return out;
-  }
-  function sameAperture(image, seeds) {
-    const keys = new Set(seeds.map((i) => apertureKey(image.objects[i].ap)).filter(Boolean));
-    const out = [];
-    image.objects.forEach((o2, i) => o2.ap && keys.has(apertureKey(o2.ap)) && out.push(i));
-    return out;
-  }
-  function connected(image, seeds) {
-    const objs = image.objects;
-    const ob = image.objBounds;
-    const grid = boundsGrid(image);
-    const seen = new Set(seeds);
-    const queue = seeds.filter((i) => objs[i]?.dark);
-    while (queue.length) {
-      const i = queue.pop();
-      const b3 = [ob[i * 4], ob[i * 4 + 1], ob[i * 4 + 2], ob[i * 4 + 3]];
-      const ci2 = contoursOf(image, i);
-      for (const j2 of grid.query(b3)) {
-        if (seen.has(j2) || !objs[j2].dark) continue;
-        if (!touches(contoursOf(image, j2), ci2)) continue;
-        seen.add(j2);
-        queue.push(j2);
-      }
-    }
-    return [...seen].sort((a2, b3) => a2 - b3);
-  }
-  function boundsGrid(image) {
-    const ob = image.objBounds;
-    const n2 = image.objects.length;
-    const b3 = image.bounds ?? [0, 0, 1, 1];
-    const w2 = Math.max(b3[2] - b3[0], 1e-6);
-    const h2 = Math.max(b3[3] - b3[1], 1e-6);
-    const cell = Math.max(Math.sqrt(w2 * h2 / Math.max(1, n2)), 1e-3);
-    const cols = Math.max(1, Math.ceil(w2 / cell));
-    const rows = Math.max(1, Math.ceil(h2 / cell));
-    const cells = /* @__PURE__ */ new Map();
-    const big = [];
-    const range2 = (i0, i1, j0, j1) => [
-      Math.max(0, Math.floor((i0 - b3[0]) / cell)),
-      Math.min(cols - 1, Math.floor((i1 - b3[0]) / cell)),
-      Math.max(0, Math.floor((j0 - b3[1]) / cell)),
-      Math.min(rows - 1, Math.floor((j1 - b3[1]) / cell))
-    ];
-    for (let i = 0; i < n2; i++) {
-      const [c0, c1, r0, r1] = range2(ob[i * 4], ob[i * 4 + 2], ob[i * 4 + 1], ob[i * 4 + 3]);
-      if ((c1 - c0 + 1) * (r1 - r0 + 1) > 64) {
-        big.push(i);
-        continue;
-      }
-      for (let r2 = r0; r2 <= r1; r2++)
-        for (let c = c0; c <= c1; c++) {
-          const k2 = r2 * cols + c;
-          let l = cells.get(k2);
-          if (!l) cells.set(k2, l = []);
-          l.push(i);
-        }
-    }
-    return {
-      query(q) {
-        const out = new Set(big);
-        const [c0, c1, r0, r1] = range2(q[0] - EPS, q[2] + EPS, q[1] - EPS, q[3] + EPS);
-        for (let r2 = r0; r2 <= r1; r2++)
-          for (let c = c0; c <= c1; c++) for (const i of cells.get(r2 * cols + c) ?? []) out.add(i);
-        return [...out].filter((i) => overlap([ob[i * 4], ob[i * 4 + 1], ob[i * 4 + 2], ob[i * 4 + 3]], q));
-      }
-    };
-  }
-  function inside(contours, x2, y2) {
-    let w2 = 0;
-    for (const c of contours) w2 += winding(c, x2, y2);
-    return w2 !== 0;
-  }
-  function enclosed(contours, poly) {
-    if (!contours.length) return false;
-    for (const c of contours) for (let i = 0; i < c.length; i += 2) if (!inside([poly], c[i], c[i + 1])) return false;
-    return !edgesCross(contours, [poly]);
-  }
-  function touches(a2, b3) {
-    if (!a2.length || !b3.length) return false;
-    for (const c of a2) if (inside(b3, c[0], c[1])) return true;
-    for (const c of b3) if (inside(a2, c[0], c[1])) return true;
-    return edgesCross(a2, b3);
-  }
-  function edgesCross(a2, b3) {
-    for (const ca2 of a2) {
-      const ba = bounds(ca2);
-      for (const cb of b3) {
-        if (!overlap(ba, bounds(cb))) continue;
-        for (let i = 0, pi2 = ca2.length - 2; i < ca2.length; pi2 = i, i += 2) {
-          const sx0 = Math.min(ca2[pi2], ca2[i]);
-          const sx1 = Math.max(ca2[pi2], ca2[i]);
-          const sy0 = Math.min(ca2[pi2 + 1], ca2[i + 1]);
-          const sy1 = Math.max(ca2[pi2 + 1], ca2[i + 1]);
-          for (let j2 = 0, pj = cb.length - 2; j2 < cb.length; pj = j2, j2 += 2) {
-            if (Math.max(cb[pj], cb[j2]) < sx0 - EPS || Math.min(cb[pj], cb[j2]) > sx1 + EPS) continue;
-            if (Math.max(cb[pj + 1], cb[j2 + 1]) < sy0 - EPS || Math.min(cb[pj + 1], cb[j2 + 1]) > sy1 + EPS) continue;
-            if (segmentsMeet(ca2[pi2], ca2[pi2 + 1], ca2[i], ca2[i + 1], cb[pj], cb[pj + 1], cb[j2], cb[j2 + 1])) return true;
-          }
-        }
-      }
-    }
-    return false;
-  }
-  function segmentsMeet(x1, y1, x2, y2, x3, y3, x4, y4) {
-    const d1 = cross2(x3, y3, x4, y4, x1, y1);
-    const d2 = cross2(x3, y3, x4, y4, x2, y2);
-    const d3 = cross2(x1, y1, x2, y2, x3, y3);
-    const d4 = cross2(x1, y1, x2, y2, x4, y4);
-    if ((d1 > EPS && d2 < -EPS || d1 < -EPS && d2 > EPS) && (d3 > EPS && d4 < -EPS || d3 < -EPS && d4 > EPS))
-      return true;
-    return Math.abs(d1) <= EPS && onSegment(x3, y3, x4, y4, x1, y1) || Math.abs(d2) <= EPS && onSegment(x3, y3, x4, y4, x2, y2) || Math.abs(d3) <= EPS && onSegment(x1, y1, x2, y2, x3, y3) || Math.abs(d4) <= EPS && onSegment(x1, y1, x2, y2, x4, y4);
-  }
-  var cross2 = (ax, ay, bx, by, px, py) => (bx - ax) * (py - ay) - (by - ay) * (px - ax);
-  function onSegment(ax, ay, bx, by, px, py) {
-    return px >= Math.min(ax, bx) - EPS && px <= Math.max(ax, bx) + EPS && py >= Math.min(ay, by) - EPS && py <= Math.max(ay, by) + EPS;
-  }
-  function bounds(c) {
-    const b3 = [Infinity, Infinity, -Infinity, -Infinity];
-    for (let i = 0; i < c.length; i += 2) {
-      if (c[i] < b3[0]) b3[0] = c[i];
-      if (c[i] > b3[2]) b3[2] = c[i];
-      if (c[i + 1] < b3[1]) b3[1] = c[i + 1];
-      if (c[i + 1] > b3[3]) b3[3] = c[i + 1];
-    }
-    return b3;
-  }
-  var overlap = (a2, b3) => a2[0] <= b3[2] + EPS && a2[2] >= b3[0] - EPS && a2[1] <= b3[3] + EPS && a2[3] >= b3[1] - EPS;
-  var r6 = (v) => Math.round(v * 1e6) / 1e6 || 0;
-
   // src/model/outline.js
   var JOIN_TOL_MM = 0.01;
   var ARC_TOL_MM = 2e-3;
@@ -26304,7 +26086,6 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
   var DEFAULT_EDIT = {
     on: false,
     tool: "select",
-    selectMode: "enclose",
     gridMm: 0.05,
     aperture: { code: null, template: "C", sizesMm: [0.25, 0.25] },
     holeDiaMm: 0.8
@@ -26366,11 +26147,12 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     const a2 = src.aperture && typeof src.aperture === "object" ? src.aperture : {};
     const pos = (v, dv) => Number.isFinite(v) && v > 0 ? v : dv;
     const sizes = Array.isArray(a2.sizesMm) ? a2.sizesMm : [];
+    const rest = { ...src };
+    delete rest.selectMode;
     return {
-      ...src,
+      ...rest,
       on: src.on === true,
       tool: EDIT_TOOLS.includes(src.tool) ? src.tool : d.tool,
-      selectMode: SELECT_MODES.includes(src.selectMode) ? src.selectMode : d.selectMode,
       gridMm: Number.isFinite(src.gridMm) && src.gridMm >= 0 ? src.gridMm : d.gridMm,
       aperture: {
         code: Number.isInteger(a2.code) ? a2.code : null,
@@ -27280,6 +27062,227 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     return c;
   }
 
+  // src/edit/selection.js
+  var TOL_MM = 2e-3;
+  var EPS = 1e-9;
+  var cache = /* @__PURE__ */ new WeakMap();
+  function contoursOf(image, i) {
+    let c = cache.get(image);
+    if (!c) cache.set(image, c = []);
+    if (!c[i]) {
+      const o2 = image.objects[i];
+      const cs3 = objectContours(o2, TOL_MM);
+      c[i] = cs3.length ? cs3 : centreLine(o2);
+    }
+    return c[i];
+  }
+  function centreLine(o2) {
+    switch (o2.k) {
+      case "F":
+        return [[o2.x, o2.y]];
+      case "L":
+        return [[o2.x1, o2.y1, o2.x2, o2.y2]];
+      case "A": {
+        const n2 = Math.max(2, Math.ceil(Math.abs(o2.sw) / (Math.PI / 32)));
+        const pts = [];
+        for (let k2 = 0; k2 <= n2; k2++) {
+          const a2 = o2.a0 + o2.sw * k2 / n2;
+          pts.push(o2.cx + o2.r * Math.cos(a2), o2.cy + o2.r * Math.sin(a2));
+        }
+        for (let k2 = pts.length - 4; k2 >= 2; k2 -= 2) pts.push(pts[k2], pts[k2 + 1]);
+        return [pts];
+      }
+    }
+    return [];
+  }
+  function boxPolygon([ax, ay], [bx, by]) {
+    return [ax, ay, bx, ay, bx, by, ax, by];
+  }
+  function objectsInPolygon(image, poly, mode = "enclose") {
+    if (poly.length < 6) return [];
+    const pb = bounds(poly);
+    const ob = image.objBounds;
+    const out = [];
+    for (let i = 0; i < image.objects.length; i++) {
+      const b3 = [ob[i * 4], ob[i * 4 + 1], ob[i * 4 + 2], ob[i * 4 + 3]];
+      if (mode === "enclose") {
+        if (b3[0] < pb[0] || b3[1] < pb[1] || b3[2] > pb[2] || b3[3] > pb[3]) continue;
+        if (enclosed(contoursOf(image, i), poly)) out.push(i);
+      } else {
+        if (!overlap(b3, pb)) continue;
+        if (touches(contoursOf(image, i), [poly])) out.push(i);
+      }
+    }
+    return out;
+  }
+  function apertureKey(ap2) {
+    if (!ap2) return null;
+    if (ap2.kind === "block") return `block:${ap2.code}`;
+    const p = (ap2.mm ?? ap2.params ?? []).map((v) => typeof v === "number" ? r6(v) : v);
+    return `${ap2.kind}:${ap2.template}:${p.join(",")}`;
+  }
+  function shapeKey(o2) {
+    const m = o2.m ? `|${o2.m.map(r6).join(",")}` : "";
+    const pol = o2.dark ? "" : "|clear";
+    switch (o2.k) {
+      case "F":
+        return `F|${apertureKey(o2.ap)}${m}${pol}`;
+      case "L": {
+        let dx = r6(o2.x2 - o2.x1);
+        let dy = r6(o2.y2 - o2.y1);
+        if (dx < 0 || dx === 0 && dy < 0) [dx, dy] = [-dx, -dy];
+        return `L|${apertureKey(o2.ap)}|${dx},${dy}${m}${pol}`;
+      }
+      case "A":
+        return `A|${apertureKey(o2.ap)}|${r6(o2.r)},${r6(o2.a0)},${r6(o2.sw)}${m}${pol}`;
+      case "R": {
+        let x0 = Infinity;
+        let y0 = Infinity;
+        for (const c of o2.contours)
+          for (let i = 0; i < c.length; i += 2) {
+            x0 = Math.min(x0, c[i]);
+            y0 = Math.min(y0, c[i + 1]);
+          }
+        const rel = o2.contours.map((c) => c.map((v, i) => r6(v - (i % 2 ? y0 : x0))).join(","));
+        return `R|${rel.join(";")}${pol}`;
+      }
+    }
+    return null;
+  }
+  function sameShape(image, seeds) {
+    const keys = new Set(seeds.map((i) => shapeKey(image.objects[i])));
+    const out = [];
+    image.objects.forEach((o2, i) => keys.has(shapeKey(o2)) && out.push(i));
+    return out;
+  }
+  function sameAperture(image, seeds) {
+    const keys = new Set(seeds.map((i) => apertureKey(image.objects[i].ap)).filter(Boolean));
+    const out = [];
+    image.objects.forEach((o2, i) => o2.ap && keys.has(apertureKey(o2.ap)) && out.push(i));
+    return out;
+  }
+  function connected(image, seeds) {
+    const objs = image.objects;
+    const ob = image.objBounds;
+    const grid = boundsGrid(image);
+    const seen = new Set(seeds);
+    const queue = seeds.filter((i) => objs[i]?.dark);
+    while (queue.length) {
+      const i = queue.pop();
+      const b3 = [ob[i * 4], ob[i * 4 + 1], ob[i * 4 + 2], ob[i * 4 + 3]];
+      const ci2 = contoursOf(image, i);
+      for (const j2 of grid.query(b3)) {
+        if (seen.has(j2) || !objs[j2].dark) continue;
+        if (!touches(contoursOf(image, j2), ci2)) continue;
+        seen.add(j2);
+        queue.push(j2);
+      }
+    }
+    return [...seen].sort((a2, b3) => a2 - b3);
+  }
+  function boundsGrid(image) {
+    const ob = image.objBounds;
+    const n2 = image.objects.length;
+    const b3 = image.bounds ?? [0, 0, 1, 1];
+    const w2 = Math.max(b3[2] - b3[0], 1e-6);
+    const h2 = Math.max(b3[3] - b3[1], 1e-6);
+    const cell = Math.max(Math.sqrt(w2 * h2 / Math.max(1, n2)), 1e-3);
+    const cols = Math.max(1, Math.ceil(w2 / cell));
+    const rows = Math.max(1, Math.ceil(h2 / cell));
+    const cells = /* @__PURE__ */ new Map();
+    const big = [];
+    const range2 = (i0, i1, j0, j1) => [
+      Math.max(0, Math.floor((i0 - b3[0]) / cell)),
+      Math.min(cols - 1, Math.floor((i1 - b3[0]) / cell)),
+      Math.max(0, Math.floor((j0 - b3[1]) / cell)),
+      Math.min(rows - 1, Math.floor((j1 - b3[1]) / cell))
+    ];
+    for (let i = 0; i < n2; i++) {
+      const [c0, c1, r0, r1] = range2(ob[i * 4], ob[i * 4 + 2], ob[i * 4 + 1], ob[i * 4 + 3]);
+      if ((c1 - c0 + 1) * (r1 - r0 + 1) > 64) {
+        big.push(i);
+        continue;
+      }
+      for (let r2 = r0; r2 <= r1; r2++)
+        for (let c = c0; c <= c1; c++) {
+          const k2 = r2 * cols + c;
+          let l = cells.get(k2);
+          if (!l) cells.set(k2, l = []);
+          l.push(i);
+        }
+    }
+    return {
+      query(q) {
+        const out = new Set(big);
+        const [c0, c1, r0, r1] = range2(q[0] - EPS, q[2] + EPS, q[1] - EPS, q[3] + EPS);
+        for (let r2 = r0; r2 <= r1; r2++)
+          for (let c = c0; c <= c1; c++) for (const i of cells.get(r2 * cols + c) ?? []) out.add(i);
+        return [...out].filter((i) => overlap([ob[i * 4], ob[i * 4 + 1], ob[i * 4 + 2], ob[i * 4 + 3]], q));
+      }
+    };
+  }
+  function inside(contours, x2, y2) {
+    let w2 = 0;
+    for (const c of contours) w2 += winding(c, x2, y2);
+    return w2 !== 0;
+  }
+  function enclosed(contours, poly) {
+    if (!contours.length) return false;
+    for (const c of contours) for (let i = 0; i < c.length; i += 2) if (!inside([poly], c[i], c[i + 1])) return false;
+    return !edgesCross(contours, [poly]);
+  }
+  function touches(a2, b3) {
+    if (!a2.length || !b3.length) return false;
+    for (const c of a2) if (inside(b3, c[0], c[1])) return true;
+    for (const c of b3) if (inside(a2, c[0], c[1])) return true;
+    return edgesCross(a2, b3);
+  }
+  function edgesCross(a2, b3) {
+    for (const ca2 of a2) {
+      const ba = bounds(ca2);
+      for (const cb of b3) {
+        if (!overlap(ba, bounds(cb))) continue;
+        for (let i = 0, pi2 = ca2.length - 2; i < ca2.length; pi2 = i, i += 2) {
+          const sx0 = Math.min(ca2[pi2], ca2[i]);
+          const sx1 = Math.max(ca2[pi2], ca2[i]);
+          const sy0 = Math.min(ca2[pi2 + 1], ca2[i + 1]);
+          const sy1 = Math.max(ca2[pi2 + 1], ca2[i + 1]);
+          for (let j2 = 0, pj = cb.length - 2; j2 < cb.length; pj = j2, j2 += 2) {
+            if (Math.max(cb[pj], cb[j2]) < sx0 - EPS || Math.min(cb[pj], cb[j2]) > sx1 + EPS) continue;
+            if (Math.max(cb[pj + 1], cb[j2 + 1]) < sy0 - EPS || Math.min(cb[pj + 1], cb[j2 + 1]) > sy1 + EPS) continue;
+            if (segmentsMeet(ca2[pi2], ca2[pi2 + 1], ca2[i], ca2[i + 1], cb[pj], cb[pj + 1], cb[j2], cb[j2 + 1])) return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+  function segmentsMeet(x1, y1, x2, y2, x3, y3, x4, y4) {
+    const d1 = cross2(x3, y3, x4, y4, x1, y1);
+    const d2 = cross2(x3, y3, x4, y4, x2, y2);
+    const d3 = cross2(x1, y1, x2, y2, x3, y3);
+    const d4 = cross2(x1, y1, x2, y2, x4, y4);
+    if ((d1 > EPS && d2 < -EPS || d1 < -EPS && d2 > EPS) && (d3 > EPS && d4 < -EPS || d3 < -EPS && d4 > EPS))
+      return true;
+    return Math.abs(d1) <= EPS && onSegment(x3, y3, x4, y4, x1, y1) || Math.abs(d2) <= EPS && onSegment(x3, y3, x4, y4, x2, y2) || Math.abs(d3) <= EPS && onSegment(x1, y1, x2, y2, x3, y3) || Math.abs(d4) <= EPS && onSegment(x1, y1, x2, y2, x4, y4);
+  }
+  var cross2 = (ax, ay, bx, by, px, py) => (bx - ax) * (py - ay) - (by - ay) * (px - ax);
+  function onSegment(ax, ay, bx, by, px, py) {
+    return px >= Math.min(ax, bx) - EPS && px <= Math.max(ax, bx) + EPS && py >= Math.min(ay, by) - EPS && py <= Math.max(ay, by) + EPS;
+  }
+  function bounds(c) {
+    const b3 = [Infinity, Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < c.length; i += 2) {
+      if (c[i] < b3[0]) b3[0] = c[i];
+      if (c[i] > b3[2]) b3[2] = c[i];
+      if (c[i + 1] < b3[1]) b3[1] = c[i + 1];
+      if (c[i + 1] > b3[3]) b3[3] = c[i + 1];
+    }
+    return b3;
+  }
+  var overlap = (a2, b3) => a2[0] <= b3[2] + EPS && a2[2] >= b3[0] - EPS && a2[1] <= b3[3] + EPS && a2[3] >= b3[1] - EPS;
+  var r6 = (v) => Math.round(v * 1e6) / 1e6 || 0;
+
   // src/ui/context-menu.js
   var current = null;
   function closeMenu() {
@@ -27354,16 +27357,12 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
   var TOOL_KEY = { v: "select", l: "lasso", h: "hand", p: "pad", t: "track", r: "region" };
   var PICK_HELP = "Shift adds to the selection, Alt or Ctrl takes away";
   var TOOL_TITLE = {
-    select: `Select (V): click an object, drag a box around objects (${PICK_HELP}); drag a selected object to move it`,
-    lasso: `Lasso (L): draw round the objects to select (${PICK_HELP})`,
+    select: `Select (V): click an object, double-click to select everything connected; drag a box left to right to pick objects entirely inside (green), right to left to pick anything it touches (red) (${PICK_HELP}); drag a selected object to move it`,
+    lasso: `Lasso (L): draw round the objects to select; start rightwards to pick objects entirely inside (green), leftwards to pick anything it touches (red) (${PICK_HELP})`,
     hand: "Hand (H): drag to pan the board (any tool: hold Space or drag with the middle button)",
     pad: "Pad (P): click to place a pad with the chosen aperture (on a drill layer: a hole)",
     track: "Track (T): click the points, double-click or Enter to finish, Backspace removes the last point, Shift keeps to 45°",
     region: "Region (R): click the corners like a pen tool, click the first point, double-click or Enter to close it; Shift keeps to 45°"
-  };
-  var MODE_TITLE = {
-    enclose: "Box and lasso select objects entirely inside (non-greedy). G: switch to touching",
-    touch: "Box and lasso select everything they touch (greedy). G: switch to entirely inside"
   };
   var ICON = {
     select: '<path d="M6 3l12 9-5.5 1 3.2 6.3-2.4 1.2-3.2-6.4L6 18z"/>',
@@ -27371,12 +27370,11 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     hand: '<path d="M8 12V5.5a1.5 1.5 0 013 0V11m0-6.5V4a1.5 1.5 0 013 0v7m0-6a1.5 1.5 0 013 0v7m0-3a1.5 1.5 0 013 0v4c0 4-3 7-7 7h-1c-3 0-4.5-1.5-6-4l-2.6-4.4a1.5 1.5 0 012.6-1.5L8 15"/>',
     pad: '<circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
     track: '<path d="M4 18h6l8-8h3" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>',
-    region: '<path d="M4 20l3-11 10-4 3 10-9 6z"/><circle cx="4" cy="20" r="1.6"/><circle cx="7" cy="9" r="1.6"/><circle cx="17" cy="5" r="1.6"/><circle cx="20" cy="15" r="1.6"/><circle cx="11" cy="21" r="1.6"/>',
-    enclose: '<rect x="3" y="3" width="18" height="18" stroke-dasharray="3 2"/><rect x="8" y="8" width="8" height="8" fill="currentColor"/>',
-    touch: '<rect x="3" y="3" width="13" height="13" stroke-dasharray="3 2"/><rect x="11" y="11" width="10" height="10" fill="currentColor"/>'
+    region: '<path d="M4 20l3-11 10-4 3 10-9 6z"/><circle cx="4" cy="20" r="1.6"/><circle cx="7" cy="9" r="1.6"/><circle cx="17" cy="5" r="1.6"/><circle cx="20" cy="15" r="1.6"/><circle cx="11" cy="21" r="1.6"/>'
   };
   var CLOSE_PX = 8;
   var LASSO_STEP_PX = 3;
+  var LASSO_DIR_PX = 4;
   var EditorPanel = class {
     /**
      * @param {{settings:()=>object, layer:()=>object|null, project:()=>object, viewer:object,
@@ -27422,11 +27420,6 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
       this.s.on = on3;
       this.cancelSketch();
       this.#setSelection([]);
-      this.host.touch();
-      this.refresh();
-    }
-    setSelectMode(mode) {
-      this.s.selectMode = mode === "touch" ? "touch" : "enclose";
       this.host.touch();
       this.refresh();
     }
@@ -27481,24 +27474,6 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
           h("span", { class: "muted", "data-testid": "edit-tool" }, `${this.#toolLabel(tool)} tool`)
         ])
       );
-      if (tool === "select" || tool === "lasso")
-        this.el.append(
-          h("div", { class: "edit-row" }, [
-            "Box/lasso picks ",
-            h(
-              "span",
-              { class: "seg" },
-              ["enclose", "touch"].map(
-                (m) => btn(m === "enclose" ? "Inside only" : "Touching", {
-                  class: this.s.selectMode === m ? "on" : "",
-                  "data-testid": `select-mode-${m}`,
-                  title: MODE_TITLE[m],
-                  onclick: () => this.setSelectMode(m)
-                })
-              )
-            )
-          ])
-        );
       if (tool === "pad" || tool === "track") this.el.append(this.#apertureRow(layer));
       this.el.append(
         h("div", { class: "edit-row" }, [
@@ -27597,7 +27572,7 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     #toolLabel(tool) {
       return tool === "pad" && this.layer()?.kind === "excellon" ? "Hole" : TOOL_LABEL[tool];
     }
-    /** The tool strip on the board's left edge (Photoshop-style): tools, then the box/lasso mode. */
+    /** The tool strip on the board's left edge (Photoshop-style). */
     #refreshStrip() {
       const layer = this.layer();
       const on3 = this.on;
@@ -27633,17 +27608,6 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
           );
         }
       }
-      const mode = this.s.selectMode;
-      this.strip.append(
-        h("span", { class: "strip-sep" }),
-        button(mode, mode === "enclose" ? "Select inside only" : "Select touching", {
-          class: "mode",
-          "data-testid": "select-mode",
-          "data-mode": mode,
-          title: MODE_TITLE[mode],
-          onclick: () => this.setSelectMode(mode === "enclose" ? "touch" : "enclose")
-        })
-      );
     }
     #apertureRow(layer) {
       if (layer.kind === "excellon") {
@@ -27780,11 +27744,14 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
       const what = { shape: "with the same shape", aperture: "with the same aperture", connected: "connected" }[kind];
       this.host.message(`${found.length} object${found.length === 1 ? "" : "s"} ${what}`);
     }
-    /** Box or lasso: combine what the polygon picks with the selection (Shift adds, Alt/Ctrl removes). */
-    #pickPolygon(poly, e) {
+    /**
+     * Box or lasso: combine what the polygon picks (mode enclose: entirely inside; touch: anything
+     * touched) with the selection (Shift adds, Alt/Ctrl removes).
+     */
+    #pickPolygon(poly, mode, e) {
       const layer = this.layer();
       if (!layer) return;
-      const picked = objectsInPolygon(layer.image, poly, this.s.selectMode);
+      const picked = objectsInPolygon(layer.image, poly, mode);
       if (e.altKey || e.ctrlKey || e.metaKey) {
         const drop = new Set(picked);
         this.#setSelection(this.sel.filter((i) => !drop.has(i)));
@@ -28009,10 +27976,6 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
         this.space = true;
         return e.target?.tagName !== "BUTTON";
       }
-      if (k2.toLowerCase() === "g") {
-        this.setSelectMode(this.s.selectMode === "enclose" ? "touch" : "enclose");
-        return true;
-      }
       if (k2 === "Escape") {
         if (this.sketch.length || this.drag) this.cancelSketch();
         else this.#setSelection([]), this.refresh();
@@ -28065,7 +28028,7 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
           const tool = this.s.tool;
           if (!layer || this.space || tool !== "select" && tool !== "lasso") return false;
           if (tool === "lasso") {
-            this.drag = { kind: "lasso", points: [mm2] };
+            this.drag = { kind: "lasso", points: [mm2], x0: e.clientX, mode: null };
             return true;
           }
           const hit = v.pickAt(mm2[0], mm2[1]);
@@ -28073,10 +28036,10 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
             this.drag = { kind: "move", start: mm2, dx: 0, dy: 0, hit: hit.index };
             return true;
           }
-          this.drag = { kind: "box", start: mm2, end: mm2 };
+          this.drag = { kind: "box", start: mm2, end: mm2, x0: e.clientX, mode: "enclose" };
           return true;
         },
-        move: (mm2) => {
+        move: (mm2, e) => {
           const d = this.drag;
           if (!d) return;
           if (d.kind === "move") {
@@ -28086,7 +28049,12 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
           } else if (d.kind === "lasso") {
             const last = d.points.at(-1);
             if (Math.hypot(mm2[0] - last[0], mm2[1] - last[1]) * v.view.scale >= LASSO_STEP_PX) d.points.push(mm2);
-          } else d.end = mm2;
+            if (!d.mode && e && Math.abs(e.clientX - d.x0) >= LASSO_DIR_PX)
+              d.mode = e.clientX > d.x0 ? "enclose" : "touch";
+          } else {
+            d.end = mm2;
+            if (e) d.mode = e.clientX >= d.x0 ? "enclose" : "touch";
+          }
           v.drawOverlay();
         },
         up: (mm2, e, moved2) => {
@@ -28100,8 +28068,8 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
           }
           if (d.kind === "lasso") {
             d.points.push(mm2);
-            this.#pickPolygon(d.points.flat(), e);
-          } else this.#pickPolygon(boxPolygon(d.start, d.end), e);
+            this.#pickPolygon(d.points.flat(), d.mode ?? "enclose", e);
+          } else this.#pickPolygon(boxPolygon(d.start, d.end), d.mode, e);
           v.drawOverlay();
         },
         click: (mm2, e) => {
@@ -28147,8 +28115,14 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
           this.sketch.push(p);
           v.drawOverlay();
         },
-        dblclick: () => {
-          if (this.sketch.length) this.#finishSketch();
+        dblclick: (mm2) => {
+          if (this.sketch.length) return this.#finishSketch();
+          const tool = this.s.tool;
+          if (tool !== "select" && tool !== "lasso") return;
+          const hit = this.layer() && this.host.viewer.pickAt(mm2[0], mm2[1]);
+          if (!hit) return;
+          this.#setSelection([hit.index]);
+          this.selectBy("connected");
         },
         hover: (mm2, e) => {
           this.cursor = this.s.tool === "pad" ? this.#snapPt(mm2) : this.#placePt(mm2, e);
@@ -28168,6 +28142,8 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
         v.outlineObjects(ctx, map, layer.id, this.sel, MISC.selection, 0.15, d.dx, d.dy);
       }
       if (d?.kind === "box" || d?.kind === "lasso") {
+        const touch2 = d.mode === "touch";
+        const pick = touch2 ? MISC.selectTouch : MISC.selectInside;
         const pts2 = d.kind === "box" ? [d.start, [d.end[0], d.start[1]], d.end, [d.start[0], d.end[1]]] : d.points;
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.beginPath();
@@ -28177,10 +28153,10 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
           else ctx.moveTo(x2, y2);
         });
         ctx.closePath();
-        ctx.fillStyle = rgba(MISC.selection, 0.08);
+        ctx.fillStyle = rgba(pick, 0.12);
         ctx.fill();
-        if (this.s.selectMode === "touch") ctx.setLineDash([4 * v.dpr, 4 * v.dpr]);
-        ctx.strokeStyle = colour;
+        if (touch2) ctx.setLineDash([4 * v.dpr, 4 * v.dpr]);
+        ctx.strokeStyle = rgba(pick, 1);
         ctx.lineWidth = v.dpr;
         ctx.stroke();
         ctx.setLineDash([]);

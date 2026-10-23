@@ -1,5 +1,6 @@
-// Editor tool strip: select box (inside only / touching), lasso, hand, 45° tracks, and the
-// right-click menu (same shape, same aperture, connected; edit from outside edit mode).
+// Editor tool strip: select box (dragged rightwards: inside only; leftwards: touching), lasso,
+// hand, double-click to select connected, 45° tracks, and the right-click menu (same shape,
+// same aperture, connected; edit from outside edit mode).
 
 import { test, expect } from '@playwright/test';
 import { join } from 'node:path';
@@ -45,40 +46,67 @@ function longTrack() {
   };
 }
 
-test('tool strip: tools by click and key; a box drag picks inside only or touching', async ({ page }) => {
+test('tool strip: tools by click and key; a box drag picks inside only or touching by direction', async ({ page }) => {
   const { errors } = await openApp(page);
   await startEditing(page);
   const strip = page.locator('[data-testid=tool-strip]');
   for (const t of ['select', 'lasso', 'hand', 'pad', 'track', 'region'])
     await expect(strip.locator(`[data-testid=tool-${t}]`)).toBeVisible();
+  // no mode toggle: the drag direction picks the mode
+  await expect(page.locator('[data-testid=select-mode]')).toHaveCount(0);
+  await expect(page.locator('[data-testid^=select-mode-]')).toHaveCount(0);
   await page.locator('[data-testid=tool-lasso]').click();
   await expect(page.locator('[data-testid=tool-lasso]')).toHaveClass(/on/);
   await page.keyboard.press('v');
   await expect(page.locator('[data-testid=tool-select]')).toHaveClass(/on/);
 
   const t = longTrack();
-  await expect(page.locator('[data-testid=select-mode]')).toHaveAttribute('data-mode', 'enclose');
-  await dragMm(page, ...t.box);
+  const [a, b] = t.box;
+  const overlayMode = () => page.evaluate(() => window.__pcam.app.editor.drag?.mode);
+  // left to right: entirely inside (green box while dragging)
+  const [ax, ay] = await clientAt(page, ...a);
+  const [bx, by] = await clientAt(page, ...b);
+  await page.mouse.move(ax, ay);
+  await page.mouse.down();
+  await page.mouse.move(bx, by, { steps: 6 });
+  expect(await overlayMode()).toBe('enclose');
+  await page.mouse.up();
   const enclosed = await selection(page);
-  expect(enclosed).toEqual(objectsInPolygon(image, boxPolygon(...t.box), 'enclose'));
+  expect(enclosed).toEqual(objectsInPolygon(image, boxPolygon(a, b), 'enclose'));
   expect(enclosed).not.toContain(t.index);
 
-  await page.keyboard.press('g');
-  await expect(page.locator('[data-testid=select-mode]')).toHaveAttribute('data-mode', 'touch');
-  await expect(page.locator('[data-testid=select-mode-touch]')).toHaveClass(/on/);
-  await dragMm(page, ...t.box);
+  // right to left over the same box: anything touched (red box while dragging)
+  await page.mouse.move(bx, ay);
+  await page.mouse.down();
+  await page.mouse.move(ax, by, { steps: 6 });
+  expect(await overlayMode()).toBe('touch');
+  await page.mouse.up();
   const touched = await selection(page);
-  expect(touched).toEqual(objectsInPolygon(image, boxPolygon(...t.box), 'touch'));
+  expect(touched).toEqual(objectsInPolygon(image, boxPolygon(a, b), 'touch'));
   expect(touched).toContain(t.index);
 
-  // Alt takes away what the box picks
+  // G no longer switches anything; Alt takes away what the box picks
+  await page.keyboard.press('g');
   await page.keyboard.down('Alt');
-  await dragMm(page, ...t.box);
+  await dragMm(page, [b[0], a[1]], [a[0], b[1]]);
   await page.keyboard.up('Alt');
   expect(await selection(page)).toEqual([]);
+  expect(errors).toEqual([]);
+});
 
-  // the mode is saved with the project
-  expect(await page.evaluate(() => window.__pcam.app.project.settings.edit.selectMode)).toBe('touch');
+test('double-click a shape selects everything connected to it', async ({ page }) => {
+  const { errors } = await openApp(page);
+  await startEditing(page);
+  const onTop = (o, i) => hitTest(image, o.x ?? o.x1, o.y ?? o.y1) === i;
+  const net = image.objects.findIndex(
+    (o, i) => o.dark && o.k !== 'R' && onTop(o, i) && connected(image, [i]).length > 1,
+  );
+  expect(net).toBeGreaterThanOrEqual(0);
+  const q = image.objects[net];
+  const [nx, ny] = await clientAt(page, q.x ?? q.x1, q.y ?? q.y1);
+  await page.mouse.dblclick(nx, ny);
+  expect(await selection(page)).toEqual(connected(image, [net]));
+  await expect(page.locator('[data-testid=status]')).toContainText('connected');
   expect(errors).toEqual([]);
 });
 
