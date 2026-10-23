@@ -3,6 +3,7 @@
 import { test, expect } from '@playwright/test';
 import { join } from 'node:path';
 import { openApp, loadBoard, pixelAt, waitRendered, boardFiles, ROOT } from './viewer-helpers.js';
+import { clickMenu } from './helpers.js';
 import { CLASSIC, CLASSIC_BACKGROUND, MISC, SUBSTRATE, FINISH } from '../../src/model/materials.js';
 
 test.use({ viewport: { width: 1400, height: 850 } });
@@ -13,7 +14,7 @@ const near = (a, b, tol = 8) => a.every((v, i) => Math.abs(v - b[i]) <= tol);
 const row = (page, name) => page.locator(`.source-row[data-name="${name}"]`);
 
 async function mode(page, m) {
-  await page.locator(`[data-testid=mode-${m}]`).click();
+  await clickMenu(page, `[data-testid=mode-${m}]`);
   await waitRendered(page);
 }
 
@@ -50,7 +51,7 @@ test('XOR: identical layers in the same colour cancel; a 0.2 mm shift shows only
   expect(near(await pixelAt(page, 15, 74), [0, 0, 0], 0)).toBe(true); // trace cancels
 
   page.once('dialog', (d) => d.accept()); // "discard unsaved changes?"
-  await page.locator('#new').click();
+  await clickMenu(page, '#new');
   await expect(page.locator('.source-row')).toHaveCount(0);
   await loadBoard(page, [F_CU, join(SYN, 'board-variants/F_Cu-misaligned-0.2mm.gbr')]);
   await mode(page, 'xor'); // New resets the view to realistic
@@ -100,13 +101,13 @@ test('light background, and every view setting survives save and reopen', async 
   await openApp(page);
   await loadBoard(page);
   await mode(page, 'classic');
-  await page.locator('[data-testid=background]').click();
+  await clickMenu(page, '[data-testid=background]');
   await waitRendered(page);
   expect(near(await pixelAt(page, -5, 20), MISC.backgroundLight.rgb, 0)).toBe(true);
   await row(page, 'synthetic-board-F_Cu.gbr').locator('[data-testid=layer-colour]').fill('#00ff00');
   await row(page, 'synthetic-board-B_Mask.gbr').locator('[data-testid=invert]').check();
   const before = await page.evaluate(() => window.__pcam.state().project.settings);
-  const [download] = await Promise.all([page.waitForEvent('download'), page.locator('#save').click()]);
+  const [download] = await Promise.all([page.waitForEvent('download'), clickMenu(page, '#save')]);
   const path = test.info().outputPath('views.pcam');
   await download.saveAs(path);
   const page2 = await browser.newPage({ viewport: { width: 1400, height: 850 } });

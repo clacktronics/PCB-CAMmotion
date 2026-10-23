@@ -3,6 +3,7 @@
 import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { openApp, loadBoard, pixelAt, waitRendered } from './viewer-helpers.js';
+import { clickMenu } from './helpers.js';
 import { loadProject } from '../../src/project/pcam.js';
 import { MISC } from '../../src/model/materials.js';
 
@@ -52,7 +53,7 @@ test('switching a group off hides every layer of it in 2D and greys its rows', a
 test('3D follows the toggles: mask and hole barrels go away', async ({ page }) => {
   await openApp(page);
   await loadBoard(page);
-  await page.locator('[data-testid=view-3d]').click();
+  await clickMenu(page, '[data-testid=view-3d]');
   const state = () => page.evaluate(() => window.__pcam.app.viewer3d.state());
   await page.waitForFunction(() => window.__pcam.app.viewer3d.state().ready);
   let s = await state();
@@ -71,7 +72,7 @@ test('toggles are saved in the .pcam and restored', async ({ page }, testInfo) =
   await loadBoard(page);
   await toggle(page, 'legend').click();
   await toggle(page, 'paste').click();
-  const [download] = await Promise.all([page.waitForEvent('download'), page.locator('#save').click()]);
+  const [download] = await Promise.all([page.waitForEvent('download'), clickMenu(page, '#save')]);
   const path = testInfo.outputPath('groups.pcam');
   await download.saveAs(path);
   const project = loadProject(new Uint8Array(readFileSync(path)));
@@ -97,7 +98,7 @@ test('toggles are saved in the .pcam and restored', async ({ page }, testInfo) =
 test('classic view: a file keeps its palette colour when other groups are switched off', async ({ page }) => {
   await openApp(page);
   await loadBoard(page);
-  await page.locator('[data-testid=mode-classic]').click();
+  await clickMenu(page, '[data-testid=mode-classic]');
   await waitRendered(page);
   const hole = await pixelAt(page, 4, 4); // only the NPTH drill layer covers it
   await toggle(page, 'paste').click(); // paste comes before the drills in the list

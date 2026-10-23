@@ -57,3 +57,22 @@ export async function dropFiles(page, paths) {
     }
   }, files);
 }
+
+/**
+ * A control in a top-bar menu (File, View): opens its menu when it is closed and returns the
+ * locator, e.g. `await (await menuItem(page, '#save')).click()`.
+ */
+export async function menuItem(page, selector) {
+  const item = page.locator(selector);
+  if (!(await item.isVisible())) {
+    const key = await item.evaluate((el) => el.closest('[data-menu]')?.dataset.menu);
+    if (key) await page.locator(`[data-testid=menu-${key}]`).click();
+  }
+  await expect(item).toBeVisible();
+  return item;
+}
+
+/** Click a control in a top-bar menu (File, View), opening the menu first. */
+export async function clickMenu(page, selector) {
+  await (await menuItem(page, selector)).click();
+}

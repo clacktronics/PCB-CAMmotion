@@ -3,6 +3,7 @@
 import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { openApp, loadBoard, boardFiles, waitRendered, pixelAt, viewFromSide, ROOT } from './viewer-helpers.js';
+import { clickMenu } from './helpers.js';
 import { loadProject } from '../../src/project/pcam.js';
 import { MISC } from '../../src/model/materials.js';
 
@@ -13,7 +14,7 @@ const TEST_BOARD = boardFiles(`${ROOT}/samples/test-board`).filter((f) => !f.end
 const state3d = (page) => page.evaluate(() => window.__pcam.app.viewer3d.state());
 
 async function open3d(page) {
-  await page.locator('[data-testid=view-3d]').click();
+  await clickMenu(page, '[data-testid=view-3d]');
   await page.waitForFunction(() => {
     const s = window.__pcam.app.viewer3d.state();
     return s.ready && s.renders > 0;
@@ -75,10 +76,10 @@ test('3D: shows the stackup in physical order with plated and non-plated holes',
   expect(centre.some((v, i) => Math.abs(v - bg[i]) > 20)).toBe(true);
   // reflections must not wash out the mask: the board middle (mask over FR4) stays close to
   // the mask colour of the 2D realistic view
-  await page.locator('[data-testid=view-2d]').click();
+  await clickMenu(page, '[data-testid=view-2d]');
   await waitRendered(page);
   const flat = await pixelAt(page, 40, 30);
-  await page.locator('[data-testid=view-3d]').click();
+  await clickMenu(page, '[data-testid=view-3d]');
   await page.waitForTimeout(200);
   const masked = await pixel3d(page, 0.5, 0.5);
   expect(Math.max(...masked.map((v, i) => Math.abs(v - flat[i])))).toBeLessThan(30);
@@ -190,7 +191,7 @@ test('3D: view, explode and camera are restored from the saved .pcam', async ({ 
   await page.locator('[data-testid=explode-layers]').click();
   await viewFromSide(page, 'bottom');
   const camera = (await state3d(page)).camera;
-  const [download] = await Promise.all([page.waitForEvent('download'), page.locator('#save').click()]);
+  const [download] = await Promise.all([page.waitForEvent('download'), clickMenu(page, '#save')]);
   const path = testInfo.outputPath('3d.pcam');
   await download.saveAs(path);
   const project = loadProject(new Uint8Array(readFileSync(path)));
@@ -217,7 +218,7 @@ test('3D: view, explode and camera are restored from the saved .pcam', async ({ 
   await expect(fresh.locator('[data-testid=explode-layers]')).toHaveClass(/\bon\b/);
   expect(s.camera).toEqual(camera);
 
-  await fresh.locator('[data-testid=view-2d]').click();
+  await clickMenu(fresh, '[data-testid=view-2d]');
   await expect(fresh.locator('[data-testid=board]')).toBeVisible();
   await expect(fresh.locator('[data-testid=board-3d]')).toBeHidden();
 });

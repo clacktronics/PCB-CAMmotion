@@ -751,6 +751,88 @@ table.apt tr.on td {
   background: var(--line);
 }
 
+/* top bar drop-down menus (src/ui/menubar.js) */
+.menubar {
+  display: flex;
+  gap: 2px;
+}
+.menu {
+  position: relative;
+}
+.menu-title {
+  background: transparent;
+  border-color: transparent;
+}
+.menu-title:hover,
+.menu-title.open {
+  background: var(--panel-2);
+  border-color: var(--line);
+}
+.menu-title.attention {
+  border-color: var(--warn);
+}
+.menu-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: max-content;
+  min-width: 240px;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+}
+.menu-panel .menu-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border-color: transparent;
+  padding: 5px 10px 5px 24px;
+  position: relative;
+  white-space: nowrap;
+}
+.menu-panel .menu-item:hover:not(:disabled),
+.menu-panel .menu-item:focus-visible {
+  background: var(--panel-2);
+  border-color: var(--line);
+}
+/* toggles (background, analyser, edit) show a tick instead of the accent fill */
+.menu-panel .menu-item.on {
+  color: var(--text);
+}
+.menu-panel .menu-item.on::before {
+  content: '✓';
+  position: absolute;
+  left: 8px;
+  color: var(--accent);
+}
+.menu-panel .menu-item.attention {
+  border-color: var(--warn);
+}
+.menu-panel .hint {
+  color: var(--muted);
+}
+.menu-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 10px 4px 24px;
+  white-space: nowrap;
+}
+.menu-row input[type='text'] {
+  flex: 1;
+  min-width: 0;
+}
+
 /* right-click menu (src/ui/context-menu.js) */
 .ctx-menu {
   position: fixed;

@@ -5,6 +5,7 @@
 import { test, expect } from '@playwright/test';
 import { join } from 'node:path';
 import { openApp, loadBoard, boardFiles, clientAt, ROOT } from './viewer-helpers.js';
+import { clickMenu } from './helpers.js';
 import { synthGerber, gerber, drill, bytes } from '../helpers.js';
 import { objectsInPolygon, boxPolygon, sameShape, connected } from '../../src/edit/selection.js';
 import { hitTest } from '../../src/model/hit-test.js';
@@ -19,7 +20,7 @@ const selection = (page) => page.evaluate(() => window.__pcam.app.editor.sel);
 async function startEditing(page) {
   await loadBoard(page);
   await page.locator(`[data-testid=layer][data-name="${FCU}"]`).click();
-  await page.locator('[data-testid=edit-toggle]').click();
+  await clickMenu(page, '[data-testid=edit-toggle]');
   await expect(page.locator('[data-testid=tool-strip]')).toBeVisible();
 }
 

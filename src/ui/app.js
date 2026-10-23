@@ -23,6 +23,7 @@ import { SOLDER_MASK, SILKSCREEN, FINISH, SUBSTRATE, DEBUG, MISC, lookupMaterial
 import { h, clear } from './dom.js';
 import { VIEW_MODES, VIEW_MODE_LABELS, layerColour, toHex, parseHex } from '../model/view-modes.js';
 import { AnalyserDock } from './analyser.js';
+import { MenuBar } from './menubar.js';
 import { EditorPanel } from './editor.js';
 import { LayerStrip } from './layer-strip.js';
 import { describeAperture } from '../analyze/apertures.js';
@@ -161,7 +162,7 @@ export class App {
         'data-testid': 'background',
         title: 'Light or dark background (B)',
       },
-      'Light bg',
+      'Light background',
     );
     this.btnSave = h(
       'button',
@@ -231,29 +232,63 @@ export class App {
       showAll: () => app.#setView({ solo: [] }),
     });
 
+    // menu rows: a label on the left, the key that does the same on the right
+    const item = (b, hint) => {
+      b.classList.add('menu-item');
+      if (hint) b.append(h('span', { class: 'hint' }, hint));
+      return b;
+    };
+    const row = (label, children) =>
+      h('div', { class: 'menu-row' }, [h('span', { class: 'muted' }, label), h('span', { class: 'seg' }, children)]);
+    this.menuBar = new MenuBar([
+      {
+        key: 'file',
+        label: 'File',
+        items: [
+          item(h('button', { id: 'new', onclick: () => this.newProject(), title: 'Start an empty project' }, 'New')),
+          item(h('button', { id: 'open', onclick: () => pcamInput.click(), title: 'Open a .pcam project' }, 'Open…')),
+          item(
+            h(
+              'button',
+              {
+                id: 'add',
+                onclick: () => fileInput.click(),
+                title: 'Add Gerber, Excellon, .gbrjob files or a .zip of them',
+              },
+              'Add files…',
+            ),
+          ),
+          null,
+          item(this.btnSave, 'Ctrl+S'),
+          item(this.btnSaveAs),
+          null,
+          h('label', { class: 'menu-row' }, [h('span', { class: 'muted' }, 'Project name'), this.nameInput]),
+        ],
+      },
+      {
+        key: 'view',
+        label: 'View',
+        items: [
+          item(
+            h('button', { onclick: () => this.#fit(), 'data-testid': 'fit', title: 'Fit board (F)' }, 'Fit board'),
+            'F',
+          ),
+          row('View', Object.values(this.btnDim)),
+          row('Colours', Object.values(this.btnMode)),
+          item(this.btnBg, 'B'),
+          null,
+          item(this.dock.toolbarButton, 'A'),
+          item(this.editor.toolbarButton, 'E'),
+        ],
+      },
+    ]);
+
     const toolbar = h('header', { class: 'toolbar' }, [
       h('span', { class: 'title' }, 'PCB-CAMmotion'),
-      h('button', { id: 'new', onclick: () => this.newProject(), title: 'Start an empty project' }, 'New'),
-      h('button', { id: 'open', onclick: () => pcamInput.click(), title: 'Open a .pcam project' }, 'Open…'),
-      h(
-        'button',
-        { id: 'add', onclick: () => fileInput.click(), title: 'Add Gerber, Excellon, .gbrjob files or a .zip of them' },
-        'Add files…',
-      ),
-      this.btnSave,
-      this.btnSaveAs,
+      this.menuBar.el,
       fileInput,
       pcamInput,
-      h('span', { class: 'sep' }),
-      h('button', { onclick: () => this.#fit(), 'data-testid': 'fit', title: 'Fit board (F)' }, 'Fit'),
-      h('span', { class: 'seg' }, Object.values(this.btnDim)),
       this.explodeBox,
-      h('span', { class: 'seg' }, Object.values(this.btnMode)),
-      this.btnBg,
-      this.dock.toolbarButton,
-      this.editor.toolbarButton,
-      h('span', { class: 'spacer' }),
-      this.nameInput,
     ]);
 
     this.btnShow = Object.fromEntries(
@@ -760,6 +795,7 @@ export class App {
     const m = this.project.manifest;
     document.title = `${this.dirty ? '• ' : ''}${m.name} — PCB-CAMmotion`;
     this.btnSave.classList.toggle('attention', this.dirty);
+    this.menuBar.title('file').classList.toggle('attention', this.dirty);
     this.projectInfo.textContent = `schema ${m.schemaVersion} · ${m.units} · app ${APP_VERSION}`;
   }
 

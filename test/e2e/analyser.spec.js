@@ -2,6 +2,7 @@
 
 import { test, expect } from '@playwright/test';
 import { openApp, loadBoard, pixelAt, clientAt, waitRendered } from './viewer-helpers.js';
+import { clickMenu } from './helpers.js';
 import { FINISH } from '../../src/model/materials.js';
 
 test.use({ viewport: { width: 1400, height: 900 } });
@@ -177,7 +178,7 @@ test('analyser state survives save and reopen', async ({ page, browser }) => {
   await page.locator('[data-testid=tab-commands]').click();
   for (let i = 0; i < 5; i++) await page.locator('[data-testid=pb-forward]').click();
   const before = await settings(page);
-  const [download] = await Promise.all([page.waitForEvent('download'), page.locator('[data-testid=save]').click()]);
+  const [download] = await Promise.all([page.waitForEvent('download'), clickMenu(page, '[data-testid=save]')]);
   const path = test.info().outputPath('analyser.pcam');
   await download.saveAs(path);
   const page2 = await browser.newPage({ viewport: { width: 1400, height: 900 } });
@@ -208,13 +209,13 @@ test('the Analyser button turns the dock on and off; the board gets the space ba
   // playback and highlight end when the dock is hidden, so the board shows normally
   await page.locator('[data-testid=aperture-row][data-code="14"]').click();
   await page.locator('[data-testid=pb-rewind]').click();
-  await toggle.click();
+  await clickMenu(page, '[data-testid=analyser-toggle]');
   await expect(dock).toBeHidden();
   await expect(toggle).toHaveAttribute('aria-pressed', 'false');
   expect(await boardHeight()).toBeGreaterThan(withDock + 100);
   expect(await settings(page)).toMatchObject({ open: false, highlight: null, playback: { layer: null, step: null } });
   expect(await page.evaluate((n) => window.__pcam.app.layerById(n).limit, FCU)).toBeUndefined();
-  await toggle.click();
+  await clickMenu(page, '[data-testid=analyser-toggle]');
   await expect(dock).toBeVisible();
   // the ✕ in the dock and the A key do the same
   await page.locator('[data-testid=dock-toggle]').click();

@@ -4,6 +4,7 @@
 import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { openApp, loadBoard, clientAt, waitRendered } from './viewer-helpers.js';
+import { clickMenu } from './helpers.js';
 import { loadProject } from '../../src/project/pcam.js';
 import { parseGerber } from '../../src/parse/gerber.js';
 import { interpretGerber } from '../../src/model/gerber-image.js';
@@ -63,7 +64,7 @@ async function clickMm(page, x, y, opts) {
 async function startEditing(page) {
   await loadBoard(page);
   await selectLayer(page, FCU);
-  await page.locator('[data-testid=edit-toggle]').click();
+  await clickMenu(page, '[data-testid=edit-toggle]');
   await expect(page.locator('[data-testid=editor]')).toBeVisible();
 }
 
@@ -196,14 +197,14 @@ test('unify the layer into regions; edits survive save and reopen; export parses
   expect(interpretGerber(parsed).objects.length).toBe(unified.length);
 
   const saving = page.waitForEvent('download');
-  await page.locator('[data-testid=save]').click();
+  await clickMenu(page, '[data-testid=save]');
   const pcamPath = testInfo.outputPath('edited.pcam');
   await (await saving).saveAs(pcamPath);
   const project = loadProject(new Uint8Array(readFileSync(pcamPath)));
   expect(project.manifest.schemaVersion).toBe(2);
   expect(project.edits[FCU].ops.map((o) => o.type)).toEqual(['delete', 'unifyLayer']);
 
-  await page.locator('#new').click();
+  await clickMenu(page, '#new');
   page.once('dialog', (d) => d.accept());
   await page.locator('#open-input').setInputFiles(pcamPath);
   await expect(page.locator(`[data-testid=layer][data-name="${FCU}"] [data-testid=edited]`)).toHaveText('✎2');
@@ -222,7 +223,7 @@ test('drill layer: add a hole with a new tool, shift+drag box selects holes', as
   await loadBoard(page);
   const drl = await page.evaluate(() => window.__pcam.app.layers.find((l) => l.kind === 'excellon').name);
   await selectLayer(page, drl);
-  await page.locator('[data-testid=edit-toggle]').click();
+  await clickMenu(page, '[data-testid=edit-toggle]');
   await expect(page.locator('[data-testid=tool-track]')).toHaveCount(0);
   const n0 = (await objects(page, drl)).length;
   await page.locator('[data-testid=tool-pad]').click();
@@ -279,7 +280,7 @@ test('auto select layer: clicking a shape moves to its layer; switched off, the 
   await expect(page.locator('[data-testid=inspector]')).toContainText('Flash (D03)');
   // in edit mode it switches the edited layer and selects the shape there
   await selectLayer(page, BCU);
-  await page.locator('[data-testid=edit-toggle]').click();
+  await clickMenu(page, '[data-testid=edit-toggle]');
   await clickMm(page, pad.x, pad.y);
   await expect(active()).toHaveAttribute('data-name', FCU);
   await expect(page.locator('[data-testid=edit-selection]')).toHaveText('1 selected');
@@ -291,7 +292,7 @@ test('auto select layer: clicking a shape moves to its layer; switched off, the 
   await expect(page.locator('[data-testid=inspector]')).toContainText('Flash (D03)');
   await expect(active()).toHaveAttribute('data-name', BCU);
   // and in edit mode only the edited layer can be picked, as before
-  await page.locator('[data-testid=edit-toggle]').click();
+  await clickMenu(page, '[data-testid=edit-toggle]');
   await clickMm(page, pad.x, pad.y);
   await expect(active()).toHaveAttribute('data-name', BCU);
   await expect(page.locator('[data-testid=edit-selection]')).not.toHaveText('1 selected');

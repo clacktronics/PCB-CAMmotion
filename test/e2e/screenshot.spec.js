@@ -3,6 +3,7 @@
 
 import { test, expect } from '@playwright/test';
 import { openApp, loadBoard, waitRendered } from './viewer-helpers.js';
+import { clickMenu } from './helpers.js';
 
 test.use({ viewport: { width: 1400, height: 850 } });
 
@@ -25,8 +26,11 @@ for (const [name, clicks] of views) {
       main.style.flex = 'none';
     });
     await page.evaluate(() => window.__pcam.app.viewer.resize());
-    await page.locator('[data-testid=fit]').click();
-    for (const c of clicks) await page.locator(`[data-testid=${c}]`).click();
+    await clickMenu(page, '[data-testid=fit]');
+    for (const c of clicks)
+      await (c.startsWith('mode-')
+        ? clickMenu(page, `[data-testid=${c}]`)
+        : page.locator(`[data-testid=${c}]`).click());
     await waitRendered(page);
     // the baselines are the board only: hide the layer strip that floats over the canvas
     await page.evaluate(() => (document.querySelector('[data-testid=layer-strip]').style.visibility = 'hidden'));

@@ -4,7 +4,17 @@ import { test, expect } from '@playwright/test';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { SCHEMA_VERSION } from '../../src/project/schema.js';
 import { loadProject } from '../../src/project/pcam.js';
-import { MODES, TEST_BOARD, appUrl, dropFiles, failOnErrors, guardNetwork, openApp } from './helpers.js';
+import {
+  MODES,
+  TEST_BOARD,
+  appUrl,
+  dropFiles,
+  failOnErrors,
+  guardNetwork,
+  openApp,
+  clickMenu,
+  menuItem,
+} from './helpers.js';
 
 const BOARD_FILES = [
   'cammotion-test-board-F_Cu.gbr',
@@ -13,7 +23,7 @@ const BOARD_FILES = [
 ];
 
 async function saveDownload(page, testInfo, name) {
-  const [download] = await Promise.all([page.waitForEvent('download'), page.locator('#save').click()]);
+  const [download] = await Promise.all([page.waitForEvent('download'), clickMenu(page, '#save')]);
   const path = testInfo.outputPath(name);
   await download.saveAs(path);
   return { path, suggested: download.suggestedFilename(), bytes: new Uint8Array(readFileSync(path)) };
@@ -43,14 +53,14 @@ for (const mode of MODES) {
     });
 
     test('empty .pcam saves and reloads', async ({ page }, testInfo) => {
-      await page.locator('#project-name').fill('empty board');
+      await (await menuItem(page, '#project-name')).fill('empty board');
       const saved = await saveDownload(page, testInfo, 'empty.pcam');
       expect(saved.suggested).toBe('empty board.pcam');
       const project = loadProject(saved.bytes);
       expect(project.manifest.name).toBe('empty board');
       expect(project.sources).toEqual([]);
 
-      await page.locator('#new').click();
+      await clickMenu(page, '#new');
       await expect(page.locator('#project-name')).toHaveValue('untitled');
       await page.locator('#open-input').setInputFiles(saved.path);
       await expect(page.locator('#project-name')).toHaveValue('empty board');
@@ -73,7 +83,7 @@ for (const mode of MODES) {
 
       // Dropping a .pcam opens it.
       page.on('dialog', (d) => d.accept());
-      await page.locator('#new').click();
+      await clickMenu(page, '#new');
       await expect(page.locator('.source-row')).toHaveCount(0);
       await dropFiles(page, [saved.path]);
       await expect(page.locator('.source-row')).toHaveCount(BOARD_FILES.length);

@@ -27072,6 +27072,83 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     return c;
   }
 
+  // src/ui/menubar.js
+  var MenuBar = class {
+    constructor(menus) {
+      this.menus = menus.map((m) => {
+        const button = h(
+          "button",
+          {
+            class: "menu-title",
+            "data-testid": `menu-${m.key}`,
+            "aria-haspopup": "true",
+            "aria-expanded": "false",
+            onclick: () => this.toggle(m.key),
+            onmouseenter: () => this.open && this.open !== m.key && this.show(m.key)
+          },
+          m.label
+        );
+        const panel = h(
+          "div",
+          { class: "menu-panel hidden", role: "menu", "data-menu": m.key, "data-testid": `menu-${m.key}-panel` },
+          m.items.map((it) => it || h("div", { class: "ctx-sep", role: "separator" }))
+        );
+        panel.addEventListener("click", (e) => {
+          if (e.target.closest("button")) this.close();
+        });
+        return { key: m.key, button, panel, el: h("div", { class: "menu" }, [button, panel]) };
+      });
+      this.open = null;
+      this.el = h(
+        "nav",
+        { class: "menubar" },
+        this.menus.map((m) => m.el)
+      );
+      window.addEventListener("pointerdown", (e) => {
+        if (this.open && !this.el.contains(e.target)) this.close();
+      });
+      window.addEventListener(
+        "keydown",
+        (e) => {
+          if (this.open && e.key === "Escape") {
+            e.stopPropagation();
+            const m = this.byKey(this.open);
+            this.close();
+            m.button.focus();
+          }
+        },
+        true
+      );
+    }
+    byKey(key2) {
+      return this.menus.find((m) => m.key === key2);
+    }
+    /** The title button of a menu, e.g. to mark it when something inside needs attention. */
+    title(key2) {
+      return this.byKey(key2).button;
+    }
+    toggle(key2) {
+      if (this.open === key2) this.close();
+      else this.show(key2);
+    }
+    show(key2) {
+      this.open = key2;
+      for (const m of this.menus) {
+        m.panel.classList.toggle("hidden", m.key !== key2);
+        m.button.classList.toggle("open", m.key === key2);
+        m.button.setAttribute("aria-expanded", m.key === key2 ? "true" : "false");
+      }
+    }
+    close() {
+      this.open = null;
+      for (const m of this.menus) {
+        m.panel.classList.add("hidden");
+        m.button.classList.remove("open");
+        m.button.setAttribute("aria-expanded", "false");
+      }
+    }
+  };
+
   // src/edit/selection.js
   var TOL_MM = 2e-3;
   var EPS = 1e-9;
@@ -28426,7 +28503,7 @@ Click: show only this layer${turns ? `, seen from the ${s.side}` : ""} · Shift+
           "data-testid": "background",
           title: "Light or dark background (B)"
         },
-        "Light bg"
+        "Light background"
       );
       this.btnSave = h(
         "button",
@@ -28493,29 +28570,60 @@ Click: show only this layer${turns ? `, seen from the ${s.side}` : ""} · Shift+
         toggleSolo: (id3) => app.#soloLayer(id3),
         showAll: () => app.#setView({ solo: [] })
       });
+      const item = (b3, hint) => {
+        b3.classList.add("menu-item");
+        if (hint) b3.append(h("span", { class: "hint" }, hint));
+        return b3;
+      };
+      const row = (label, children) => h("div", { class: "menu-row" }, [h("span", { class: "muted" }, label), h("span", { class: "seg" }, children)]);
+      this.menuBar = new MenuBar([
+        {
+          key: "file",
+          label: "File",
+          items: [
+            item(h("button", { id: "new", onclick: () => this.newProject(), title: "Start an empty project" }, "New")),
+            item(h("button", { id: "open", onclick: () => pcamInput.click(), title: "Open a .pcam project" }, "Open…")),
+            item(
+              h(
+                "button",
+                {
+                  id: "add",
+                  onclick: () => fileInput.click(),
+                  title: "Add Gerber, Excellon, .gbrjob files or a .zip of them"
+                },
+                "Add files…"
+              )
+            ),
+            null,
+            item(this.btnSave, "Ctrl+S"),
+            item(this.btnSaveAs),
+            null,
+            h("label", { class: "menu-row" }, [h("span", { class: "muted" }, "Project name"), this.nameInput])
+          ]
+        },
+        {
+          key: "view",
+          label: "View",
+          items: [
+            item(
+              h("button", { onclick: () => this.#fit(), "data-testid": "fit", title: "Fit board (F)" }, "Fit board"),
+              "F"
+            ),
+            row("View", Object.values(this.btnDim)),
+            row("Colours", Object.values(this.btnMode)),
+            item(this.btnBg, "B"),
+            null,
+            item(this.dock.toolbarButton, "A"),
+            item(this.editor.toolbarButton, "E")
+          ]
+        }
+      ]);
       const toolbar = h("header", { class: "toolbar" }, [
         h("span", { class: "title" }, "PCB-CAMmotion"),
-        h("button", { id: "new", onclick: () => this.newProject(), title: "Start an empty project" }, "New"),
-        h("button", { id: "open", onclick: () => pcamInput.click(), title: "Open a .pcam project" }, "Open…"),
-        h(
-          "button",
-          { id: "add", onclick: () => fileInput.click(), title: "Add Gerber, Excellon, .gbrjob files or a .zip of them" },
-          "Add files…"
-        ),
-        this.btnSave,
-        this.btnSaveAs,
+        this.menuBar.el,
         fileInput,
         pcamInput,
-        h("span", { class: "sep" }),
-        h("button", { onclick: () => this.#fit(), "data-testid": "fit", title: "Fit board (F)" }, "Fit"),
-        h("span", { class: "seg" }, Object.values(this.btnDim)),
-        this.explodeBox,
-        h("span", { class: "seg" }, Object.values(this.btnMode)),
-        this.btnBg,
-        this.dock.toolbarButton,
-        this.editor.toolbarButton,
-        h("span", { class: "spacer" }),
-        this.nameInput
+        this.explodeBox
       ]);
       this.btnShow = Object.fromEntries(
         LAYER_GROUPS.map((g) => [
@@ -28986,6 +29094,7 @@ Click: show only this layer${turns ? `, seen from the ${s.side}` : ""} · Shift+
       const m = this.project.manifest;
       document.title = `${this.dirty ? "• " : ""}${m.name} — PCB-CAMmotion`;
       this.btnSave.classList.toggle("attention", this.dirty);
+      this.menuBar.title("file").classList.toggle("attention", this.dirty);
       this.projectInfo.textContent = `schema ${m.schemaVersion} · ${m.units} · app ${APP_VERSION}`;
     }
     // ---------------------------------------------------------------- panels

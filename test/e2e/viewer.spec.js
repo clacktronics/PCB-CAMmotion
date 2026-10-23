@@ -11,6 +11,7 @@ import {
   viewFromSide,
   ROOT,
 } from './viewer-helpers.js';
+import { clickMenu } from './helpers.js';
 
 test.use({ viewport: { width: 1400, height: 850 } });
 import { MISC, FINISH } from '../../src/model/materials.js';
@@ -19,7 +20,7 @@ test('opens from file:// with no network requests and no errors', async ({ page 
   const { external, errors } = await openApp(page);
   await expect(page.getByText('Drop Gerber, Excellon')).toBeVisible();
   await loadBoard(page);
-  await page.locator('[data-testid=mode-debug]').click();
+  await clickMenu(page, '[data-testid=mode-debug]');
   await viewFromSide(page, 'bottom');
   await waitRendered(page);
   expect(external).toEqual([]);
@@ -62,7 +63,7 @@ test('debug colours and bottom view change the picture', async ({ page }) => {
   await openApp(page);
   await loadBoard(page);
   const before = await pixelAt(page, 30, 40.3);
-  await page.locator('[data-testid=mode-debug]').click();
+  await clickMenu(page, '[data-testid=mode-debug]');
   await waitRendered(page);
   const debug = await pixelAt(page, 30, 40.3);
   expect(debug).not.toEqual(before);
@@ -109,7 +110,7 @@ test('zoom with the wheel and pan by dragging', async ({ page }) => {
   const v2 = (await page.evaluate(() => window.__pcam.state())).view;
   expect(v2.cx).toBeLessThan(v1.cx);
   expect(v2.cy).toBeGreaterThan(v1.cy);
-  await page.locator('[data-testid=fit]').click();
+  await clickMenu(page, '[data-testid=fit]');
   const v3 = (await page.evaluate(() => window.__pcam.state())).view;
   expect(Math.abs(v3.scale - v0.scale)).toBeLessThan(1e-6);
 });
@@ -130,12 +131,12 @@ test('drag and drop of files loads them', async ({ page }) => {
 test('save a .pcam, reopen it in a fresh page: same layers, settings and view', async ({ page, browser }) => {
   await openApp(page);
   await loadBoard(page);
-  await page.locator('[data-testid=mode-debug]').click();
+  await clickMenu(page, '[data-testid=mode-debug]');
   await viewFromSide(page, 'bottom');
   await page.locator('[data-testid=layer] [data-testid=solo]').first().click();
   await page.locator('[data-testid=stack-mask-top-]').selectOption('red');
   const before = await page.evaluate(() => window.__pcam.state());
-  const [download] = await Promise.all([page.waitForEvent('download'), page.locator('[data-testid=save]').click()]);
+  const [download] = await Promise.all([page.waitForEvent('download'), clickMenu(page, '[data-testid=save]')]);
   expect(download.suggestedFilename()).toBe('synthetic-board.pcam');
   const path = test.info().outputPath('saved.pcam');
   await download.saveAs(path);

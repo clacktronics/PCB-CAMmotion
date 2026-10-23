@@ -5,6 +5,7 @@ import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { openApp, loadBoard, boardFiles, ROOT } from './viewer-helpers.js';
+import { clickMenu } from './helpers.js';
 
 test.use({ viewport: { width: 1400, height: 850 } });
 
@@ -87,7 +88,7 @@ test('click shows only that layer (solo) and selects it; T and B turn the board;
 test('in edit mode the strip picks the edited layer', async ({ page }) => {
   await openApp(page);
   await loadBoard(page, fourLayerFiles());
-  await page.locator('[data-testid=edit-toggle]').click();
+  await clickMenu(page, '[data-testid=edit-toggle]');
   await btn(page, '1').click();
   expect(await page.evaluate(() => window.__pcam.app.viewer.settings.pickLayerId)).toBe('inner-copper-In1_Cu.gbr');
 });
