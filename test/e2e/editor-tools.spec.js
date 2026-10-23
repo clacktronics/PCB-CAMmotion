@@ -2,8 +2,9 @@
 // right-click menu (same shape, same aperture, connected; edit from outside edit mode).
 
 import { test, expect } from '@playwright/test';
-import { openApp, loadBoard, clientAt } from './viewer-helpers.js';
-import { synthGerber } from '../helpers.js';
+import { join } from 'node:path';
+import { openApp, loadBoard, boardFiles, clientAt, ROOT } from './viewer-helpers.js';
+import { synthGerber, gerber, drill, bytes } from '../helpers.js';
 import { objectsInPolygon, boxPolygon, sameShape, connected } from '../../src/edit/selection.js';
 import { hitTest } from '../../src/model/hit-test.js';
 
@@ -210,5 +211,37 @@ test('right-click outside edit mode: edit the object, or select alike, on its la
   await expect(page.locator('[data-testid=editor]')).toBeVisible();
   expect(await page.evaluate(() => window.__pcam.app.activeLayerId)).toBe(layerName);
   expect((await selection(page)).length).toBeGreaterThan(0);
+  expect(errors).toEqual([]);
+});
+
+test('right-click outside edit mode: select connected uses the copper under a hole or legend', async ({ page }) => {
+  const { errors } = await openApp(page);
+  const dir = join(ROOT, 'samples/clockblock');
+  await loadBoard(page, boardFiles(dir));
+  const name = 'clockblock-F_Cu.gbr';
+  const cu = gerber(bytes(join(dir, name))).image;
+  const holes = drill(bytes(join(dir, 'clockblock.drl'))).image.objects;
+  // a plated pad with a track leaving it and a hole drawn on top of it
+  const pad = cu.objects.findIndex(
+    (o, i) =>
+      o.k === 'F' &&
+      o.dark &&
+      holes.some((h) => Math.hypot(h.x - o.x, h.y - o.y) < 1e-3) &&
+      connected(cu, [i]).length > 2,
+  );
+  expect(pad).toBeGreaterThanOrEqual(0);
+  const p = cu.objects[pad];
+  const [cx, cy] = await clientAt(page, p.x, p.y);
+  // the bug: the hole on top stood in for the pad, so "connected" found only the hole
+  expect(await page.evaluate(([x, y]) => window.__pcam.app.viewer.pick(x, y)?.layerId, [cx, cy])).toBe(
+    'clockblock.drl',
+  );
+  await page.mouse.click(cx, cy, { button: 'right' });
+  await page.locator('[data-testid=context-menu] [data-testid=ctx-connected]').click();
+  await expect(page.locator('[data-testid=editor]')).toBeVisible();
+  expect(await page.evaluate(() => window.__pcam.app.activeLayerId)).toBe(name);
+  const sel = await selection(page);
+  expect(sel).toEqual(connected(cu, [hitTest(cu, p.x, p.y)]));
+  expect(sel).toContain(pad);
   expect(errors).toEqual([]);
 });

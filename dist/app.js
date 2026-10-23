@@ -5115,11 +5115,15 @@
       const [x2, y2] = this.toMm(clientX, clientY);
       return this.pickAt(x2, y2);
     }
-    /** Topmost visible object at a board point (mm). */
-    pickAt(x2, y2) {
+    /**
+     * Topmost visible object at a board point (mm), optionally only on layers `accept` takes
+     * (e.g. copper only, for "select connected").
+     */
+    pickAt(x2, y2, accept = null) {
       const tol = 3 / this.view.scale;
       const only = this.settings.pickLayerId;
-      const order = only ? this.layers.filter((l) => l.id === only && l.image) : this.#pickOrder();
+      let order = only ? this.layers.filter((l) => l.id === only && l.image) : this.#pickOrder();
+      if (accept) order = order.filter(accept);
       for (const l of order) {
         let i = only ? hitTest(l.image, x2, y2, 0) : -1;
         if (i < 0) i = hitTest(l.image, x2, y2, tol);
@@ -27795,10 +27799,11 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
       if (!this.on) {
         const l = hit && this.host.layers().find((x2) => x2.id === hit.layerId);
         if (!l || l.kind !== "gerber" && l.kind !== "excellon") return false;
-        const edit = (then) => () => {
-          this.host.editLayer(l.id);
+        const copper = v.pickAt(mm2[0], mm2[1], (x2) => x2.kind === "gerber" && x2.role?.type === "copper");
+        const edit = (then, h2 = hit) => () => {
+          this.host.editLayer(h2.layerId);
           if (!this.on) this.setOn(true);
-          this.select([hit.index]);
+          this.select([h2.index]);
           then?.();
         };
         openMenu(clientX, clientY, [
@@ -27811,7 +27816,12 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
             disabled: !hit.object.ap,
             action: edit(() => this.selectBy("aperture"))
           },
-          { label: "Select connected", testid: "ctx-connected", action: edit(() => this.selectBy("connected")) }
+          {
+            label: "Select connected",
+            testid: "ctx-connected",
+            disabled: !copper,
+            action: copper && edit(() => this.selectBy("connected"), copper)
+          }
         ]);
         return true;
       }

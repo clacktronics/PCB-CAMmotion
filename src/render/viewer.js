@@ -336,12 +336,16 @@ export class Viewer {
     return this.pickAt(x, y);
   }
 
-  /** Topmost visible object at a board point (mm). */
-  pickAt(x, y) {
+  /**
+   * Topmost visible object at a board point (mm), optionally only on layers `accept` takes
+   * (e.g. copper only, for "select connected").
+   */
+  pickAt(x, y, accept = null) {
     const tol = 3 / this.view.scale; // 3 CSS px
     // in edit mode only the layer being edited can be picked
     const only = this.settings.pickLayerId;
-    const order = only ? this.layers.filter((l) => l.id === only && l.image) : this.#pickOrder();
+    let order = only ? this.layers.filter((l) => l.id === only && l.image) : this.#pickOrder();
+    if (accept) order = order.filter(accept);
     for (const l of order) {
       // editing: an object under the point wins over a near miss on a neighbour (fine pitch)
       let i = only ? hitTest(l.image, x, y, 0) : -1;

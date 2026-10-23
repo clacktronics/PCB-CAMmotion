@@ -505,12 +505,17 @@ export class EditorPanel {
     if (!this.on) {
       const l = hit && this.host.layers().find((x) => x.id === hit.layerId);
       if (!l || (l.kind !== 'gerber' && l.kind !== 'excellon')) return false;
-      const edit = (then) => () => {
-        this.host.editLayer(l.id);
-        if (!this.on) this.setOn(true);
-        this.select([hit.index]);
-        then?.();
-      };
+      // connectivity is a copper question: a hole, mask opening or legend on top of a pad
+      // must not stand in for the pad, so look for the topmost copper object under the pointer
+      const copper = v.pickAt(mm[0], mm[1], (x) => x.kind === 'gerber' && x.role?.type === 'copper');
+      const edit =
+        (then, h = hit) =>
+        () => {
+          this.host.editLayer(h.layerId);
+          if (!this.on) this.setOn(true);
+          this.select([h.index]);
+          then?.();
+        };
       openMenu(clientX, clientY, [
         { label: `Edit ${l.name}`, hint: 'E', testid: 'ctx-edit', action: edit() },
         null,
@@ -521,7 +526,12 @@ export class EditorPanel {
           disabled: !hit.object.ap,
           action: edit(() => this.selectBy('aperture')),
         },
-        { label: 'Select connected', testid: 'ctx-connected', action: edit(() => this.selectBy('connected')) },
+        {
+          label: 'Select connected',
+          testid: 'ctx-connected',
+          disabled: !copper,
+          action: copper && edit(() => this.selectBy('connected'), copper),
+        },
       ]);
       return true;
     }
