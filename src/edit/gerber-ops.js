@@ -17,6 +17,11 @@
 //                                                      each becomes regions of what is left of
 //                                                      it, drawn where it was (nothing left:
 //                                                      removed); clipMm is a list of contours
+//   { type: 'cutProfile', clipMm }                     cut a shape out of the board on a profile
+//                                                      (Edge.Cuts) layer: the outline lines and
+//                                                      arcs it crosses are trimmed and its edge
+//                                                      inside the board is drawn, so the outline
+//                                                      stays closed (src/edit/profile-cut.js)
 //   { type: 'moveVertex' | 'insertVertex' | 'deleteVertex', target, ... }
 //                                                      edit a region's corners (src/edit/region-nodes.js)
 // targets are command indices (at the time the op runs) of the commands that produced the
@@ -35,6 +40,8 @@ import { imageContours, nestPolygons, booleanOp, contoursArea, DEFAULT_TOL_MM } 
 import { joinHoles, validContour } from './cut-ins.js';
 import { emitObject } from '../render/draw-image.js';
 import { applyNodeOp, NODE_OPS } from './region-nodes.js';
+import { cutProfile as profileCutGeometry } from './profile-cut.js';
+import { extractOutline } from '../model/outline.js';
 
 const TAU = Math.PI * 2;
 
@@ -278,6 +285,8 @@ export function applyGerberOp(commands, op, ctx) {
       return cutOut(commands, op, ctx, count);
     case 'paint':
       return paint(commands, op, ctx, count);
+    case 'cutProfile':
+      return cutProfile(commands, op, ctx, count);
     default:
       if (NODE_OPS.includes(op.type)) return applyNodeOp(commands, op);
       throw new EditError(`Unknown edit ${op.type}`);
@@ -666,6 +675,93 @@ function cutOut(commands, op, ctx, count) {
     edits.push({ ...e, insert: [...insert, ...e.insert], select });
   }
   if (!edits.length) throw new EditError('Nothing to cut out: the shape does not overlap the objects');
+  return spliceMany(commands, edits);
+}
+
+/**
+ * Cut a shape out of the board drawn on a profile layer, keeping its outline closed: each
+ * line or arc the shape's outline crosses is replaced, where it was, by the pieces of it
+ * outside the shape (arcs stay arcs), and the shape's outline inside the board is drawn at
+ * the end of the file with the aperture of the first trimmed object.
+ */
+function cutProfile(commands, op, ctx, count) {
+  const image = ctx.image;
+  const clip = clipContours(op.clipMm);
+  // the outline objects that can be edited one by one: dark single lines and arcs
+  const objs = [];
+  const infos = [];
+  image.objects.forEach((o, i) => {
+    if (!o.dark || (o.k !== 'L' && o.k !== 'A')) return;
+    const t = gerberTarget(commands, image, i);
+    if (t.error || t.kind !== 'draw' || t.objects[1] - t.objects[0] !== 1) return;
+    objs.push(o);
+    infos.push(t);
+  });
+  const { pieces, bridges, changed } = profileCutGeometry(objs, clip, extractOutline(image).loops);
+  if (!changed) throw new EditError('Nothing to cut: the shape does not cross the board outline');
+  const edits = [];
+  let bridgeAp = null;
+  pieces.forEach((kept, k) => {
+    if (!kept) return;
+    const o = objs[k];
+    const t = infos[k];
+    bridgeAp ??= o.ap.code;
+    const c = commands[t.ci];
+    const st = scanState(commands, t.ci);
+    const start = pointBefore(commands, t.ci);
+    const insert = [];
+    const sel = [];
+    const pt = (p, tt) => (tt === 0 ? start : tt === 1 ? [c.x, c.y] : [count(p[0]), count(p[1])]);
+    let interp = st.interp;
+    const g = (code) => {
+      if (interp !== code) insert.push({ type: 'G', code, line: o.ln });
+      interp = code;
+    };
+    const arcs = o.k === 'A' && kept.length > 0;
+    // the centre in counts: exact from the command in multi-quadrant mode (spec 4.7.2)
+    const centre =
+      o.k === 'A' && st.quadrant === 'multi' && c.i !== undefined
+        ? [start[0] + c.i, start[1] + (c.j ?? 0)]
+        : [count(o.cx ?? 0), count(o.cy ?? 0)];
+    if (arcs && st.quadrant !== 'multi') insert.push({ type: 'G', code: 75, line: o.ln });
+    let cur = start;
+    for (const p of kept) {
+      const a = pt(p.p0, p.t0);
+      const b = pt(p.p1, p.t1);
+      if (a[0] === b[0] && a[1] === b[1] && !(o.k === 'A' && p.t0 === 0 && p.t1 === 1)) continue;
+      if (a[0] !== cur[0] || a[1] !== cur[1]) insert.push(D(2, a[0], a[1], o.ln));
+      cur = b;
+      g(o.k === 'L' ? 1 : o.sw > 0 ? 3 : 2);
+      sel.push(insert.length);
+      insert.push(D(1, b[0], b[1], o.ln, o.k === 'A' ? { i: centre[0] - a[0], j: centre[1] - a[1] } : {}));
+    }
+    if (arcs && st.quadrant === 'single') insert.push({ type: 'G', code: 74, line: o.ln });
+    if (interp !== st.interp) insert.push({ type: 'G', code: st.interp, line: o.ln });
+    const e = removal(commands, t);
+    edits.push({ ...e, insert: [...insert, ...e.insert], select: sel });
+  });
+  if (bridges.length) {
+    const at = insertionPoint(commands);
+    const st = scanState(commands, at);
+    const insert = resetState(st);
+    const unit = fileUnit(commands);
+    const ap = resolveAperture(commands, { code: bridgeAp ?? objs[0].ap.code }, ctx, unit, ['C', 'R']);
+    if (st.ap !== ap.code) insert.push({ type: 'Dnn', code: ap.code, line: 0 });
+    if (st.interp !== 1) insert.push({ type: 'G', code: 1, line: 0 });
+    const sel = [];
+    for (const pts of bridges) {
+      const cs = pts.map(([x, y]) => [count(x), count(y)]);
+      insert.push(D(2, cs[0][0], cs[0][1], 0));
+      let cur = cs[0];
+      for (const p of cs.slice(1)) {
+        if (p[0] === cur[0] && p[1] === cur[1]) continue;
+        sel.push(insert.length);
+        insert.push(D(1, p[0], p[1], 0));
+        cur = p;
+      }
+    }
+    edits.push({ at, remove: 0, insert, select: sel });
+  }
   return spliceMany(commands, edits);
 }
 

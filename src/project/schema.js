@@ -18,7 +18,7 @@
 import { APP_VERSION } from '../version.js';
 
 export const PCAM_FORMAT = 'pcam';
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 export const PROJECT_UNITS = 'mm';
 
 /**
@@ -64,6 +64,9 @@ export const MIGRATIONS = {
   // 3 → 4: the rubber and paint brushes add the cutOut and paint edit ops (src/edit/gerber-ops.js). Schema-3 edits replay
   // unchanged, so only the version changes; older apps refuse files they could not replay.
   3: (raw) => ({ ...raw, manifest: { ...raw.manifest, schemaVersion: 4 } }),
+  // 4 → 5: the rubber on a board profile adds the cutProfile edit op (src/edit/gerber-ops.js).
+  // Schema-4 edits replay unchanged, so only the version changes; older apps refuse files they could not replay.
+  4: (raw) => ({ ...raw, manifest: { ...raw.manifest, schemaVersion: 5 } }),
 };
 
 /**

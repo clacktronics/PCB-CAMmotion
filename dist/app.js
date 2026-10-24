@@ -21389,9 +21389,9 @@ void main() {
       const b3 = this.frame.bounds;
       const size = Math.max(b3[2] - b3[0], b3[3] - b3[1], 1);
       const target = new w((b3[0] + b3[2]) / 2, (b3[1] + b3[3]) / 2, 0);
-      const dist = size * 0.62 / Math.tan(FOV_DEG / 2 * Math.PI / 180);
+      const dist2 = size * 0.62 / Math.tan(FOV_DEG / 2 * Math.PI / 180);
       const dir = new w(0.3, -0.9, this.settings.side === "bottom" ? -0.85 : 0.85).normalize();
-      this.camera.position.copy(target).addScaledVector(dir, dist);
+      this.camera.position.copy(target).addScaledVector(dir, dist2);
       this.controls.target.copy(target);
       this.#clip(size);
       this.controls.update();
@@ -21491,7 +21491,7 @@ void main() {
 
   // src/project/schema.js
   var PCAM_FORMAT = "pcam";
-  var SCHEMA_VERSION = 4;
+  var SCHEMA_VERSION = 5;
   var PROJECT_UNITS = "mm";
   function createEmptyProject({ name = "untitled", now = /* @__PURE__ */ new Date() } = {}) {
     const stamp = now.toISOString();
@@ -21524,7 +21524,10 @@ void main() {
     2: (raw) => ({ ...raw, manifest: { ...raw.manifest, schemaVersion: 3 } }),
     // 3 → 4: the rubber and paint brushes add the cutOut and paint edit ops (src/edit/gerber-ops.js). Schema-3 edits replay
     // unchanged, so only the version changes; older apps refuse files they could not replay.
-    3: (raw) => ({ ...raw, manifest: { ...raw.manifest, schemaVersion: 4 } })
+    3: (raw) => ({ ...raw, manifest: { ...raw.manifest, schemaVersion: 4 } }),
+    // 4 → 5: the rubber on a board profile adds the cutProfile edit op (src/edit/gerber-ops.js).
+    // Schema-4 edits replay unchanged, so only the version changes; older apps refuse files they could not replay.
+    4: (raw) => ({ ...raw, manifest: { ...raw.manifest, schemaVersion: 5 } })
   };
   function migrate(raw, migrations = MIGRATIONS, target = SCHEMA_VERSION) {
     let current2 = raw;
@@ -24393,13 +24396,13 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     }
     arc(cx, cy, r2, a0, a1, anticlockwise) {
       let sw = a1 - a0;
-      const TAU7 = Math.PI * 2;
+      const TAU8 = Math.PI * 2;
       if (!anticlockwise) {
-        if (sw < 0) sw += TAU7 * Math.ceil(-sw / TAU7);
-        if (sw > TAU7) sw = TAU7;
+        if (sw < 0) sw += TAU8 * Math.ceil(-sw / TAU8);
+        if (sw > TAU8) sw = TAU8;
       } else {
-        if (sw > 0) sw -= TAU7 * Math.ceil(sw / TAU7);
-        if (sw < -TAU7) sw = -TAU7;
+        if (sw > 0) sw -= TAU8 * Math.ceil(sw / TAU8);
+        if (sw < -TAU8) sw = -TAU8;
       }
       const rpx = r2 * this.s;
       const tol = 0.2;
@@ -25444,8 +25447,246 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     return out;
   }
 
-  // src/edit/gerber-ops.js
+  // src/edit/profile-cut.js
   var TAU6 = Math.PI * 2;
+  var EPS = 1e-12;
+  var MIN_STEP_MM = 0.0101;
+  function sparseContours(contours) {
+    const out = [];
+    for (const c of contours) {
+      const kept = [];
+      for (let i = 0; i < c.length; i += 2) {
+        const n2 = kept.length;
+        if (n2 && Math.max(Math.abs(c[i] - kept[n2 - 2]), Math.abs(c[i + 1] - kept[n2 - 1])) < MIN_STEP_MM) continue;
+        kept.push(c[i], c[i + 1]);
+      }
+      while (kept.length >= 6 && Math.max(Math.abs(kept[0] - kept.at(-2)), Math.abs(kept[1] - kept.at(-1))) < MIN_STEP_MM)
+        kept.length -= 2;
+      if (kept.length >= 6) out.push(kept);
+    }
+    return out;
+  }
+  function insideContours(contours, x2, y2) {
+    let inside2 = false;
+    for (const c of contours) {
+      const n2 = c.length / 2;
+      for (let i = 0, j2 = n2 - 1; i < n2; j2 = i++) {
+        const xi = c[i * 2];
+        const yi2 = c[i * 2 + 1];
+        const xj = c[j2 * 2];
+        const yj = c[j2 * 2 + 1];
+        if (yi2 > y2 !== yj > y2 && x2 < (xj - xi) * (y2 - yi2) / (yj - yi2) + xi) inside2 = !inside2;
+      }
+    }
+    return inside2;
+  }
+  function pointAt(o2, t) {
+    if (t === 0) return [o2.x1, o2.y1];
+    if (t === 1) return [o2.x2, o2.y2];
+    if (o2.k === "L") return [o2.x1 + (o2.x2 - o2.x1) * t, o2.y1 + (o2.y2 - o2.y1) * t];
+    const a2 = o2.a0 + o2.sw * t;
+    return [o2.cx + o2.r * Math.cos(a2), o2.cy + o2.r * Math.sin(a2)];
+  }
+  function crossings(p, q, o2) {
+    const dx = q[0] - p[0];
+    const dy = q[1] - p[1];
+    const out = [];
+    if (o2.k === "L") {
+      const ex = o2.x2 - o2.x1;
+      const ey = o2.y2 - o2.y1;
+      const den = dx * ey - dy * ex;
+      if (Math.abs(den) < EPS) return out;
+      const fx2 = o2.x1 - p[0];
+      const fy2 = o2.y1 - p[1];
+      const s = (fx2 * ey - fy2 * ex) / den;
+      const t = (fx2 * dy - fy2 * dx) / den;
+      if (s >= 0 && s < 1 && t >= 0 && t <= 1) {
+        const [x2, y2] = t === 0 || t === 1 ? pointAt(o2, t) : [p[0] + dx * s, p[1] + dy * s];
+        out.push({ s, t, x: x2, y: y2 });
+      }
+      return out;
+    }
+    const fx = p[0] - o2.cx;
+    const fy = p[1] - o2.cy;
+    const a2 = dx * dx + dy * dy;
+    if (a2 < EPS) return out;
+    const b3 = 2 * (fx * dx + fy * dy);
+    const c = fx * fx + fy * fy - o2.r * o2.r;
+    const disc = b3 * b3 - 4 * a2 * c;
+    if (disc < 0) return out;
+    const root = Math.sqrt(disc);
+    const sweep = Math.abs(o2.sw);
+    for (const s of disc === 0 ? [-b3 / (2 * a2)] : [(-b3 - root) / (2 * a2), (-b3 + root) / (2 * a2)]) {
+      if (!(s >= 0 && s < 1)) continue;
+      const x2 = p[0] + dx * s;
+      const y2 = p[1] + dy * s;
+      let u = (Math.atan2(y2 - o2.cy, x2 - o2.cx) - o2.a0) * Math.sign(o2.sw);
+      u = (u % TAU6 + TAU6) % TAU6;
+      if (u > sweep + 1e-9) {
+        if (u > TAU6 - 1e-9)
+          u = 0;
+        else continue;
+      }
+      const t = Math.min(1, u / sweep);
+      const [px, py] = t === 0 || t === 1 ? pointAt(o2, t) : [x2, y2];
+      out.push({ s, t, x: px, y: py });
+    }
+    return out;
+  }
+  var dist = (a2, b3) => Math.hypot(a2[0] - b3[0], a2[1] - b3[1]);
+  function midway(pts) {
+    let len = 0;
+    for (let i = 1; i < pts.length; i++) len += dist(pts[i - 1], pts[i]);
+    let left = len / 2;
+    for (let i = 1; i < pts.length; i++) {
+      const d = dist(pts[i - 1], pts[i]);
+      if (d >= left && d > 0) {
+        const k2 = left / d;
+        return {
+          len,
+          p: [pts[i - 1][0] + (pts[i][0] - pts[i - 1][0]) * k2, pts[i - 1][1] + (pts[i][1] - pts[i - 1][1]) * k2]
+        };
+      }
+      left -= d;
+    }
+    return { len, p: pts[0] };
+  }
+  function cutProfile(objs, clipMm, loops) {
+    const clip = sparseContours(clipMm);
+    const hits = objs.map(() => []);
+    const onClip = clip.map(() => []);
+    clip.forEach((c, ci2) => {
+      const n2 = c.length / 2;
+      for (let e = 0; e < n2; e++) {
+        const p = [c[e * 2], c[e * 2 + 1]];
+        const q = [c[(e + 1) % n2 * 2], c[(e + 1) % n2 * 2 + 1]];
+        objs.forEach((o2, k2) => {
+          for (const h2 of crossings(p, q, o2)) {
+            hits[k2].push(h2);
+            onClip[ci2].push({ at: e + h2.s, x: h2.x, y: h2.y });
+          }
+        });
+      }
+    });
+    let changed = false;
+    const pieces = objs.map((o2, k2) => {
+      const ts3 = [.../* @__PURE__ */ new Set([0, 1, ...hits[k2].map((h2) => h2.t)])].sort((a2, b3) => a2 - b3);
+      const at2 = new Map(hits[k2].map((h2) => [h2.t, [h2.x, h2.y]]));
+      const kept = [];
+      for (let i = 1; i < ts3.length; i++) {
+        const t0 = ts3[i - 1];
+        const t1 = ts3[i];
+        if (t1 - t0 < 1e-12) continue;
+        const m = pointAt(o2, (t0 + t1) / 2);
+        if (!insideContours(clip, m[0], m[1]))
+          kept.push({ t0, t1, p0: at2.get(t0) ?? pointAt(o2, t0), p1: at2.get(t1) ?? pointAt(o2, t1) });
+      }
+      if (kept.length === 1 && kept[0].t0 === 0 && kept[0].t1 === 1) return null;
+      changed = true;
+      return kept;
+    });
+    const bridges = [];
+    clip.forEach((c, ci2) => {
+      const n2 = c.length / 2;
+      const v = (j2) => [c[j2 % n2 * 2], c[j2 % n2 * 2 + 1]];
+      const xs3 = onClip[ci2].sort((a2, b3) => a2.at - b3.at);
+      const keep = (pts) => {
+        const { len, p } = midway(pts);
+        if (len > 1e-9 && insideContours(loops, p[0], p[1])) bridges.push(pts);
+      };
+      if (!xs3.length) {
+        const pts = [];
+        for (let j2 = 0; j2 <= n2; j2++) pts.push(v(j2));
+        keep(pts);
+        return;
+      }
+      for (let i = 0; i < xs3.length; i++) {
+        const a2 = xs3[i];
+        const b3 = xs3[(i + 1) % xs3.length];
+        const end = i + 1 < xs3.length ? b3.at : b3.at + n2;
+        const pts = [[a2.x, a2.y]];
+        for (let j2 = Math.floor(a2.at) + 1; j2 < end; j2++) pts.push(v(j2));
+        const near = (p, q) => Math.max(Math.abs(p[0] - q[0]), Math.abs(p[1] - q[1])) < MIN_STEP_MM;
+        while (pts.length > 1 && near(pts.at(-1), [b3.x, b3.y])) pts.pop();
+        while (pts.length > 1 && near(pts[1], pts[0])) pts.splice(1, 1);
+        pts.push([b3.x, b3.y]);
+        keep(pts);
+      }
+    });
+    if (bridges.length) changed = true;
+    return { pieces, bridges, changed };
+  }
+
+  // src/model/outline.js
+  var JOIN_TOL_MM = 0.01;
+  var ARC_TOL_MM = 2e-3;
+  function extractOutline(image) {
+    const segs = [];
+    const loops = [];
+    for (const o2 of image.objects) {
+      if (!o2.dark) continue;
+      if (o2.k === "L") segs.push([o2.x1, o2.y1, o2.x2, o2.y2]);
+      else if (o2.k === "A") {
+        const n2 = arcSegments(o2.r, o2.sw, ARC_TOL_MM);
+        const pts = [];
+        for (let k2 = 0; k2 <= n2; k2++) {
+          const a2 = o2.a0 + o2.sw * k2 / n2;
+          pts.push(
+            k2 === 0 ? o2.x1 : k2 === n2 ? o2.x2 : o2.cx + o2.r * Math.cos(a2),
+            k2 === 0 ? o2.y1 : k2 === n2 ? o2.y2 : o2.cy + o2.r * Math.sin(a2)
+          );
+        }
+        if (Math.abs(o2.sw) >= Math.PI * 2 - 1e-9) loops.push(pts.slice(0, -2));
+        else segs.push(pts);
+      } else if (o2.k === "R") for (const c of o2.contours) loops.push(c.slice());
+    }
+    const key2 = (x2, y2) => `${Math.round(x2 / JOIN_TOL_MM)},${Math.round(y2 / JOIN_TOL_MM)}`;
+    const ends = /* @__PURE__ */ new Map();
+    const addEnd = (k2, v) => {
+      let l = ends.get(k2);
+      if (!l) ends.set(k2, l = []);
+      l.push(v);
+    };
+    segs.forEach((s, i) => {
+      if (s.length < 4) return;
+      addEnd(key2(s[0], s[1]), [i, 0]);
+      addEnd(key2(s[s.length - 2], s[s.length - 1]), [i, 1]);
+    });
+    const used = new Uint8Array(segs.length);
+    let openChains = 0;
+    for (let i = 0; i < segs.length; i++) {
+      if (used[i]) continue;
+      const s0 = segs[i];
+      if (s0.length === 4 && s0[0] === s0[2] && s0[1] === s0[3]) {
+        used[i] = 1;
+        continue;
+      }
+      used[i] = 1;
+      const pts = s0.slice();
+      const startKey = key2(pts[0], pts[1]);
+      let closed = false;
+      for (let guard = 0; guard < segs.length; guard++) {
+        const k2 = key2(pts[pts.length - 2], pts[pts.length - 1]);
+        if (k2 === startKey && pts.length > 4) {
+          closed = true;
+          break;
+        }
+        const next = (ends.get(k2) || []).find(([j3]) => !used[j3]);
+        if (!next) break;
+        const [j2, which] = next;
+        used[j2] = 1;
+        const s = segs[j2];
+        if (which === 0) for (let q = 2; q < s.length; q++) pts.push(s[q]);
+        else for (let q = s.length - 4; q >= 0; q -= 2) pts.push(s[q], s[q + 1]);
+      }
+      if (closed) loops.push(pts.slice(0, -2));
+      else openChains++;
+    }
+    return { loops: loops.filter((l) => l.length >= 6), openChains };
+  }
+
+  // src/edit/gerber-ops.js
+  var TAU7 = Math.PI * 2;
   var EditError = class extends Error {
   };
   function gerberTarget(commands, image, oi2) {
@@ -25652,6 +25893,8 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
         return cutOut(commands, op2, ctx, count2);
       case "paint":
         return paint(commands, op2, ctx, count2);
+      case "cutProfile":
+        return cutProfile2(commands, op2, ctx, count2);
       default:
         if (NODE_OPS.includes(op2.type)) return applyNodeOp(commands, op2);
         throw new EditError(`Unknown edit ${op2.type}`);
@@ -25768,11 +26011,11 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     arc(cx, cy, r2, a0, a1, anticlockwise) {
       let sw = a1 - a0;
       if (!anticlockwise) {
-        if (sw < 0) sw += TAU6 * Math.ceil(-sw / TAU6);
-        if (sw > TAU6) sw = TAU6;
+        if (sw < 0) sw += TAU7 * Math.ceil(-sw / TAU7);
+        if (sw > TAU7) sw = TAU7;
       } else {
-        if (sw > 0) sw -= TAU6 * Math.ceil(sw / TAU6);
-        if (sw < -TAU6) sw = -TAU6;
+        if (sw > 0) sw -= TAU7 * Math.ceil(sw / TAU7);
+        if (sw < -TAU7) sw = -TAU7;
       }
       if (!this.cur) this.cur = { start: [cx + r2 * Math.cos(a0), cy + r2 * Math.sin(a0)], segs: [] };
       this.cur.segs.push({ t: "A", cx, cy, r: r2, a0, sw });
@@ -25815,7 +26058,7 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
         cur = sp2;
       }
       const ep2 = pt2(s.cx + s.r * Math.cos(a1), s.cy + s.r * Math.sin(a1));
-      const full = Math.abs(s.sw) >= TAU6 - 1e-9;
+      const full = Math.abs(s.sw) >= TAU7 - 1e-9;
       if (Math.abs(s.sw) < 1e-12 || same(ep2, cur) && !full) continue;
       const c = pt2(s.cx, s.cy);
       g(s.sw > 0 ? 3 : 2);
@@ -25993,6 +26236,81 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
       edits.push({ ...e, insert: [...insert, ...e.insert], select });
     }
     if (!edits.length) throw new EditError("Nothing to cut out: the shape does not overlap the objects");
+    return spliceMany(commands, edits);
+  }
+  function cutProfile2(commands, op2, ctx, count2) {
+    const image = ctx.image;
+    const clip = clipContours(op2.clipMm);
+    const objs = [];
+    const infos = [];
+    image.objects.forEach((o2, i) => {
+      if (!o2.dark || o2.k !== "L" && o2.k !== "A") return;
+      const t = gerberTarget(commands, image, i);
+      if (t.error || t.kind !== "draw" || t.objects[1] - t.objects[0] !== 1) return;
+      objs.push(o2);
+      infos.push(t);
+    });
+    const { pieces, bridges, changed } = cutProfile(objs, clip, extractOutline(image).loops);
+    if (!changed) throw new EditError("Nothing to cut: the shape does not cross the board outline");
+    const edits = [];
+    let bridgeAp = null;
+    pieces.forEach((kept, k2) => {
+      if (!kept) return;
+      const o2 = objs[k2];
+      const t = infos[k2];
+      bridgeAp ??= o2.ap.code;
+      const c = commands[t.ci];
+      const st2 = scanState(commands, t.ci);
+      const start2 = pointBefore(commands, t.ci);
+      const insert = [];
+      const sel = [];
+      const pt2 = (p, tt) => tt === 0 ? start2 : tt === 1 ? [c.x, c.y] : [count2(p[0]), count2(p[1])];
+      let interp = st2.interp;
+      const g = (code) => {
+        if (interp !== code) insert.push({ type: "G", code, line: o2.ln });
+        interp = code;
+      };
+      const arcs = o2.k === "A" && kept.length > 0;
+      const centre = o2.k === "A" && st2.quadrant === "multi" && c.i !== void 0 ? [start2[0] + c.i, start2[1] + (c.j ?? 0)] : [count2(o2.cx ?? 0), count2(o2.cy ?? 0)];
+      if (arcs && st2.quadrant !== "multi") insert.push({ type: "G", code: 75, line: o2.ln });
+      let cur = start2;
+      for (const p of kept) {
+        const a2 = pt2(p.p0, p.t0);
+        const b3 = pt2(p.p1, p.t1);
+        if (a2[0] === b3[0] && a2[1] === b3[1] && !(o2.k === "A" && p.t0 === 0 && p.t1 === 1)) continue;
+        if (a2[0] !== cur[0] || a2[1] !== cur[1]) insert.push(D3(2, a2[0], a2[1], o2.ln));
+        cur = b3;
+        g(o2.k === "L" ? 1 : o2.sw > 0 ? 3 : 2);
+        sel.push(insert.length);
+        insert.push(D3(1, b3[0], b3[1], o2.ln, o2.k === "A" ? { i: centre[0] - a2[0], j: centre[1] - a2[1] } : {}));
+      }
+      if (arcs && st2.quadrant === "single") insert.push({ type: "G", code: 74, line: o2.ln });
+      if (interp !== st2.interp) insert.push({ type: "G", code: st2.interp, line: o2.ln });
+      const e = removal(commands, t);
+      edits.push({ ...e, insert: [...insert, ...e.insert], select: sel });
+    });
+    if (bridges.length) {
+      const at2 = insertionPoint(commands);
+      const st2 = scanState(commands, at2);
+      const insert = resetState(st2);
+      const unit = fileUnit(commands);
+      const ap2 = resolveAperture(commands, { code: bridgeAp ?? objs[0].ap.code }, ctx, unit, ["C", "R"]);
+      if (st2.ap !== ap2.code) insert.push({ type: "Dnn", code: ap2.code, line: 0 });
+      if (st2.interp !== 1) insert.push({ type: "G", code: 1, line: 0 });
+      const sel = [];
+      for (const pts of bridges) {
+        const cs3 = pts.map(([x2, y2]) => [count2(x2), count2(y2)]);
+        insert.push(D3(2, cs3[0][0], cs3[0][1], 0));
+        let cur = cs3[0];
+        for (const p of cs3.slice(1)) {
+          if (p[0] === cur[0] && p[1] === cur[1]) continue;
+          sel.push(insert.length);
+          insert.push(D3(1, p[0], p[1], 0));
+          cur = p;
+        }
+      }
+      edits.push({ at: at2, remove: 0, insert, select: sel });
+    }
     return spliceMany(commands, edits);
   }
   function contoursBounds(contours) {
@@ -26323,74 +26641,6 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     return { name, kind, diagnostics: null };
   }
 
-  // src/model/outline.js
-  var JOIN_TOL_MM = 0.01;
-  var ARC_TOL_MM = 2e-3;
-  function extractOutline(image) {
-    const segs = [];
-    const loops = [];
-    for (const o2 of image.objects) {
-      if (!o2.dark) continue;
-      if (o2.k === "L") segs.push([o2.x1, o2.y1, o2.x2, o2.y2]);
-      else if (o2.k === "A") {
-        const n2 = arcSegments(o2.r, o2.sw, ARC_TOL_MM);
-        const pts = [];
-        for (let k2 = 0; k2 <= n2; k2++) {
-          const a2 = o2.a0 + o2.sw * k2 / n2;
-          pts.push(
-            k2 === 0 ? o2.x1 : k2 === n2 ? o2.x2 : o2.cx + o2.r * Math.cos(a2),
-            k2 === 0 ? o2.y1 : k2 === n2 ? o2.y2 : o2.cy + o2.r * Math.sin(a2)
-          );
-        }
-        if (Math.abs(o2.sw) >= Math.PI * 2 - 1e-9) loops.push(pts.slice(0, -2));
-        else segs.push(pts);
-      } else if (o2.k === "R") for (const c of o2.contours) loops.push(c.slice());
-    }
-    const key2 = (x2, y2) => `${Math.round(x2 / JOIN_TOL_MM)},${Math.round(y2 / JOIN_TOL_MM)}`;
-    const ends = /* @__PURE__ */ new Map();
-    const addEnd = (k2, v) => {
-      let l = ends.get(k2);
-      if (!l) ends.set(k2, l = []);
-      l.push(v);
-    };
-    segs.forEach((s, i) => {
-      if (s.length < 4) return;
-      addEnd(key2(s[0], s[1]), [i, 0]);
-      addEnd(key2(s[s.length - 2], s[s.length - 1]), [i, 1]);
-    });
-    const used = new Uint8Array(segs.length);
-    let openChains = 0;
-    for (let i = 0; i < segs.length; i++) {
-      if (used[i]) continue;
-      const s0 = segs[i];
-      if (s0.length === 4 && s0[0] === s0[2] && s0[1] === s0[3]) {
-        used[i] = 1;
-        continue;
-      }
-      used[i] = 1;
-      const pts = s0.slice();
-      const startKey = key2(pts[0], pts[1]);
-      let closed = false;
-      for (let guard = 0; guard < segs.length; guard++) {
-        const k2 = key2(pts[pts.length - 2], pts[pts.length - 1]);
-        if (k2 === startKey && pts.length > 4) {
-          closed = true;
-          break;
-        }
-        const next = (ends.get(k2) || []).find(([j3]) => !used[j3]);
-        if (!next) break;
-        const [j2, which] = next;
-        used[j2] = 1;
-        const s = segs[j2];
-        if (which === 0) for (let q = 2; q < s.length; q++) pts.push(s[q]);
-        else for (let q = s.length - 4; q >= 0; q -= 2) pts.push(s[q], s[q + 1]);
-      }
-      if (closed) loops.push(pts.slice(0, -2));
-      else openChains++;
-    }
-    return { loops: loops.filter((l) => l.length >= 6), openChains };
-  }
-
   // src/model/layer-groups.js
   var LAYER_GROUPS = [
     { key: "legend", label: "Silkscreen", types: ["legend"] },
@@ -26430,7 +26680,7 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
 
   // src/edit/selection.js
   var TOL_MM = 2e-3;
-  var EPS = 1e-9;
+  var EPS2 = 1e-9;
   var PICK_FROM = ["layer", "all", "solo"];
   function pickLayers(layers, { from, activeId, solo }) {
     const editable = layers.filter((l) => (l.kind === "gerber" || l.kind === "excellon") && l.image && !l.locked);
@@ -26588,7 +26838,7 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     return {
       query(q) {
         const out = new Set(big);
-        const [c0, c1, r0, r1] = range2(q[0] - EPS, q[2] + EPS, q[1] - EPS, q[3] + EPS);
+        const [c0, c1, r0, r1] = range2(q[0] - EPS2, q[2] + EPS2, q[1] - EPS2, q[3] + EPS2);
         for (let r2 = r0; r2 <= r1; r2++)
           for (let c = c0; c <= c1; c++) for (const i of cells.get(r2 * cols + c) ?? []) out.add(i);
         return [...out].filter((i) => overlap([ob[i * 4], ob[i * 4 + 1], ob[i * 4 + 2], ob[i * 4 + 3]], q));
@@ -26622,8 +26872,8 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
           const sy0 = Math.min(ca2[pi2 + 1], ca2[i + 1]);
           const sy1 = Math.max(ca2[pi2 + 1], ca2[i + 1]);
           for (let j2 = 0, pj = cb.length - 2; j2 < cb.length; pj = j2, j2 += 2) {
-            if (Math.max(cb[pj], cb[j2]) < sx0 - EPS || Math.min(cb[pj], cb[j2]) > sx1 + EPS) continue;
-            if (Math.max(cb[pj + 1], cb[j2 + 1]) < sy0 - EPS || Math.min(cb[pj + 1], cb[j2 + 1]) > sy1 + EPS) continue;
+            if (Math.max(cb[pj], cb[j2]) < sx0 - EPS2 || Math.min(cb[pj], cb[j2]) > sx1 + EPS2) continue;
+            if (Math.max(cb[pj + 1], cb[j2 + 1]) < sy0 - EPS2 || Math.min(cb[pj + 1], cb[j2 + 1]) > sy1 + EPS2) continue;
             if (segmentsMeet(ca2[pi2], ca2[pi2 + 1], ca2[i], ca2[i + 1], cb[pj], cb[pj + 1], cb[j2], cb[j2 + 1])) return true;
           }
         }
@@ -26636,13 +26886,13 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     const d2 = cross2(x3, y3, x4, y4, x2, y2);
     const d3 = cross2(x1, y1, x2, y2, x3, y3);
     const d4 = cross2(x1, y1, x2, y2, x4, y4);
-    if ((d1 > EPS && d2 < -EPS || d1 < -EPS && d2 > EPS) && (d3 > EPS && d4 < -EPS || d3 < -EPS && d4 > EPS))
+    if ((d1 > EPS2 && d2 < -EPS2 || d1 < -EPS2 && d2 > EPS2) && (d3 > EPS2 && d4 < -EPS2 || d3 < -EPS2 && d4 > EPS2))
       return true;
-    return Math.abs(d1) <= EPS && onSegment(x3, y3, x4, y4, x1, y1) || Math.abs(d2) <= EPS && onSegment(x3, y3, x4, y4, x2, y2) || Math.abs(d3) <= EPS && onSegment(x1, y1, x2, y2, x3, y3) || Math.abs(d4) <= EPS && onSegment(x1, y1, x2, y2, x4, y4);
+    return Math.abs(d1) <= EPS2 && onSegment(x3, y3, x4, y4, x1, y1) || Math.abs(d2) <= EPS2 && onSegment(x3, y3, x4, y4, x2, y2) || Math.abs(d3) <= EPS2 && onSegment(x1, y1, x2, y2, x3, y3) || Math.abs(d4) <= EPS2 && onSegment(x1, y1, x2, y2, x4, y4);
   }
   var cross2 = (ax, ay, bx, by, px, py) => (bx - ax) * (py - ay) - (by - ay) * (px - ax);
   function onSegment(ax, ay, bx, by, px, py) {
-    return px >= Math.min(ax, bx) - EPS && px <= Math.max(ax, bx) + EPS && py >= Math.min(ay, by) - EPS && py <= Math.max(ay, by) + EPS;
+    return px >= Math.min(ax, bx) - EPS2 && px <= Math.max(ax, bx) + EPS2 && py >= Math.min(ay, by) - EPS2 && py <= Math.max(ay, by) + EPS2;
   }
   function bounds(c) {
     const b3 = [Infinity, Infinity, -Infinity, -Infinity];
@@ -26654,7 +26904,7 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     }
     return b3;
   }
-  var overlap = (a2, b3) => a2[0] <= b3[2] + EPS && a2[2] >= b3[0] - EPS && a2[1] <= b3[3] + EPS && a2[3] >= b3[1] - EPS;
+  var overlap = (a2, b3) => a2[0] <= b3[2] + EPS2 && a2[2] >= b3[0] - EPS2 && a2[1] <= b3[3] + EPS2 && a2[3] >= b3[1] - EPS2;
   var r6 = (v) => Math.round(v * 1e6) / 1e6 || 0;
 
   // src/project/project.js
@@ -27897,7 +28147,7 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     lasso: `Lasso (L): draw round the objects to select; start rightwards to pick objects entirely inside (green), leftwards to pick anything it touches (red) (${PICK_HELP})`,
     node: `Node (A): click a region to show its corners; drag a corner to move it (Shift keeps to 45°), click an edge's midpoint handle to add a corner (or drag it to place one), Delete removes the selected corners; drag a box to select corners (${PICK_HELP})`,
     hand: "Hand (H): drag to pan the board (any tool: hold Space or drag with the middle button)",
-    rubber: "Rubber (X): click or drag to rub out copper: the stroke is cut out of the pads, tracks and regions it touches (what is left becomes regions) and the holes it touches are deleted (on the Pick from layers)",
+    rubber: "Rubber (X): click or drag to rub out copper: the stroke is cut out of the pads, tracks and regions it touches (what is left becomes regions) and the holes it touches are deleted (on the Pick from layers); on a board profile (Edge.Cuts) it bites into the board and the outline follows the edge of the stroke, so the board shape stays closed",
     pad: "Pad (P): click to place a pad with the chosen aperture (on a drill layer: a hole)",
     track: "Track (T): click the points, double-click or Enter to finish, Backspace removes the last point, Shift keeps to 45°",
     region: "Region (R): click the corners like a pen tool, click the first point, double-click or Enter to close it; Shift keeps to 45°",
@@ -28958,7 +29208,7 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
         }
         this.#setSelected(new Map([...d.hits].map(([id3, set]) => [id3, [...set]])));
         const done2 = this.#applySelected(
-          (targets2, layer2) => layer2.kind === "excellon" ? { type: "delete", targets: targets2 } : { type: "cutOut", targets: targets2, clipMm },
+          (targets2, layer2) => layer2.kind === "excellon" ? { type: "delete", targets: targets2 } : layer2.role?.type === "profile" ? { type: "cutProfile", clipMm } : { type: "cutOut", targets: targets2, clipMm },
           "Rubbed out"
         );
         if (done2) {

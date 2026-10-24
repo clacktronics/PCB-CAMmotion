@@ -442,3 +442,36 @@ test('drill layer: the rubber deletes holes, there is no paint', async ({ page }
   expect(n).toBeLessThan(hole.n);
   expect(errors).toEqual([]);
 });
+
+test('profile layer: the rubber bites into the board and the outline stays closed', async ({ page }) => {
+  const { errors } = await openApp(page);
+  await loadBoard(page);
+  const EDGE = 'synthetic-board-Edge_Cuts.gbr';
+  await page.locator(`[data-testid=layer][data-name="${EDGE}"]`).click();
+  await page.keyboard.press('x');
+  await expect(page.locator('[data-testid=tool-rubber]')).toHaveClass(/on/);
+  const brush = page.locator('[data-testid=brush-size]');
+  await brush.fill('2');
+  await brush.dispatchEvent('change');
+  const outline = () =>
+    page.evaluate((n) => {
+      const l = window.__pcam.app.layerById(n);
+      return { loops: l.outline.loops.length, open: l.outline.openChains, op: l.editor?.ops.at(-1)?.type };
+    }, EDGE);
+  expect(await outline()).toEqual({ loops: 2, open: 0, op: undefined });
+  // a stroke up across the bottom edge, from off the board into it
+  await dragMm(page, [50, -2], [50, 2]);
+  expect(await outline()).toEqual({ loops: 2, open: 0, op: 'cutProfile' });
+  // the bottom edge is two lines now, either side of the notch
+  const bottom = await page.evaluate(
+    (n) =>
+      window.__pcam.app
+        .layerById(n)
+        .image.objects.filter((o) => o.k === 'L' && Math.abs(o.y1) < 1e-9 && Math.abs(o.y2) < 1e-9).length,
+    EDGE,
+  );
+  expect(bottom).toBe(2);
+  await page.keyboard.press('Control+z');
+  expect((await outline()).op).toBeUndefined();
+  expect(errors).toEqual([]);
+});

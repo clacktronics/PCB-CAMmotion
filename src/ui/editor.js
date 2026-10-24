@@ -11,7 +11,8 @@
 // an edge's midpoint handle to add a corner, Delete to remove the selected corners.
 // Rubber and paint are round brushes (src/edit/brush.js): the rubber cuts its stroke out of
 // the pads, tracks and regions it touches (what is left becomes regions) and deletes the holes
-// it touches, on the Pick from layers; paint fills its stroke as one region, unified with the
+// it touches, on the Pick from layers (on a board profile it bites into the board and the
+// outline is rerouted round the stroke, src/edit/profile-cut.js); paint fills its stroke as one region, unified with the
 // pads, tracks and regions it touches.
 // The edits themselves are DOM-free (src/edit/); this file turns pointer and key input into
 // edit ops. Its settings live in settings.edit of the .pcam (src/project/project.js).
@@ -58,7 +59,7 @@ const TOOL_TITLE = {
   node: `Node (A): click a region to show its corners; drag a corner to move it (Shift keeps to 45°), click an edge's midpoint handle to add a corner (or drag it to place one), Delete removes the selected corners; drag a box to select corners (${PICK_HELP})`,
   hand: 'Hand (H): drag to pan the board (any tool: hold Space or drag with the middle button)',
   rubber:
-    'Rubber (X): click or drag to rub out copper: the stroke is cut out of the pads, tracks and regions it touches (what is left becomes regions) and the holes it touches are deleted (on the Pick from layers)',
+    'Rubber (X): click or drag to rub out copper: the stroke is cut out of the pads, tracks and regions it touches (what is left becomes regions) and the holes it touches are deleted (on the Pick from layers); on a board profile (Edge.Cuts) it bites into the board and the outline follows the edge of the stroke, so the board shape stays closed',
   pad: 'Pad (P): click to place a pad with the chosen aperture (on a drill layer: a hole)',
   track:
     'Track (T): click the points, double-click or Enter to finish, Backspace removes the last point, Shift keeps to 45°',
@@ -1214,7 +1215,11 @@ export class EditorPanel {
       this.#setSelected(new Map([...d.hits].map(([id, set]) => [id, [...set]])));
       const done = this.#applySelected(
         (targets, layer) =>
-          layer.kind === 'excellon' ? { type: 'delete', targets } : { type: 'cutOut', targets, clipMm },
+          layer.kind === 'excellon'
+            ? { type: 'delete', targets }
+            : layer.role?.type === 'profile'
+              ? { type: 'cutProfile', clipMm } // the board outline is rerouted round the stroke, never broken
+              : { type: 'cutOut', targets, clipMm },
         'Rubbed out',
       );
       if (done) {

@@ -16,6 +16,7 @@ import { APP_VERSION } from '../../../src/version.js';
 import { assertGolden } from '../../helpers/golden.js';
 import { buildLayers } from '../../../src/project/project.js';
 import { contoursArea, imageContours } from '../../../src/model/polygons.js';
+import { signedArea } from '../../../src/model/path.js';
 
 const NOW = new Date('2026-10-15T00:00:00Z');
 const fixture = (name) => new Uint8Array(readFileSync(new URL(`../../fixtures/pcam/${name}`, import.meta.url)));
@@ -101,6 +102,7 @@ test('every .pcam fixture loads and migrates to the current schema', () => {
     'v2-with-edits.pcam',
     'v3-with-node-edits.pcam',
     'v4-with-brush-edits.pcam',
+    'v5-with-profile-cuts.pcam',
   ]) {
     assert.equal(loadProject(fixture(name)).manifest.schemaVersion, SCHEMA_VERSION, name);
   }
@@ -199,7 +201,7 @@ test('fixture v3-with-node-edits.pcam loads and replays its region corner edits'
 
 test('fixture v4-with-brush-edits.pcam loads and replays its rubber cut-outs and paint', () => {
   const p = loadProject(fixture('v4-with-brush-edits.pcam'));
-  assert.equal(p.manifest.schemaVersion, 4);
+  assert.equal(p.manifest.schemaVersion, SCHEMA_VERSION, 'migrated to the current schema');
   const rec = p.edits['board-F_Cu.gbr'];
   assert.deepEqual(
     rec.ops.map((o) => o.type),
@@ -222,6 +224,29 @@ test('fixture v4-with-brush-edits.pcam loads and replays its rubber cut-outs and
   assert.deepEqual(box(1), [0.75, -0.3, 5.25, 0.3]);
   // the hole in the region
   assert.ok(Math.abs(contoursArea(imageContours(img, [0])) - (4 - Math.PI * 0.16)) < 0.01);
+  assert.deepEqual(layers[0].diagnostics.errors, []);
+  assert.deepEqual(loadProject(saveProject(p)), p);
+});
+
+test('fixture v5-with-profile-cuts.pcam loads and replays its board profile cuts', () => {
+  const p = loadProject(fixture('v5-with-profile-cuts.pcam'));
+  assert.equal(p.manifest.schemaVersion, 5);
+  const rec = p.edits['board-Edge_Cuts.gbr'];
+  assert.deepEqual(
+    rec.ops.map((o) => o.type),
+    ['cutProfile', 'cutProfile'],
+  );
+  assert.deepEqual(
+    rec.redo.map((o) => o.type),
+    ['cutProfile'],
+  );
+  const { layers } = buildLayers(p);
+  // a notch in the top edge and the bottom-right corner rounded away: still one closed outline
+  const outline = layers[0].outline;
+  assert.equal(outline.openChains, 0);
+  assert.equal(outline.loops.length, 1);
+  const area = Math.abs(signedArea(outline.loops[0]));
+  assert.ok(Math.abs(100 - area - (Math.PI * 3) / 4) < 0.03, `area ${area}`);
   assert.deepEqual(layers[0].diagnostics.errors, []);
   assert.deepEqual(loadProject(saveProject(p)), p);
 });

@@ -12,7 +12,8 @@ the schema version changes").
 | `v2-with-edits.pcam` | 2 | One CRLF Gerber (`board-F_Cu.gbr`) and `model/edits.json`: move, add a pad, delete, plus one undone edit (a region) in the redo list |
 | `v3-with-node-edits.pcam` | 3 | One CRLF Gerber (`board-F_Cu.gbr`, a pad and a region with a G75 arc) and `model/edits.json`: region corner edits (moveVertex, insertVertex, deleteVertex), plus one undone moveVertex in the redo list |
 | `v4-with-brush-edits.pcam` | 4 | One CRLF Gerber (`board-F_Cu.gbr`, a pad, a track and a square region) and `model/edits.json`: rubber cut-outs (cutOut) splitting the track, removing the pad and holing the region, a paint stroke unifying the track halves again (paint), plus one undone cutOut in the redo list |
+| `v5-with-profile-cuts.pcam` | 5 | One CRLF Gerber (`board-Edge_Cuts.gbr`, a 10 × 10 mm square board outline) and `model/edits.json`: rubber cuts on the profile (cutProfile) biting a notch into the top edge and rounding off the bottom-right corner, plus one undone cutProfile (the left edge) in the redo list |
 
-The schema-1 files were created with `src/project/pcam.js` at schema 1, the schema-2, schema-3 and
-schema-4 files with `createProject` / `layerEditor` / `commitEdit` (src/project/project.js) at their
+The schema-1 files were created with `src/project/pcam.js` at schema 1, the schema-2 to
+schema-5 files with `createProject` / `layerEditor` / `commitEdit` (src/project/project.js) at their
 schema (see the commits that added them).
