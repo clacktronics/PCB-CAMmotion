@@ -5196,7 +5196,7 @@
         this.edit?.hover?.([x2, y2], e);
         clearTimeout(this.hoverTimer);
         this.hoverTimer = setTimeout(() => {
-          const hit = this.pick(e.clientX, e.clientY);
+          const hit = this.pick(e.clientX, e.clientY) ?? (this.settings.pickLayerId && this.settings.hoverAnyLayer ? this.pickAt(x2, y2, null, null) : null);
           const same = hit && this.hover && hit.layerId === this.hover.layerId && hit.index === this.hover.index;
           if (!same && (hit || this.hover)) {
             this.hover = hit;
@@ -26674,7 +26674,6 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
   };
   var EDIT_TOOLS = ["select", "lasso", "node", "hand", "rubber", "pad", "track", "region", "paint"];
   var DEFAULT_EDIT = {
-    on: false,
     tool: "select",
     gridMm: 0.05,
     aperture: { code: null, template: "C", sizesMm: [0.25, 0.25] },
@@ -26741,9 +26740,9 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     const sizes = Array.isArray(a2.sizesMm) ? a2.sizesMm : [];
     const rest = { ...src };
     delete rest.selectMode;
+    delete rest.on;
     return {
       ...rest,
-      on: src.on === true,
       tool: EDIT_TOOLS.includes(src.tool) ? src.tool : d.tool,
       gridMm: Number.isFinite(src.gridMm) && src.gridMm >= 0 ? src.gridMm : d.gridMm,
       aperture: {
@@ -27086,7 +27085,7 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
         {
           class: "dock-toggle",
           "data-testid": "dock-toggle",
-          title: "Hide the analyser (A)",
+          title: "Hide the analyser (Shift+A)",
           onclick: () => this.setOpen(false)
         },
         "✕"
@@ -27095,7 +27094,7 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
         "button",
         {
           "data-testid": "analyser-toggle",
-          title: "Show or hide the analyser: apertures, shapes, commands and playback (A)",
+          title: "Show or hide the analyser: apertures, shapes, commands and playback (Shift+A)",
           onclick: () => this.setOpen(!this.s.open)
         },
         "Analyser"
@@ -27922,7 +27921,8 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
      * @param {{settings:()=>object, layer:()=>object|null, project:()=>object, viewer:object,
      *   commit:(layer:object)=>void, inspect:(hit:object|null)=>void, message:(t:string, err?:boolean)=>void,
      *   download:(text:string, name:string)=>void, touch:()=>void, changed:()=>void,
-     *   layers:()=>object[], editLayer:(id:string)=>void, autoSelectLayer:()=>boolean}} host
+     *   layers:()=>object[], editLayer:(id:string)=>void, autoSelectLayer:()=>boolean,
+     *   setAutoSelectLayer:(on:boolean)=>void}} host
      */
     constructor(host) {
       this.host = host;
@@ -27936,25 +27936,16 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
       this.busy = false;
       this.space = false;
       this.el = h("div", {
-        class: "edit-options hidden",
+        class: "edit-options",
         role: "toolbar",
         "aria-label": "Tool options",
         "data-testid": "editor"
       });
-      this.strip = h("nav", { class: "tool-strip hidden", "data-testid": "tool-strip", "aria-label": "Edit tools" });
+      this.strip = h("nav", { class: "tool-strip", "data-testid": "tool-strip", "aria-label": "Edit tools" });
       window.addEventListener("keyup", (e) => {
         if (e.key === " ") this.space = false;
       });
       window.addEventListener("blur", () => this.space = false);
-      this.toolbarButton = h(
-        "button",
-        {
-          "data-testid": "edit-toggle",
-          title: "Edit mode (E): select, move, delete and add pads, tracks, regions and holes on the selected layer",
-          onclick: () => this.setOn(!this.s.on)
-        },
-        "Edit"
-      );
     }
     get s() {
       return this.host.settings();
@@ -27970,19 +27961,9 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
       for (const indices of this.selected.values()) n2 += indices.length;
       return n2;
     }
-    get on() {
-      return !!this.s.on;
-    }
     layer() {
       const l = this.host.layer();
       return l && (l.kind === "gerber" || l.kind === "excellon") ? l : null;
-    }
-    setOn(on3) {
-      this.s.on = on3;
-      this.cancelSketch();
-      this.#setSelection([]);
-      this.host.touch();
-      this.refresh();
     }
     setTool(tool) {
       if (!EDIT_TOOLS.includes(tool)) return;
@@ -28005,23 +27986,19 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     // ---------------------------------------------------------------- panel
     refresh() {
       const v = this.host.viewer;
-      const on3 = this.on;
       const layer = this.layer();
-      this.toolbarButton.classList.toggle("on", on3);
-      this.toolbarButton.setAttribute("aria-pressed", on3 ? "true" : "false");
-      this.el.classList.toggle("hidden", !on3);
-      v.edit = on3 ? this.#handler() : null;
-      v.overlayHook = on3 ? (ctx, map) => this.#drawOverlay(ctx, map) : null;
-      v.settings.pickLayerId = on3 && layer ? layer.id : null;
-      v.editSelection = on3 ? this.#viewSelection() : null;
-      v.canvas.classList.toggle("editing", on3);
-      v.canvas.dataset.tool = on3 ? this.s.tool : "";
-      if (!on3 || this.s.tool !== "node") v.canvas.dataset.handle = "";
+      v.edit = this.#handler();
+      v.overlayHook = (ctx, map) => this.#drawOverlay(ctx, map);
+      v.settings.pickLayerId = layer ? layer.id : null;
+      v.settings.hoverAnyLayer = this.host.autoSelectLayer();
+      v.editSelection = this.#viewSelection();
+      v.canvas.classList.add("editing");
+      v.canvas.dataset.tool = this.s.tool;
+      if (this.s.tool !== "node") v.canvas.dataset.handle = "";
       v.drawOverlay();
       this.#refreshStrip();
       this.refreshMenu();
       clear(this.el);
-      if (!on3) return;
       if (!layer) {
         this.el.append(h("span", { class: "muted" }, "Select a Gerber or drill layer to edit it"));
         return;
@@ -28046,6 +28023,24 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
             " mm"
           ])
         );
+      if (tool === "select" || tool === "lasso" || tool === "node") {
+        const auto = h("input", {
+          type: "checkbox",
+          "data-testid": "auto-select-layer",
+          checked: this.host.autoSelectLayer(),
+          onchange: (e) => this.host.setAutoSelectLayer(e.target.checked)
+        });
+        this.el.append(
+          h(
+            "label",
+            {
+              class: "auto-select",
+              title: "Clicking a shape of another layer on the board switches the edited layer to it"
+            },
+            [auto, "Auto select layer"]
+          )
+        );
+      }
       if (tool === "select" || tool === "lasso" || tool === "rubber") {
         const pickFrom = h(
           "select",
@@ -28139,7 +28134,7 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
       const drill = layer?.kind === "excellon";
       m.undo.disabled = !ed3?.canUndo;
       m.redo.disabled = !ed3?.canRedo;
-      m.toRegion.disabled = !layer || drill || !this.on || !this.sel.length;
+      m.toRegion.disabled = !layer || drill || !this.sel.length;
       m.unify.disabled = !layer || drill;
       m.revert.disabled = !ed3?.ops.length;
       m.revertAll.disabled = !this.host.layers().some((l) => l.editor?.ops.length);
@@ -28156,10 +28151,7 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     /** The tool strip on the board's left edge (Photoshop-style). */
     #refreshStrip() {
       const layer = this.layer();
-      const on3 = this.on;
       clear(this.strip);
-      this.strip.classList.toggle("hidden", !on3);
-      if (!on3) return;
       const tools = this.#tools(layer);
       if (!tools.includes(this.s.tool)) this.s.tool = "select";
       const icon = (name) => {
@@ -28384,41 +28376,20 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
       this.refresh();
     }
     /**
-     * Right-click on the board. In edit mode: a menu for the object under the pointer (it is
-     * selected first unless already part of the selection) or for the selection. Outside edit
-     * mode: the same selection queries, which switch to editing that object's layer.
+     * Right-click on the board: a menu for the object under the pointer (it is selected first
+     * unless already part of the selection) or for the selection. With auto select layer, an
+     * object of another layer where the edited layer has nothing switches to editing its layer.
      */
     contextMenu(mm2, clientX, clientY) {
       const v = this.host.viewer;
-      const hit = v.pickAt(mm2[0], mm2[1]);
-      if (!this.on) {
-        const l = hit && this.host.layers().find((x2) => x2.id === hit.layerId);
-        if (!l || l.kind !== "gerber" && l.kind !== "excellon") return false;
-        const copper = v.pickAt(mm2[0], mm2[1], (x2) => x2.kind === "gerber" && x2.role?.type === "copper");
-        const edit = (then, h2 = hit) => () => {
-          this.host.editLayer(h2.layerId);
-          if (!this.on) this.setOn(true);
-          this.select([h2.index]);
-          then?.();
-        };
-        openMenu(clientX, clientY, [
-          { label: `Edit ${l.name}`, hint: "E", testid: "ctx-edit", action: edit() },
-          null,
-          { label: "Select same shape", testid: "ctx-same-shape", action: edit(() => this.selectBy("shape")) },
-          {
-            label: "Select same aperture",
-            testid: "ctx-same-aperture",
-            disabled: !hit.object.ap,
-            action: edit(() => this.selectBy("aperture"))
-          },
-          {
-            label: "Select connected",
-            testid: "ctx-connected",
-            disabled: !copper,
-            action: copper && edit(() => this.selectBy("connected"), copper)
-          }
-        ]);
-        return true;
+      let hit = v.pickAt(mm2[0], mm2[1]);
+      if (!hit && this.host.autoSelectLayer()) {
+        const other = v.pickAt(mm2[0], mm2[1], null, null);
+        const l = other && this.host.layers().find((x2) => x2.id === other.layerId);
+        if (l && (l.kind === "gerber" || l.kind === "excellon")) {
+          this.host.editLayer(l.id);
+          hit = other;
+        }
       }
       const layer = this.layer();
       if (!layer) return false;
@@ -29048,9 +29019,8 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     #snapPt([x2, y2]) {
       return [round6(this.snap(x2)), round6(this.snap(y2))];
     }
-    /** Keyboard in edit mode; returns true when the key was used. */
+    /** Keyboard of the editor; returns true when the key was used. */
     keydown(e) {
-      if (!this.on) return false;
       const k2 = e.key;
       const mod = e.ctrlKey || e.metaKey;
       if (mod && k2.toLowerCase() === "z") {
@@ -29097,7 +29067,7 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
         this.moveSelection(round6(d[0]), round6(d[1]));
         return true;
       }
-      const tool = TOOL_KEY[k2.toLowerCase()];
+      const tool = !e.shiftKey && TOOL_KEY[k2.toLowerCase()];
       if (tool && this.#tools(this.layer()).includes(tool)) {
         this.setTool(tool);
         return true;
@@ -29568,7 +29538,7 @@ Click: show only this layer${turns ? `, seen from the ${s.side}` : ""} · Shift+
         {
           onclick: () => this.#setView({ background: this.view.background === "light" ? "dark" : "light" }),
           "data-testid": "background",
-          title: "Light or dark background (B)"
+          title: "Light or dark background (Shift+B)"
         },
         "Light background"
       );
@@ -29626,7 +29596,12 @@ Click: show only this layer${turns ? `, seen from the ${s.side}` : ""} · Shift+
         touch: () => app.#touch(),
         layers: () => app.layers,
         editLayer: (id3) => id3 !== app.activeLayerId && app.#setActive(id3),
-        autoSelectLayer: () => app.view.autoSelectLayer
+        autoSelectLayer: () => app.view.autoSelectLayer,
+        setAutoSelectLayer: (on3) => {
+          app.view.autoSelectLayer = on3;
+          app.#touch();
+          app.editor.refresh();
+        }
       });
       this.layerStrip = new LayerStrip({
         layers: () => app.layers,
@@ -29682,10 +29657,9 @@ Click: show only this layer${turns ? `, seen from the ${s.side}` : ""} · Shift+
             ),
             row("View", Object.values(this.btnDim)),
             row("Colours", Object.values(this.btnMode)),
-            item(this.btnBg, "B"),
+            item(this.btnBg, "Shift+B"),
             null,
-            item(this.dock.toolbarButton, "A"),
-            item(this.editor.toolbarButton, "E")
+            item(this.dock.toolbarButton, "Shift+A")
           ]
         },
         {
@@ -29729,25 +29703,8 @@ Click: show only this layer${turns ? `, seen from the ${s.side}` : ""} · Shift+
       this.showBar = h("div", { class: "show-toggles", "data-testid": "show-toggles" }, Object.values(this.btnShow));
       this.layerList = h("ul", { class: "layers", "data-testid": "layers" });
       this.stackPanel = h("div", { class: "stack" });
-      this.autoSelectInput = h("input", {
-        type: "checkbox",
-        "data-testid": "auto-select-layer",
-        onchange: (e) => {
-          this.view.autoSelectLayer = e.target.checked;
-          this.#touch();
-        }
-      });
-      const autoSelect = h(
-        "label",
-        {
-          class: "auto-select",
-          title: "Clicking a shape on the board selects its layer (in edit mode: edits that layer)"
-        },
-        [this.autoSelectInput, "Auto select layer"]
-      );
       const left = h("aside", { class: "panel left" }, [
         h("h2", {}, "Layers"),
-        autoSelect,
         this.showBar,
         this.layerList,
         h("h2", {}, "Board materials"),
@@ -29808,7 +29765,6 @@ Click: show only this layer${turns ? `, seen from the ${s.side}` : ""} · Shift+
         if (e.key === "Escape") return this.viewer.select(null);
         if (e.ctrlKey || e.metaKey || e.altKey || isTyping(e.target)) return;
         const k2 = e.key.toLowerCase();
-        if (k2 === "e") return this.editor.setOn(!this.editor.on);
         if (k2 === "," || k2 === ".") this.dock.step(k2 === "." ? 1 : -1);
         else if (k2 === "f") this.#fit();
         else if (k2 === "s") this.#toggleSolo();
@@ -30208,7 +30164,6 @@ Click: show only this layer${turns ? `, seen from the ${s.side}` : ""} · Shift+
         b3.disabled = !!v.view3d;
       }
       this.btnBg.classList.toggle("on", v.background === "light");
-      this.autoSelectInput.checked = v.autoSelectLayer !== false;
     }
     #refreshShow() {
       for (const g of LAYER_GROUPS) {
@@ -30426,7 +30381,7 @@ Click: show only this layer${turns ? `, seen from the ${s.side}` : ""} · Shift+
       const l = this.layerById(layerId);
       const o2 = l?.image.objects[index];
       if (!o2) return;
-      if (this.editor.on && layerId === this.activeLayerId) return this.editor.select([index]);
+      if (layerId === this.activeLayerId) return this.editor.select([index]);
       this.viewer.select({ layerId, index, object: o2, x: null, y: null });
     }
     #sourceLine(layer, line) {

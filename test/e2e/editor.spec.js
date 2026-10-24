@@ -65,7 +65,6 @@ async function clickMm(page, x, y, opts) {
 async function startEditing(page) {
   await loadBoard(page);
   await selectLayer(page, FCU);
-  await clickMenu(page, '[data-testid=edit-toggle]');
   await expect(page.locator('[data-testid=editor]')).toBeVisible();
 }
 
@@ -84,9 +83,10 @@ test('select a pad, delete it, undo and redo', async ({ page }) => {
   await expect.poll(async () => objects(page)).toEqual(before);
   await clickMenu(page, '[data-testid=edit-redo]');
   await expect.poll(async () => (await objects(page)).length).toBe(before.length - 1);
-  // E leaves edit mode; a click selects again for the inspector
+  // the editor is always on: no Edit switch in the View menu, and E does not leave it
+  await expect(page.locator('[data-testid=edit-toggle]')).toHaveCount(0);
   await page.keyboard.press('e');
-  await expect(page.locator('[data-testid=editor]')).toBeHidden();
+  await expect(page.locator('[data-testid=editor]')).toBeVisible();
   expect(external).toEqual([]);
   expect(errors).toEqual([]);
 });
@@ -273,7 +273,7 @@ test('unify the layer into regions; edits survive save and reopen; export parses
   await expect(page.locator(`[data-testid=layer][data-name="${FCU}"] [data-testid=edited]`)).toHaveText('✎2');
   await waitRendered(page);
   expect((await objects(page)).length).toBe(unified.length);
-  // still in edit mode (saved in the project) and undo goes back through the replayed edits
+  // the editor is still on and undo goes back through the replayed edits
   await expect(page.locator('[data-testid=editor]')).toBeVisible();
   await selectLayer(page, FCU);
   await clickMenu(page, '[data-testid=edit-undo]');
@@ -286,7 +286,6 @@ test('drill layer: add a hole with a new tool, shift+drag box selects holes', as
   await loadBoard(page);
   const drl = await page.evaluate(() => window.__pcam.app.layers.find((l) => l.kind === 'excellon').name);
   await selectLayer(page, drl);
-  await clickMenu(page, '[data-testid=edit-toggle]');
   await expect(page.locator('[data-testid=tool-track]')).toHaveCount(0);
   const n0 = (await objects(page, drl)).length;
   await page.locator('[data-testid=tool-pad]').click();
@@ -321,41 +320,38 @@ const topPad = (page) =>
     for (let i = 0; i < objs.length; i++) {
       const o = objs[i];
       if (o.k !== 'F' || !o.dark) continue;
-      const hit = v.pickAt(o.x, o.y);
+      const hit = v.pickAt(o.x, o.y, null, null);
       if (hit?.layerId === n && hit.index === i) return { index: i, x: o.x, y: o.y };
     }
     return null;
   }, FCU);
 
-test('auto select layer: clicking a shape moves to its layer; switched off, the layer stays', async ({ page }) => {
+test('auto select layer: a select tool option; clicking a shape edits its layer, switched off the layer stays', async ({
+  page,
+}) => {
   const { errors } = await openApp(page);
   await loadBoard(page);
   const BCU = 'synthetic-board-B_Cu.gbr';
   const active = () => page.locator('[data-testid=layer].active');
-  const toggle = page.locator('[data-testid=auto-select-layer]');
+  const toggle = page.locator('header.toolbar [data-testid=editor] [data-testid=auto-select-layer]');
   const pad = await topPad(page);
   expect(pad).not.toBeNull();
-  // on by default: a click on an F.Cu pad makes F.Cu the selected layer
+  // on by default, in the select tool's options in the top bar (not the layer panel)
+  await selectLayer(page, BCU);
   await expect(toggle).toBeChecked();
-  await selectLayer(page, BCU);
-  await clickMm(page, pad.x, pad.y);
-  await expect(active()).toHaveAttribute('data-name', FCU);
-  await expect(page.locator('[data-testid=inspector]')).toContainText('Flash (D03)');
-  // in edit mode it switches the edited layer and selects the shape there
-  await selectLayer(page, BCU);
-  await clickMenu(page, '[data-testid=edit-toggle]');
+  await expect(page.locator('aside.panel [data-testid=auto-select-layer]')).toHaveCount(0);
+  // a click on an F.Cu pad switches the edited layer and selects the shape there
   await clickMm(page, pad.x, pad.y);
   await expect(active()).toHaveAttribute('data-name', FCU);
   await expect(page.locator('[data-testid=edit-selection]')).toHaveText('1 selected');
-  await page.keyboard.press('e');
-  // off: the selected layer stays put (the inspector still shows the shape)
+  await expect(page.locator('[data-testid=inspector]')).toContainText('Flash (D03)');
+  // only the tools that pick by clicking show it
+  await page.locator('[data-testid=tool-pad]').click();
+  await expect(toggle).toHaveCount(0);
+  await page.locator('[data-testid=tool-select]').click();
+  // off: only the edited layer can be picked
   await toggle.uncheck();
   await selectLayer(page, BCU);
-  await clickMm(page, pad.x, pad.y);
-  await expect(page.locator('[data-testid=inspector]')).toContainText('Flash (D03)');
-  await expect(active()).toHaveAttribute('data-name', BCU);
-  // and in edit mode only the edited layer can be picked, as before
-  await clickMenu(page, '[data-testid=edit-toggle]');
   await clickMm(page, pad.x, pad.y);
   await expect(active()).toHaveAttribute('data-name', BCU);
   await expect(page.locator('[data-testid=edit-selection]')).not.toHaveText('1 selected');

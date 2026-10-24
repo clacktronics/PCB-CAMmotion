@@ -20,7 +20,8 @@ test('File and View menus open, close and hold the toolbar controls', async ({ p
   }
   await expect(view.locator('[data-testid=background]')).toHaveCount(1);
   await expect(view.locator('[data-testid=analyser-toggle]')).toHaveCount(1);
-  await expect(view.locator('[data-testid=edit-toggle]')).toHaveCount(1);
+  // the editor is always on, so there is no Edit switch
+  await expect(view.locator('[data-testid=edit-toggle]')).toHaveCount(0);
   // one row of toolbar
   expect((await page.locator('header.toolbar').boundingBox()).height).toBeLessThan(48);
 
@@ -49,8 +50,6 @@ test('File and View menus open, close and hold the toolbar controls', async ({ p
   await clickMenu(page, '[data-testid=mode-classic]');
   await expect(view).toBeHidden();
   await expect(page.locator('[data-testid=mode-classic]')).toHaveClass(/\bon\b/);
-  await clickMenu(page, '[data-testid=edit-toggle]');
-  await expect(page.locator('[data-testid=edit-toggle]')).toHaveAttribute('aria-pressed', 'true');
   // explode stays on the bar itself in 3D, outside the menus
   await clickMenu(page, '[data-testid=view-3d]');
   await expect(page.locator('header.toolbar > .explode')).toBeVisible();

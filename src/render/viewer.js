@@ -418,7 +418,11 @@ export class Viewer {
       this.edit?.hover?.([x, y], e);
       clearTimeout(this.hoverTimer);
       this.hoverTimer = setTimeout(() => {
-        const hit = this.pick(e.clientX, e.clientY);
+        // with hoverAnyLayer, a spot where the edited layer has nothing shows what a click
+        // would switch to (auto select layer)
+        const hit =
+          this.pick(e.clientX, e.clientY) ??
+          (this.settings.pickLayerId && this.settings.hoverAnyLayer ? this.pickAt(x, y, null, null) : null);
         const same = hit && this.hover && hit.layerId === this.hover.layerId && hit.index === this.hover.index;
         if (!same && (hit || this.hover)) {
           this.hover = hit;

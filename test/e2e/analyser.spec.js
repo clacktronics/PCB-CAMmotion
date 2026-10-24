@@ -217,10 +217,10 @@ test('the Analyser button turns the dock on and off; the board gets the space ba
   expect(await page.evaluate((n) => window.__pcam.app.layerById(n).limit, FCU)).toBeUndefined();
   await clickMenu(page, '[data-testid=analyser-toggle]');
   await expect(dock).toBeVisible();
-  // the ✕ in the dock and the A key do the same
+  // the ✕ in the dock and Shift+A do the same
   await page.locator('[data-testid=dock-toggle]').click();
   await expect(dock).toBeHidden();
-  await page.keyboard.press('a');
+  await page.keyboard.press('Shift+A');
   await expect(dock).toBeVisible();
   expect((await settings(page)).open).toBe(true);
 });

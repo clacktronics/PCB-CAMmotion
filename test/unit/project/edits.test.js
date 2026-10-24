@@ -104,7 +104,6 @@ test('the v2 fixture rebuilds with its edits applied', () => {
 test('editor settings: defaults filled in, nonsense replaced, saved in the project', () => {
   const p = createProject('s', NOW);
   assert.deepEqual(p.settings.edit, {
-    on: false,
     tool: 'select',
     gridMm: 0.05,
     aperture: { code: null, template: 'C', sizesMm: [0.25, 0.25] },
@@ -124,7 +123,6 @@ test('editor settings: defaults filled in, nonsense replaced, saved in the proje
       keep: 1,
     }),
     {
-      on: true,
       tool: 'select',
       gridMm: 0.05,
       aperture: { code: 12, template: 'C', sizesMm: [0.25, 2] },
@@ -139,9 +137,10 @@ test('editor settings: defaults filled in, nonsense replaced, saved in the proje
   assert.equal(p.settings.edit.tool, 'paint');
   assert.equal(p.settings.edit.brushMm, 1.2);
   assert.deepEqual(loadProject(saveProject(p)).settings.edit, p.settings.edit);
-  // the toolbar's tools; the retired box/lasso mode setting is dropped
+  // the toolbar's tools; the retired box/lasso mode and edit on/off settings are dropped
   p.settings.edit = normaliseEdit({ on: true, tool: 'lasso', selectMode: 'touch' });
   assert.equal(p.settings.edit.tool, 'lasso');
   assert.equal('selectMode' in p.settings.edit, false);
+  assert.equal('on' in p.settings.edit, false);
   assert.deepEqual(loadProject(saveProject(p)).settings.edit, p.settings.edit);
 });

@@ -1,4 +1,4 @@
-// Editor (milestone 4): edit mode, a Photoshop-style tool strip on the board (select, lasso,
+// Editor (milestone 4, always on): a Photoshop-style tool strip on the board (select, lasso,
 // node, hand, pad or hole, track, region), selection with drag-move, box and lasso select
 // (dragged left to right: objects entirely inside; right to left: anything touched),
 // double-click to select connected, a right-click menu (same shape, same aperture,
@@ -93,7 +93,8 @@ export class EditorPanel {
    * @param {{settings:()=>object, layer:()=>object|null, project:()=>object, viewer:object,
    *   commit:(layer:object)=>void, inspect:(hit:object|null)=>void, message:(t:string, err?:boolean)=>void,
    *   download:(text:string, name:string)=>void, touch:()=>void, changed:()=>void,
-   *   layers:()=>object[], editLayer:(id:string)=>void, autoSelectLayer:()=>boolean}} host
+   *   layers:()=>object[], editLayer:(id:string)=>void, autoSelectLayer:()=>boolean,
+   *   setAutoSelectLayer:(on:boolean)=>void}} host
    */
   constructor(host) {
     this.host = host;
@@ -108,25 +109,16 @@ export class EditorPanel {
     this.space = false; // Space held: drags pan, whatever the tool
     // the current tool's options, right-aligned in the top bar
     this.el = h('div', {
-      class: 'edit-options hidden',
+      class: 'edit-options',
       role: 'toolbar',
       'aria-label': 'Tool options',
       'data-testid': 'editor',
     });
-    this.strip = h('nav', { class: 'tool-strip hidden', 'data-testid': 'tool-strip', 'aria-label': 'Edit tools' });
+    this.strip = h('nav', { class: 'tool-strip', 'data-testid': 'tool-strip', 'aria-label': 'Edit tools' });
     window.addEventListener('keyup', (e) => {
       if (e.key === ' ') this.space = false;
     });
     window.addEventListener('blur', () => (this.space = false));
-    this.toolbarButton = h(
-      'button',
-      {
-        'data-testid': 'edit-toggle',
-        title: 'Edit mode (E): select, move, delete and add pads, tracks, regions and holes on the selected layer',
-        onclick: () => this.setOn(!this.s.on),
-      },
-      'Edit',
-    );
   }
 
   get s() {
@@ -146,21 +138,9 @@ export class EditorPanel {
     return n;
   }
 
-  get on() {
-    return !!this.s.on;
-  }
-
   layer() {
     const l = this.host.layer();
     return l && (l.kind === 'gerber' || l.kind === 'excellon') ? l : null;
-  }
-
-  setOn(on) {
-    this.s.on = on;
-    this.cancelSketch();
-    this.#setSelection([]);
-    this.host.touch();
-    this.refresh();
   }
 
   setTool(tool) {
@@ -188,23 +168,19 @@ export class EditorPanel {
 
   refresh() {
     const v = this.host.viewer;
-    const on = this.on;
     const layer = this.layer();
-    this.toolbarButton.classList.toggle('on', on);
-    this.toolbarButton.setAttribute('aria-pressed', on ? 'true' : 'false');
-    this.el.classList.toggle('hidden', !on);
-    v.edit = on ? this.#handler() : null;
-    v.overlayHook = on ? (ctx, map) => this.#drawOverlay(ctx, map) : null;
-    v.settings.pickLayerId = on && layer ? layer.id : null;
-    v.editSelection = on ? this.#viewSelection() : null;
-    v.canvas.classList.toggle('editing', on);
-    v.canvas.dataset.tool = on ? this.s.tool : '';
-    if (!on || this.s.tool !== 'node') v.canvas.dataset.handle = '';
+    v.edit = this.#handler();
+    v.overlayHook = (ctx, map) => this.#drawOverlay(ctx, map);
+    v.settings.pickLayerId = layer ? layer.id : null;
+    v.settings.hoverAnyLayer = this.host.autoSelectLayer();
+    v.editSelection = this.#viewSelection();
+    v.canvas.classList.add('editing');
+    v.canvas.dataset.tool = this.s.tool;
+    if (this.s.tool !== 'node') v.canvas.dataset.handle = '';
     v.drawOverlay();
     this.#refreshStrip();
     this.refreshMenu();
     clear(this.el);
-    if (!on) return;
     if (!layer) {
       this.el.append(h('span', { class: 'muted' }, 'Select a Gerber or drill layer to edit it'));
       return;
@@ -229,6 +205,24 @@ export class EditorPanel {
           ' mm',
         ]),
       );
+    if (tool === 'select' || tool === 'lasso' || tool === 'node') {
+      const auto = h('input', {
+        type: 'checkbox',
+        'data-testid': 'auto-select-layer',
+        checked: this.host.autoSelectLayer(),
+        onchange: (e) => this.host.setAutoSelectLayer(e.target.checked),
+      });
+      this.el.append(
+        h(
+          'label',
+          {
+            class: 'auto-select',
+            title: 'Clicking a shape of another layer on the board switches the edited layer to it',
+          },
+          [auto, 'Auto select layer'],
+        ),
+      );
+    }
     if (tool === 'select' || tool === 'lasso' || tool === 'rubber') {
       const pickFrom = h(
         'select',
@@ -327,7 +321,7 @@ export class EditorPanel {
     const drill = layer?.kind === 'excellon';
     m.undo.disabled = !ed?.canUndo;
     m.redo.disabled = !ed?.canRedo;
-    m.toRegion.disabled = !layer || drill || !this.on || !this.sel.length;
+    m.toRegion.disabled = !layer || drill || !this.sel.length;
     m.unify.disabled = !layer || drill;
     m.revert.disabled = !ed?.ops.length;
     m.revertAll.disabled = !this.host.layers().some((l) => l.editor?.ops.length);
@@ -351,10 +345,7 @@ export class EditorPanel {
   /** The tool strip on the board's left edge (Photoshop-style). */
   #refreshStrip() {
     const layer = this.layer();
-    const on = this.on;
     clear(this.strip);
-    this.strip.classList.toggle('hidden', !on);
-    if (!on) return;
     const tools = this.#tools(layer);
     if (!tools.includes(this.s.tool)) this.s.tool = 'select';
     const icon = (name) => {
@@ -597,45 +588,20 @@ export class EditorPanel {
   }
 
   /**
-   * Right-click on the board. In edit mode: a menu for the object under the pointer (it is
-   * selected first unless already part of the selection) or for the selection. Outside edit
-   * mode: the same selection queries, which switch to editing that object's layer.
+   * Right-click on the board: a menu for the object under the pointer (it is selected first
+   * unless already part of the selection) or for the selection. With auto select layer, an
+   * object of another layer where the edited layer has nothing switches to editing its layer.
    */
   contextMenu(mm, clientX, clientY) {
     const v = this.host.viewer;
-    const hit = v.pickAt(mm[0], mm[1]);
-    if (!this.on) {
-      const l = hit && this.host.layers().find((x) => x.id === hit.layerId);
-      if (!l || (l.kind !== 'gerber' && l.kind !== 'excellon')) return false;
-      // connectivity is a copper question: a hole, mask opening or legend on top of a pad
-      // must not stand in for the pad, so look for the topmost copper object under the pointer
-      const copper = v.pickAt(mm[0], mm[1], (x) => x.kind === 'gerber' && x.role?.type === 'copper');
-      const edit =
-        (then, h = hit) =>
-        () => {
-          this.host.editLayer(h.layerId);
-          if (!this.on) this.setOn(true);
-          this.select([h.index]);
-          then?.();
-        };
-      openMenu(clientX, clientY, [
-        { label: `Edit ${l.name}`, hint: 'E', testid: 'ctx-edit', action: edit() },
-        null,
-        { label: 'Select same shape', testid: 'ctx-same-shape', action: edit(() => this.selectBy('shape')) },
-        {
-          label: 'Select same aperture',
-          testid: 'ctx-same-aperture',
-          disabled: !hit.object.ap,
-          action: edit(() => this.selectBy('aperture')),
-        },
-        {
-          label: 'Select connected',
-          testid: 'ctx-connected',
-          disabled: !copper,
-          action: copper && edit(() => this.selectBy('connected'), copper),
-        },
-      ]);
-      return true;
+    let hit = v.pickAt(mm[0], mm[1]);
+    if (!hit && this.host.autoSelectLayer()) {
+      const other = v.pickAt(mm[0], mm[1], null, null);
+      const l = other && this.host.layers().find((x) => x.id === other.layerId);
+      if (l && (l.kind === 'gerber' || l.kind === 'excellon')) {
+        this.host.editLayer(l.id);
+        hit = other;
+      }
     }
     const layer = this.layer();
     if (!layer) return false;
@@ -1320,9 +1286,8 @@ export class EditorPanel {
     return [round6(this.snap(x)), round6(this.snap(y))];
   }
 
-  /** Keyboard in edit mode; returns true when the key was used. */
+  /** Keyboard of the editor; returns true when the key was used. */
   keydown(e) {
-    if (!this.on) return false;
     const k = e.key;
     const mod = e.ctrlKey || e.metaKey;
     if (mod && k.toLowerCase() === 'z') {
@@ -1370,7 +1335,8 @@ export class EditorPanel {
       this.moveSelection(round6(d[0]), round6(d[1]));
       return true;
     }
-    const tool = TOOL_KEY[k.toLowerCase()];
+    // Shift+letter is left to the app (Shift+A analyser, Shift+B background)
+    const tool = !e.shiftKey && TOOL_KEY[k.toLowerCase()];
     if (tool && this.#tools(this.layer()).includes(tool)) {
       this.setTool(tool);
       return true;

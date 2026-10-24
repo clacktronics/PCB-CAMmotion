@@ -99,7 +99,7 @@ export class AnalyserDock {
       {
         class: 'dock-toggle',
         'data-testid': 'dock-toggle',
-        title: 'Hide the analyser (A)',
+        title: 'Hide the analyser (Shift+A)',
         onclick: () => this.setOpen(false),
       },
       '✕',
@@ -109,7 +109,7 @@ export class AnalyserDock {
       'button',
       {
         'data-testid': 'analyser-toggle',
-        title: 'Show or hide the analyser: apertures, shapes, commands and playback (A)',
+        title: 'Show or hide the analyser: apertures, shapes, commands and playback (Shift+A)',
         onclick: () => this.setOpen(!this.s.open),
       },
       'Analyser',

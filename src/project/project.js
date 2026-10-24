@@ -17,14 +17,14 @@
 //                    view3d: show the 3D view; explode: 0..1 how far the 3D layers are spread;
 //                    explodeStyle: sheets (apart by copper layer, each on its substrate) | layers;
 //                    camera3d: null | { position: [x, y, z], target: [x, y, z] } in mm
-//                    autoSelectLayer: clicking a shape on the board selects its layer (in
-//                    edit mode: switches the edited layer to it); off keeps the layer
-//   settings.edit:   { on, tool, gridMm, aperture: { code, template, sizesMm }, holeDiaMm,
+//                    autoSelectLayer: clicking a shape on the board switches the edited layer
+//                    to its layer (select tool option); off keeps the layer
+//   settings.edit:   { tool, gridMm, aperture: { code, template, sizesMm }, holeDiaMm,
 //                      pickFrom, brushMm }
 //                    the editor (milestone 4): tool = select | lasso | node | hand | rubber |
 //                    pad | track | region | paint (box/lasso pick inside only or touching by drag direction; an
-//                    older selectMode setting is dropped on load); aperture = an existing D-code for new
-//                    pads/tracks, or (code null) a new C/R/O aperture; pickFrom = layer | all |
+//                    older selectMode setting and the retired on switch are dropped on load); aperture = an
+//                    existing D-code for new pads/tracks, or (code null) a new C/R/O aperture; pickFrom = layer | all |
 //                    solo: the layers a box, lasso or rubber picks from (edit/selection.js pickLayers);
 //                    brushMm = rubber and paint brush diameter (edit/brush.js)
 //   settings.analyze: { open, tab, highlight, playback }   the analyser dock (milestone 3)
@@ -74,7 +74,6 @@ export const DEFAULT_VIEW = {
 export const EDIT_TOOLS = ['select', 'lasso', 'node', 'hand', 'rubber', 'pad', 'track', 'region', 'paint'];
 
 export const DEFAULT_EDIT = {
-  on: false,
   tool: 'select',
   gridMm: 0.05,
   aperture: { code: null, template: 'C', sizesMm: [0.25, 0.25] },
@@ -153,9 +152,9 @@ export function normaliseEdit(e) {
   const sizes = Array.isArray(a.sizesMm) ? a.sizesMm : [];
   const rest = { ...src };
   delete rest.selectMode; // retired: box/lasso now pick by drag direction
+  delete rest.on; // retired: the editor is always on
   return {
     ...rest,
-    on: src.on === true,
     tool: EDIT_TOOLS.includes(src.tool) ? src.tool : d.tool,
     gridMm: Number.isFinite(src.gridMm) && src.gridMm >= 0 ? src.gridMm : d.gridMm,
     aperture: {

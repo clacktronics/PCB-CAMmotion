@@ -60,6 +60,10 @@ body {
   padding: 6px 8px 6px 12px;
   flex-wrap: wrap;
   min-width: 0;
+  /* as tall as the menu bar's buttons, with or without tool options, so the board keeps
+     its size when a layer loads (a fit on load would be off) */
+  min-height: 38px;
+  box-sizing: border-box;
 }
 .toolbar .title {
   font-weight: 600;
@@ -735,6 +739,7 @@ table.apt tr.on td {
 }
 .edit-options select {
   max-width: 190px;
+  height: 26px; /* no taller than the menu buttons: the bar keeps its height */
 }
 .edit-options .edit-status {
   margin-left: auto;
@@ -940,12 +945,7 @@ table.apt tr.on td {
   margin: 4px 6px;
   background: var(--line);
 }
-.auto-select {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 0 10px 6px;
-  font-size: 12px;
+.edit-options .auto-select {
   cursor: pointer;
 }
 

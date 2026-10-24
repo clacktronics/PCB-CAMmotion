@@ -94,7 +94,7 @@ test('clicking a hole and a trace shows aperture/tool and the source line', asyn
   expect(sel.line).toBeGreaterThan(1);
 });
 
-test('zoom with the wheel and pan by dragging', async ({ page }) => {
+test('zoom with the wheel and pan by dragging with the middle button', async ({ page }) => {
   await openApp(page);
   await loadBoard(page);
   const v0 = (await page.evaluate(() => window.__pcam.state())).view;
@@ -104,9 +104,10 @@ test('zoom with the wheel and pan by dragging', async ({ page }) => {
   await page.waitForTimeout(200);
   const v1 = (await page.evaluate(() => window.__pcam.state())).view;
   expect(v1.scale).toBeGreaterThan(v0.scale * 1.5);
-  await page.mouse.down();
+  // the editor is always on, so a left drag selects; the middle button pans
+  await page.mouse.down({ button: 'middle' });
   await page.mouse.move(box.x + box.width / 2 + 100, box.y + box.height / 2 + 50, { steps: 5 });
-  await page.mouse.up();
+  await page.mouse.up({ button: 'middle' });
   const v2 = (await page.evaluate(() => window.__pcam.state())).view;
   expect(v2.cx).toBeLessThan(v1.cx);
   expect(v2.cy).toBeGreaterThan(v1.cy);

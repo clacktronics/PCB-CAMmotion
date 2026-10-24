@@ -1,12 +1,10 @@
 // Editor tool strip: select box (dragged rightwards: inside only; leftwards: touching), lasso,
 // hand, double-click to select connected, 45° tracks, and the right-click menu (same shape,
-// same aperture, connected; edit from outside edit mode).
+// same aperture, connected; auto select layer).
 
 import { test, expect } from '@playwright/test';
-import { join } from 'node:path';
-import { openApp, loadBoard, boardFiles, clientAt, ROOT } from './viewer-helpers.js';
-import { clickMenu } from './helpers.js';
-import { synthGerber, gerber, drill, bytes } from '../helpers.js';
+import { openApp, loadBoard, clientAt } from './viewer-helpers.js';
+import { synthGerber } from '../helpers.js';
 import { objectsInPolygon, boxPolygon, sameShape, connected } from '../../src/edit/selection.js';
 import { hitTest } from '../../src/model/hit-test.js';
 
@@ -20,7 +18,6 @@ const selection = (page) => page.evaluate(() => window.__pcam.app.editor.sel);
 async function startEditing(page) {
   await loadBoard(page);
   await page.locator(`[data-testid=layer][data-name="${FCU}"]`).click();
-  await clickMenu(page, '[data-testid=edit-toggle]');
   await expect(page.locator('[data-testid=tool-strip]')).toBeVisible();
 }
 
@@ -306,54 +303,32 @@ test('right-click: select same shape, same aperture and connected', async ({ pag
   expect(errors).toEqual([]);
 });
 
-test('right-click outside edit mode: edit the object, or select alike, on its layer', async ({ page }) => {
+test('right-click with auto select layer: an object of another layer switches to editing it', async ({ page }) => {
   const { errors } = await openApp(page);
   await loadBoard(page);
-  await page.locator(`[data-testid=layer][data-name="${FCU}"]`).click();
-  const pad = image.objects.findIndex((o, i) => o.k === 'F' && o.dark && sameShape(image, [i]).length > 2);
-  const p = image.objects[pad];
-  const [cx, cy] = await clientAt(page, p.x, p.y);
-  await page.mouse.click(cx, cy, { button: 'right' });
-  const menu = page.locator('[data-testid=context-menu]');
-  await expect(menu.locator('[data-testid=ctx-edit]')).toBeVisible();
-  // which layer it offers depends on what is on top there; pick same shape on that layer
-  const layerName = await page.evaluate(([x, y]) => window.__pcam.app.viewer.pick(x, y)?.layerId, [cx, cy]);
-  await menu.locator('[data-testid=ctx-same-shape]').click();
-  await expect(page.locator('[data-testid=editor]')).toBeVisible();
-  expect(await page.evaluate(() => window.__pcam.app.activeLayerId)).toBe(layerName);
-  expect((await selection(page)).length).toBeGreaterThan(0);
-  expect(errors).toEqual([]);
-});
-
-test('right-click outside edit mode: select connected uses the copper under a hole or legend', async ({ page }) => {
-  const { errors } = await openApp(page);
-  const dir = join(ROOT, 'samples/clockblock');
-  await loadBoard(page, boardFiles(dir));
-  const name = 'clockblock-F_Cu.gbr';
-  const cu = gerber(bytes(join(dir, name))).image;
-  const holes = drill(bytes(join(dir, 'clockblock.drl'))).image.objects;
-  // a plated pad with a track leaving it and a hole drawn on top of it
-  const pad = cu.objects.findIndex(
-    (o, i) =>
-      o.k === 'F' &&
-      o.dark &&
-      holes.some((h) => Math.hypot(h.x - o.x, h.y - o.y) < 1e-3) &&
-      connected(cu, [i]).length > 2,
+  const BCU = 'synthetic-board-B_Cu.gbr';
+  await page.locator(`[data-testid=layer][data-name="${BCU}"]`).click();
+  // an F.Cu pad that is the topmost object under its centre, with nothing of B.Cu there
+  const pad = await page.evaluate(
+    ([f, b]) => {
+      const v = window.__pcam.app.viewer;
+      const objs = window.__pcam.app.layerById(f).image.objects;
+      for (let i = 0; i < objs.length; i++) {
+        const o = objs[i];
+        if (o.k !== 'F' || !o.dark || v.pickAt(o.x, o.y, null, b)) continue;
+        const hit = v.pickAt(o.x, o.y, null, null);
+        if (hit?.layerId === f && hit.index === i) return { index: i, x: o.x, y: o.y };
+      }
+      return null;
+    },
+    [FCU, BCU],
   );
-  expect(pad).toBeGreaterThanOrEqual(0);
-  const p = cu.objects[pad];
-  const [cx, cy] = await clientAt(page, p.x, p.y);
-  // the bug: the hole on top stood in for the pad, so "connected" found only the hole
-  expect(await page.evaluate(([x, y]) => window.__pcam.app.viewer.pick(x, y)?.layerId, [cx, cy])).toBe(
-    'clockblock.drl',
-  );
+  expect(pad).not.toBeNull();
+  const [cx, cy] = await clientAt(page, pad.x, pad.y);
   await page.mouse.click(cx, cy, { button: 'right' });
-  await page.locator('[data-testid=context-menu] [data-testid=ctx-connected]').click();
-  await expect(page.locator('[data-testid=editor]')).toBeVisible();
-  expect(await page.evaluate(() => window.__pcam.app.activeLayerId)).toBe(name);
-  const sel = await selection(page);
-  expect(sel).toEqual(connected(cu, [hitTest(cu, p.x, p.y)]));
-  expect(sel).toContain(pad);
+  await page.locator('[data-testid=context-menu] [data-testid=ctx-same-shape]').click();
+  expect(await page.evaluate(() => window.__pcam.app.activeLayerId)).toBe(FCU);
+  expect(await selection(page)).toEqual(sameShape(image, [pad.index]));
   expect(errors).toEqual([]);
 });
 
@@ -453,7 +428,6 @@ test('drill layer: the rubber deletes holes, there is no paint', async ({ page }
   await loadBoard(page);
   const drl = await page.evaluate(() => window.__pcam.app.layers.find((l) => l.kind === 'excellon').name);
   await page.locator(`[data-testid=layer][data-name="${drl}"]`).click();
-  await clickMenu(page, '[data-testid=edit-toggle]');
   await expect(page.locator('[data-testid=tool-paint]')).toHaveCount(0);
   await page.locator('[data-testid=tool-rubber]').click();
   const hole = await page.evaluate((n) => {

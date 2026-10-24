@@ -28,12 +28,12 @@ continue where you left off.
   the board in their real materials (inner copper as bare copper on substrate). In the
   analysis views each layer also has a colour (click the bar on its left) and **inv**ert
   (e.g. the solder mask material instead of its openings). **S** key: solo the selected layer,
-  **I**: invert it, **B**: background. All of it is saved in the `.pcam`.
+  **I**: invert it, **Shift+B**: background. All of it is saved in the `.pcam`.
 - **Inspector:** click any pad, track, region or hole to see its aperture/tool, polarity,
   coordinates, X2 attributes and the source line it came from. Parser messages per file are
   listed with line numbers.
 - **Analyser** (the dock under the board, for the selected layer; the **Analyser** toolbar button
-  or **A** turns it on and off, and hiding it ends playback and clears the highlight):
+  or **Shift+A** turns it on and off, and hiding it ends playback and clears the highlight):
   - *Apertures*: every aperture (or drill tool) with its shape, size, area, flashes, draws, arcs,
     drawn length, `.AperFunction` and definition line; unused ones greyed out. Click a column to
     sort, click a row to highlight every use on the board.
@@ -47,8 +47,8 @@ continue where you left off.
     forward). ⏭ ends playback and shows the whole layer again.
   - Hovering a feature shows its aperture, kind, polarity and source line in the status bar.
     Highlight, playback position and the dock's tab are saved in the `.pcam`.
-- **Editor** (the **Edit** toolbar button or **E**; works on the selected layer). A tool
-  strip on the board's left edge holds the tools, Photoshop-style:
+- **Editor** (always on; works on the selected layer). A tool strip on the board's left edge
+  holds the tools, Photoshop-style:
   - *Select* (**V**): click an object, **Shift**+click to add/remove, drag a box round
     objects (**Shift** adds, **Alt** or **Ctrl** takes away), **Ctrl+A** all, **Ctrl+I**
     invert. Drag a selected object to move the selection; the arrow keys nudge it one grid
@@ -76,8 +76,9 @@ continue where you left off.
     whatever its D-code: pads by aperture and rotation, tracks by width and vector, regions
     by outline), **Select same aperture**, **Select connected** (touching copper followed
     object to object on this layer; clear-polarity cuts are not taken into account),
-    select all / invert / deselect, **To region** and **Delete**. Outside edit mode the menu
-    offers to edit the object, or to start editing its layer with one of those selections.
+    select all / invert / deselect, **To region** and **Delete**.
+  - **Auto select layer** (in the top bar with the select, lasso and node tools): clicking a
+    shape of another layer, where the edited layer has nothing, switches to editing that layer.
   - **To region** turns the selected pads, tracks and fills into G36/G37 regions: a single
     object exactly (arcs kept as G02/G03), overlapping objects unified into one outline.
     **Unify layer → regions** does it to the whole layer: every track, pad, fill, step and

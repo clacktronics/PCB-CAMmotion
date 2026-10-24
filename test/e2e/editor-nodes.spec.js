@@ -43,7 +43,6 @@ test('node tool: drag, add, delete, nudge and type corners of a region; undo; sa
   const { errors } = await openApp(page);
   await loadBoard(page);
   await page.locator(`[data-testid=layer][data-name="${FCU}"]`).click();
-  await clickMenu(page, '[data-testid=edit-toggle]');
   await expect(page.locator('[data-testid=tool-node]')).toBeVisible();
 
   // an empty spot right of the board, zoomed in so the handles are far apart, in the left
@@ -142,7 +141,6 @@ test('node tool: clicking a pad explains that only regions have corners', async 
   const { errors } = await openApp(page);
   await loadBoard(page);
   await page.locator(`[data-testid=layer][data-name="${FCU}"]`).click();
-  await clickMenu(page, '[data-testid=edit-toggle]');
   await page.locator('[data-testid=tool-node]').click();
   await expect(page.locator('[data-testid=node-info]')).toHaveText('Click a region to edit its corners');
   const pad = await page.evaluate((n) => {

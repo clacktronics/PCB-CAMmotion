@@ -160,7 +160,7 @@ export class App {
       {
         onclick: () => this.#setView({ background: this.view.background === 'light' ? 'dark' : 'light' }),
         'data-testid': 'background',
-        title: 'Light or dark background (B)',
+        title: 'Light or dark background (Shift+B)',
       },
       'Light background',
     );
@@ -220,6 +220,11 @@ export class App {
       layers: () => app.layers,
       editLayer: (id) => id !== app.activeLayerId && app.#setActive(id),
       autoSelectLayer: () => app.view.autoSelectLayer,
+      setAutoSelectLayer: (on) => {
+        app.view.autoSelectLayer = on;
+        app.#touch();
+        app.editor.refresh();
+      },
     });
 
     this.layerStrip = new LayerStrip({
@@ -279,10 +284,9 @@ export class App {
           ),
           row('View', Object.values(this.btnDim)),
           row('Colours', Object.values(this.btnMode)),
-          item(this.btnBg, 'B'),
+          item(this.btnBg, 'Shift+B'),
           null,
-          item(this.dock.toolbarButton, 'A'),
-          item(this.editor.toolbarButton, 'E'),
+          item(this.dock.toolbarButton, 'Shift+A'),
         ],
       },
       {
@@ -330,25 +334,8 @@ export class App {
     this.showBar = h('div', { class: 'show-toggles', 'data-testid': 'show-toggles' }, Object.values(this.btnShow));
     this.layerList = h('ul', { class: 'layers', 'data-testid': 'layers' });
     this.stackPanel = h('div', { class: 'stack' });
-    this.autoSelectInput = h('input', {
-      type: 'checkbox',
-      'data-testid': 'auto-select-layer',
-      onchange: (e) => {
-        this.view.autoSelectLayer = e.target.checked;
-        this.#touch();
-      },
-    });
-    const autoSelect = h(
-      'label',
-      {
-        class: 'auto-select',
-        title: 'Clicking a shape on the board selects its layer (in edit mode: edits that layer)',
-      },
-      [this.autoSelectInput, 'Auto select layer'],
-    );
     const left = h('aside', { class: 'panel left' }, [
       h('h2', {}, 'Layers'),
-      autoSelect,
       this.showBar,
       this.layerList,
       h('h2', {}, 'Board materials'),
@@ -414,7 +401,6 @@ export class App {
       if (e.key === 'Escape') return this.viewer.select(null);
       if (e.ctrlKey || e.metaKey || e.altKey || isTyping(e.target)) return;
       const k = e.key.toLowerCase();
-      if (k === 'e') return this.editor.setOn(!this.editor.on);
       if (k === ',' || k === '.') this.dock.step(k === '.' ? 1 : -1);
       else if (k === 'f') this.#fit();
       else if (k === 's') this.#toggleSolo();
@@ -849,7 +835,6 @@ export class App {
       b.disabled = !!v.view3d;
     }
     this.btnBg.classList.toggle('on', v.background === 'light');
-    this.autoSelectInput.checked = v.autoSelectLayer !== false;
   }
 
   #refreshShow() {
@@ -1083,7 +1068,7 @@ export class App {
     const l = this.layerById(layerId);
     const o = l?.image.objects[index];
     if (!o) return;
-    if (this.editor.on && layerId === this.activeLayerId) return this.editor.select([index]);
+    if (layerId === this.activeLayerId) return this.editor.select([index]);
     this.viewer.select({ layerId, index, object: o, x: null, y: null });
   }
 
