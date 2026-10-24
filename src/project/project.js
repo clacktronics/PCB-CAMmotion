@@ -1,9 +1,10 @@
 // Project operations on top of the schema-1 project shape (src/project/schema.js):
 //   manifest, sources [{ name, bytes }], settings, stackup, tools, extra
 // The viewer keeps its per-layer and view settings in `settings` (settings/project.json):
-//   settings.layers: { [sourceName]: { opacity, role, colour, invert } }
+//   settings.layers: { [sourceName]: { opacity, role, colour, invert, locked } }
 //                    role = user override or null; colour = '#rrggbb' for the analysis views
-//                    or null; invert = draw the layer's complement (e.g. mask material)
+//                    or null; invert = draw the layer's complement (e.g. mask material);
+//                    locked = shown but not picked or edited (files without it: unlocked)
 //   settings.view:   { side, mode, background, solo, activeLayer, show, cx, cy, scale,
 //                      view3d, explode, camera3d }
 //                    solo: names of the soloed layers (none = every layer shown). Files from
@@ -169,7 +170,7 @@ export function normaliseEdit(e) {
 }
 
 export function defaultLayerSettings() {
-  return { opacity: 1, role: null, colour: null, invert: false };
+  return { opacity: 1, role: null, colour: null, invert: false, locked: false };
 }
 
 /** Soloed layer names; converts the old single-solo boolean. */
@@ -302,6 +303,7 @@ export function buildLayers(project, opts = {}) {
       opacity: settings.opacity ?? 1,
       colour: settings.colour ?? null,
       invert: !!settings.invert,
+      locked: settings.locked === true,
     };
     if (role.type === 'profile') layer.outline = extractOutline(file.image);
     layers.push(layer);

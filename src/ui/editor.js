@@ -138,9 +138,10 @@ export class EditorPanel {
     return n;
   }
 
+  /** The edited layer: the selected layer when it is a Gerber or drill file and not locked. */
   layer() {
     const l = this.host.layer();
-    return l && (l.kind === 'gerber' || l.kind === 'excellon') ? l : null;
+    return l && (l.kind === 'gerber' || l.kind === 'excellon') && !l.locked ? l : null;
   }
 
   setTool(tool) {
@@ -182,7 +183,14 @@ export class EditorPanel {
     this.refreshMenu();
     clear(this.el);
     if (!layer) {
-      this.el.append(h('span', { class: 'muted' }, 'Select a Gerber or drill layer to edit it'));
+      const locked = this.host.layer()?.locked;
+      this.el.append(
+        h(
+          'span',
+          { class: 'muted', 'data-testid': locked ? 'edit-locked' : null },
+          locked ? `${this.host.layer().name} is locked` : 'Select a Gerber or drill layer to edit it',
+        ),
+      );
       return;
     }
     const ed = layer.editor;
@@ -798,6 +806,8 @@ export class EditorPanel {
     const layer = this.layer();
     if (!layer?.editor?.canUndo) return;
     const layers = this.#stepLayers(layer, (ed) => ed.ops.at(-1));
+    const locked = layers.find((l) => l.locked);
+    if (locked) return this.host.message(`${locked.name} is locked`, true);
     // the node tool keeps editing the region (corner edits leave it where it was)
     const keep = this.#nodeRegion() ? this.sel : [];
     for (const l of layers) {
@@ -812,9 +822,12 @@ export class EditorPanel {
   redo() {
     const layer = this.layer();
     if (!layer?.editor?.canRedo) return;
+    const layers = this.#stepLayers(layer, (ed) => ed.redoOps.at(-1));
+    const locked = layers.find((l) => l.locked);
+    if (locked) return this.host.message(`${locked.name} is locked`, true);
     const next = new Map();
     try {
-      for (const l of this.#stepLayers(layer, (ed) => ed.redoOps.at(-1))) {
+      for (const l of layers) {
         next.set(l.id, l.editor.redo());
         this.host.commit(l);
       }

@@ -5121,11 +5121,13 @@
     /**
      * Topmost visible object at a board point (mm), optionally only on layers `accept` takes
      * (e.g. copper only, for "select connected"). In edit mode only the layer being edited can
-     * be picked, unless `only` is passed as null (any shown layer).
+     * be picked, unless `only` is passed as null (any shown layer). Locked layers are never picked.
      */
     pickAt(x2, y2, accept = null, only = this.settings.pickLayerId) {
       const tol = 3 / this.view.scale;
-      let order = only ? this.layers.filter((l) => l.id === only && l.image) : this.#pickOrder();
+      let order = (only ? this.layers.filter((l) => l.id === only && l.image) : this.#pickOrder()).filter(
+        (l) => !l.locked
+      );
       if (accept) order = order.filter(accept);
       for (const l of order) {
         let i = only ? hitTest(l.image, x2, y2, 0) : -1;
@@ -26431,7 +26433,7 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
   var EPS = 1e-9;
   var PICK_FROM = ["layer", "all", "solo"];
   function pickLayers(layers, { from, activeId, solo }) {
-    const editable = layers.filter((l) => (l.kind === "gerber" || l.kind === "excellon") && l.image);
+    const editable = layers.filter((l) => (l.kind === "gerber" || l.kind === "excellon") && l.image && !l.locked);
     const active = editable.filter((l) => l.id === activeId);
     if (from === "all") return editable;
     if (from === "solo" && solo?.length) return editable.filter((l) => solo.includes(l.id));
@@ -26756,7 +26758,7 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     };
   }
   function defaultLayerSettings() {
-    return { opacity: 1, role: null, colour: null, invert: false };
+    return { opacity: 1, role: null, colour: null, invert: false, locked: false };
   }
   function normaliseSolo(solo, activeLayer) {
     if (Array.isArray(solo)) return [...new Set(solo.filter((n2) => typeof n2 === "string"))];
@@ -26867,7 +26869,8 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
         // what is shown is chosen by soloing (settings.view.solo)
         opacity: settings.opacity ?? 1,
         colour: settings.colour ?? null,
-        invert: !!settings.invert
+        invert: !!settings.invert,
+        locked: settings.locked === true
       };
       if (role.type === "profile") layer.outline = extractOutline(file.image);
       layers.push(layer);
@@ -27961,9 +27964,10 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
       for (const indices of this.selected.values()) n2 += indices.length;
       return n2;
     }
+    /** The edited layer: the selected layer when it is a Gerber or drill file and not locked. */
     layer() {
       const l = this.host.layer();
-      return l && (l.kind === "gerber" || l.kind === "excellon") ? l : null;
+      return l && (l.kind === "gerber" || l.kind === "excellon") && !l.locked ? l : null;
     }
     setTool(tool) {
       if (!EDIT_TOOLS.includes(tool)) return;
@@ -28000,7 +28004,14 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
       this.refreshMenu();
       clear(this.el);
       if (!layer) {
-        this.el.append(h("span", { class: "muted" }, "Select a Gerber or drill layer to edit it"));
+        const locked = this.host.layer()?.locked;
+        this.el.append(
+          h(
+            "span",
+            { class: "muted", "data-testid": locked ? "edit-locked" : null },
+            locked ? `${this.host.layer().name} is locked` : "Select a Gerber or drill layer to edit it"
+          )
+        );
         return;
       }
       const ed3 = layer.editor;
@@ -28568,6 +28579,8 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
       const layer = this.layer();
       if (!layer?.editor?.canUndo) return;
       const layers = this.#stepLayers(layer, (ed3) => ed3.ops.at(-1));
+      const locked = layers.find((l) => l.locked);
+      if (locked) return this.host.message(`${locked.name} is locked`, true);
       const keep = this.#nodeRegion() ? this.sel : [];
       for (const l of layers) {
         l.editor.undo();
@@ -28580,9 +28593,12 @@ ${c.body.map((b3) => (b3.kind === "comment" ? `0 ${b3.text}` : b3.text) + "*").j
     redo() {
       const layer = this.layer();
       if (!layer?.editor?.canRedo) return;
+      const layers = this.#stepLayers(layer, (ed3) => ed3.redoOps.at(-1));
+      const locked = layers.find((l) => l.locked);
+      if (locked) return this.host.message(`${locked.name} is locked`, true);
       const next = /* @__PURE__ */ new Map();
       try {
-        for (const l of this.#stepLayers(layer, (ed3) => ed3.redoOps.at(-1))) {
+        for (const l of layers) {
           next.set(l.id, l.editor.redo());
           this.host.commit(l);
         }
@@ -30045,8 +30061,15 @@ Click: show only this layer${turns ? `, seen from the ${s.side}` : ""} · Shift+
         if ("colour" in patch) l.colour = patch.colour;
         if ("invert" in patch) l.invert = patch.invert;
         if ("opacity" in patch) l.opacity = patch.opacity;
+        if ("locked" in patch) l.locked = patch.locked;
       }
       if ("role" in patch) return this.#rebuild({ keepView: true });
+      if ("locked" in patch) {
+        this.editor.layerChanged();
+        this.#refreshLayers();
+        this.#touch();
+        return;
+      }
       this.viewer.layersChanged();
       this.viewer3d.layersChanged();
       this.#touch();
@@ -30057,6 +30080,7 @@ Click: show only this layer${turns ? `, seen from the ${s.side}` : ""} · Shift+
       this.viewer.layersChanged();
       this.viewer3d.setSettings({ stackup: this.project.stackup });
       this.#refreshStack();
+      this.#refreshLayers();
       this.#touch();
     }
     #touch() {
@@ -30215,7 +30239,7 @@ Click: show only this layer${turns ? `, seen from the ${s.side}` : ""} · Shift+
         const row = h(
           "li",
           {
-            class: `layer source-row${l.id === this.activeLayerId ? " active" : ""}${muted ? " hidden-layer" : ""}${groupOff ? " group-off" : ""}${soloed ? " soloed" : ""}`,
+            class: `layer source-row${l.id === this.activeLayerId ? " active" : ""}${l.locked ? " locked" : ""}${muted ? " hidden-layer" : ""}${groupOff ? " group-off" : ""}${soloed ? " soloed" : ""}`,
             style: `--layer: ${rgb.join(", ")}`,
             "data-testid": "layer",
             "data-name": l.name,
@@ -30251,6 +30275,20 @@ Click: show only this layer${turns ? `, seen from the ${s.side}` : ""} · Shift+
                   }
                 },
                 "S"
+              ),
+              h(
+                "button",
+                {
+                  class: `lock-btn${l.locked ? " on" : ""}`,
+                  "data-testid": "lock",
+                  title: l.locked ? "Locked: shown, but not picked or edited; press to unlock" : "Lock: keep this layer from being picked or edited",
+                  "aria-pressed": l.locked ? "true" : "false",
+                  onclick: (e) => {
+                    e.stopPropagation();
+                    this.#setLayer(l.id, { locked: !l.locked });
+                  }
+                },
+                l.locked ? "🔒" : "🔓"
               ),
               l.editor?.ops.length ? h(
                 "span",
@@ -30530,7 +30568,7 @@ Click: show only this layer${turns ? `, seen from the ${s.side}` : ""} · Shift+
     const st2 = effectiveStackup(project);
     if (l.role.type === "soldermask") return lookupMaterial("mask", st2.mask?.[l.role.side] ?? st2.mask).value;
     if (l.role.type === "legend") return lookupMaterial("silk", st2.silk?.[l.role.side] ?? st2.silk).value;
-    if (l.role.type === "copper") return lookupMaterial("finish", st2.finish).value;
+    if (l.role.type === "copper") return COPPER;
     if (l.role.type === "substrate") return lookupMaterial("substrate", st2.substrate).value;
     if (l.role.type === "paste") return MISC.paste;
     return DEBUG[l.role.type] || DEBUG.other;

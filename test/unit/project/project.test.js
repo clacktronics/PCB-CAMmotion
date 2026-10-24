@@ -99,6 +99,7 @@ test('viewer settings and layer overrides survive save → load (in settings/pro
   };
   p.settings.layers[first].colour = '#123456';
   p.settings.layers[first].invert = true;
+  p.settings.layers[first].locked = true;
   p.stackup = { ...p.stackup, mask: { top: 'Red', bottom: 'Blue' }, source: 'user' };
   const z = unzipSync(saveProject(p));
   assert.ok(JSON.parse(strFromU8(z['settings/project.json'])).view.mode === 'xor');
@@ -111,7 +112,8 @@ test('viewer settings and layer overrides survive save → load (in settings/pro
   const l = layers.find((x) => x.id === p.sources[1].name);
   assert.deepEqual([l.role.type, l.role.side, l.role.source], ['copper', 'bottom', 'user']);
   const f = layers.find((x) => x.id === first);
-  assert.deepEqual([f.visible, f.colour, f.invert], [true, '#123456', true]);
+  assert.deepEqual([f.visible, f.colour, f.invert, f.locked], [true, '#123456', true, true]);
+  assert.equal(l.locked, false);
 });
 
 test('layer group toggles: defaults for older files; the old showPaste flag becomes show.paste', () => {

@@ -91,6 +91,34 @@ test('select a pad, delete it, undo and redo', async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
+test('a locked layer is shown but not picked or edited; the lock is saved in the project', async ({ page }) => {
+  const { errors } = await openApp(page);
+  await startEditing(page);
+  const before = await objects(page);
+  const pad = await lonePad(page);
+  await clickMm(page, pad.x, pad.y);
+  await expect(page.locator('[data-testid=edit-selection]')).toHaveText('1 selected');
+  const lock = page.locator(`[data-testid=layer][data-name="${FCU}"] [data-testid=lock]`);
+  await expect(lock).toHaveAttribute('aria-pressed', 'false');
+  await lock.click();
+  await expect(lock).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('[data-testid=edit-locked]')).toHaveText(`${FCU} is locked`);
+  // locking drops the selection; Delete and clicks on the board do nothing
+  await page.keyboard.press('Delete');
+  await clickMm(page, pad.x, pad.y);
+  await page.keyboard.press('Delete');
+  expect(await objects(page)).toEqual(before);
+  const saved = await page.evaluate((n) => window.__pcam.state().project.settings.layers[n].locked, FCU);
+  expect(saved).toBe(true);
+  // unlocked, it edits again
+  await lock.click();
+  await clickMm(page, pad.x, pad.y);
+  await expect(page.locator('[data-testid=edit-selection]')).toHaveText('1 selected');
+  await page.keyboard.press('Delete');
+  await expect.poll(async () => (await objects(page)).length).toBe(before.length - 1);
+  expect(errors).toEqual([]);
+});
+
 test('tool options sit in the top bar past the divider over the layer panel; Edit menu reverts one layer or all', async ({
   page,
 }) => {

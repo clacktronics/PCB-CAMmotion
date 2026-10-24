@@ -20,12 +20,12 @@ export const PICK_FROM = ['layer', 'all', 'solo'];
  * The layers a box or lasso picks from: only Gerber and drill layers (the editable kinds).
  * `layers` are the shown layers (the group toggles applied); 'all' takes every one of them,
  * 'solo' the soloed ones, or the edited layer when nothing is soloed; 'layer' (or anything
- * else) just the edited layer.
+ * else) just the edited layer. Locked layers are never picked.
  * @param {object[]} layers
  * @param {{from:string, activeId:string|null, solo:string[]}} opts
  */
 export function pickLayers(layers, { from, activeId, solo }) {
-  const editable = layers.filter((l) => (l.kind === 'gerber' || l.kind === 'excellon') && l.image);
+  const editable = layers.filter((l) => (l.kind === 'gerber' || l.kind === 'excellon') && l.image && !l.locked);
   const active = editable.filter((l) => l.id === activeId);
   if (from === 'all') return editable;
   if (from === 'solo' && solo?.length) return editable.filter((l) => solo.includes(l.id));

@@ -338,11 +338,13 @@ export class Viewer {
   /**
    * Topmost visible object at a board point (mm), optionally only on layers `accept` takes
    * (e.g. copper only, for "select connected"). In edit mode only the layer being edited can
-   * be picked, unless `only` is passed as null (any shown layer).
+   * be picked, unless `only` is passed as null (any shown layer). Locked layers are never picked.
    */
   pickAt(x, y, accept = null, only = this.settings.pickLayerId) {
     const tol = 3 / this.view.scale; // 3 CSS px
-    let order = only ? this.layers.filter((l) => l.id === only && l.image) : this.#pickOrder();
+    let order = (only ? this.layers.filter((l) => l.id === only && l.image) : this.#pickOrder()).filter(
+      (l) => !l.locked,
+    );
     if (accept) order = order.filter(accept);
     for (const l of order) {
       // editing: an object under the point wins over a near miss on a neighbour (fine pitch)

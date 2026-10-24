@@ -4,7 +4,16 @@ import { test, expect } from '@playwright/test';
 import { join } from 'node:path';
 import { openApp, loadBoard, pixelAt, waitRendered, boardFiles, ROOT } from './viewer-helpers.js';
 import { clickMenu } from './helpers.js';
-import { CLASSIC, CLASSIC_BACKGROUND, MISC, SUBSTRATE, FINISH } from '../../src/model/materials.js';
+import {
+  CLASSIC,
+  CLASSIC_BACKGROUND,
+  MISC,
+  SUBSTRATE,
+  COPPER,
+  SOLDER_MASK,
+  SILKSCREEN,
+  lookupMaterial,
+} from '../../src/model/materials.js';
 
 test.use({ viewport: { width: 1400, height: 850 } });
 
@@ -176,9 +185,22 @@ test('each layer row takes its layer colour, and follows the colour picker', asy
       .evaluate((el) => getComputedStyle(el).backgroundColor);
   const finish = (await page.evaluate(() => window.__pcam.state().project.stackup.finish)).toLowerCase();
   expect(finish).toBe('enig');
-  // realistic: material colours (copper shows its ENIG finish, paste grey)
-  expect(await bar('synthetic-board-F_Cu.gbr')).toBe(`rgb(${FINISH.enig.rgb.join(', ')})`);
+  // realistic: material colours (copper as copper, not its ENIG finish; mask and silkscreen
+  // in the colours of Board materials; paste grey)
+  expect(await bar('synthetic-board-F_Cu.gbr')).toBe(`rgb(${COPPER.rgb.join(', ')})`);
   expect(await bar('synthetic-board-F_Paste.gbr')).toBe(`rgb(${MISC.paste.rgb.join(', ')})`);
+  const st = await page.evaluate(() => window.__pcam.state().project.stackup);
+  expect(await bar('synthetic-board-F_Mask.gbr')).toBe(
+    `rgb(${lookupMaterial('mask', st.mask.top).value.rgb.join(', ')})`,
+  );
+  expect(await bar('synthetic-board-F_Silkscreen.gbr')).toBe(
+    `rgb(${lookupMaterial('silk', st.silk.top).value.rgb.join(', ')})`,
+  );
+  // choosing another mask or silkscreen colour recolours their rows at once
+  await page.locator('[data-testid=stack-mask-top-]').selectOption('red');
+  await page.locator('[data-testid=stack-silkscreen]').selectOption('yellow');
+  await expect.poll(() => bar('synthetic-board-F_Mask.gbr')).toBe(`rgb(${SOLDER_MASK.red.rgb.join(', ')})`);
+  await expect.poll(() => bar('synthetic-board-F_Silkscreen.gbr')).toBe(`rgb(${SILKSCREEN.yellow.rgb.join(', ')})`);
   // classic: the palette colour for the row, also as a tint of the whole row
   await mode(page, 'classic');
   const state = await page.evaluate(() => window.__pcam.state());

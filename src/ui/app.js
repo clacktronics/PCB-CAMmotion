@@ -19,7 +19,7 @@ import { APP_VERSION } from '../version.js';
 import { saveAutosave, loadAutosave, clearAutosave } from './autosave.js';
 import { LAYER_TYPES, detectFileKind } from '../model/layers.js';
 import { LAYER_GROUPS, groupOf, shownLayers } from '../model/layer-groups.js';
-import { SOLDER_MASK, SILKSCREEN, FINISH, SUBSTRATE, DEBUG, MISC, lookupMaterial } from '../model/materials.js';
+import { SOLDER_MASK, SILKSCREEN, FINISH, SUBSTRATE, COPPER, DEBUG, MISC, lookupMaterial } from '../model/materials.js';
 import { h, clear } from './dom.js';
 import { VIEW_MODES, VIEW_MODE_LABELS, layerColour, toHex, parseHex } from '../model/view-modes.js';
 import { AnalyserDock } from './analyser.js';
@@ -704,8 +704,16 @@ export class App {
       if ('colour' in patch) l.colour = patch.colour;
       if ('invert' in patch) l.invert = patch.invert;
       if ('opacity' in patch) l.opacity = patch.opacity;
+      if ('locked' in patch) l.locked = patch.locked;
     }
     if ('role' in patch) return this.#rebuild({ keepView: true });
+    if ('locked' in patch) {
+      // a locked layer keeps no selection and cannot be edited
+      this.editor.layerChanged();
+      this.#refreshLayers();
+      this.#touch();
+      return;
+    }
     this.viewer.layersChanged();
     this.viewer3d.layersChanged();
     this.#touch();
@@ -717,6 +725,8 @@ export class App {
     this.viewer.layersChanged();
     this.viewer3d.setSettings({ stackup: this.project.stackup });
     this.#refreshStack();
+    // the realistic layer rows take the mask and silkscreen colours
+    this.#refreshLayers();
     this.#touch();
   }
 
@@ -894,7 +904,7 @@ export class App {
       const row = h(
         'li',
         {
-          class: `layer source-row${l.id === this.activeLayerId ? ' active' : ''}${muted ? ' hidden-layer' : ''}${groupOff ? ' group-off' : ''}${soloed ? ' soloed' : ''}`,
+          class: `layer source-row${l.id === this.activeLayerId ? ' active' : ''}${l.locked ? ' locked' : ''}${muted ? ' hidden-layer' : ''}${groupOff ? ' group-off' : ''}${soloed ? ' soloed' : ''}`,
           style: `--layer: ${rgb.join(', ')}`,
           'data-testid': 'layer',
           'data-name': l.name,
@@ -934,6 +944,22 @@ export class App {
                 },
               },
               'S',
+            ),
+            h(
+              'button',
+              {
+                class: `lock-btn${l.locked ? ' on' : ''}`,
+                'data-testid': 'lock',
+                title: l.locked
+                  ? 'Locked: shown, but not picked or edited; press to unlock'
+                  : 'Lock: keep this layer from being picked or edited',
+                'aria-pressed': l.locked ? 'true' : 'false',
+                onclick: (e) => {
+                  e.stopPropagation();
+                  this.#setLayer(l.id, { locked: !l.locked });
+                },
+              },
+              l.locked ? '🔒' : '🔓',
             ),
             l.editor?.ops.length
               ? h(
@@ -1223,7 +1249,8 @@ function swatchColour(l, project) {
   const st = effectiveStackup(project);
   if (l.role.type === 'soldermask') return lookupMaterial('mask', st.mask?.[l.role.side] ?? st.mask).value;
   if (l.role.type === 'legend') return lookupMaterial('silk', st.silk?.[l.role.side] ?? st.silk).value;
-  if (l.role.type === 'copper') return lookupMaterial('finish', st.finish).value;
+  // the row shows the copper itself (the board shows the finish where the mask is open)
+  if (l.role.type === 'copper') return COPPER;
   if (l.role.type === 'substrate') return lookupMaterial('substrate', st.substrate).value;
   if (l.role.type === 'paste') return MISC.paste;
   return DEBUG[l.role.type] || DEBUG.other;

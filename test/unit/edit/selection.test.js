@@ -207,3 +207,16 @@ test('pickLayers: a box or lasso picks from the edited layer, every shown layer,
   assert.deepEqual(ids('layer', null), []);
   assert.deepEqual(ids('nonsense', 'c'), ['c']);
 });
+
+test('pickLayers: locked layers are never picked', () => {
+  const img = { objects: [] };
+  const layers = [
+    { id: 'a', kind: 'gerber', image: img },
+    { id: 'b', kind: 'gerber', image: img, locked: true },
+    { id: 'c', kind: 'excellon', image: img },
+  ];
+  const ids = (from, activeId, solo = []) => pickLayers(layers, { from, activeId, solo }).map((l) => l.id);
+  assert.deepEqual(ids('all', 'a'), ['a', 'c']);
+  assert.deepEqual(ids('solo', 'a', ['b', 'c']), ['c']);
+  assert.deepEqual(ids('layer', 'b'), []);
+});
