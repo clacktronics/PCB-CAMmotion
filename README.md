@@ -4,6 +4,9 @@ Local-only, in-browser PCB CAM: Gerber + Excellon in; analysis, editing, machine
 toolpaths, manufacturability DRC and UV film negatives out. Nothing is uploaded — the app
 runs entirely on your computer, and the whole project is one `.pcam` file.
 
+**Live demo:** <https://clacktronics.github.io/PCB-CAMmotion/> (GitHub Pages — still runs
+entirely in your browser; nothing is uploaded).
+
 **Status:** milestones 0–4 (harness, parsers, viewer, analyser, editor). See [`PROJECT_PLAN.md`](PROJECT_PLAN.md).
 
 ## Use
